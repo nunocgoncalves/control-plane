@@ -1,0 +1,9 @@
+apiVersion: platform.iterabase.com/v1alpha1
+kind: PermissionPolicy
+metadata:
+  name: alice
+  namespace: default
+spec:
+  subject:
+    kind: user
+    key: default/alice

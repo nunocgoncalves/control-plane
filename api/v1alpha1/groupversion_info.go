@@ -24,9 +24,10 @@ var (
 	AddToScheme = SchemeBuilder.AddToScheme
 )
 
-// addKnownTypes registers the IdentityMapping types with the scheme.
+// addKnownTypes registers the IdentityMapping and PermissionPolicy types with the scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(GroupVersion, &IdentityMapping{}, &IdentityMappingList{})
+	scheme.AddKnownTypes(GroupVersion, &PermissionPolicy{}, &PermissionPolicyList{})
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
 }
