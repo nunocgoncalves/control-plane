@@ -27,6 +27,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
+	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/server"
 	"github.com/nunocgoncalves/control-plane/internal/version"
 )
@@ -98,10 +99,11 @@ func runServe(cfg *config.Config, logger *slog.Logger) error {
 	httpSrv := &http.Server{
 		Addr: cfg.API.Addr,
 		Handler: server.New(server.Services{
-			Pool:   pool,
-			Store:  identity.NewStore(pool),
-			Issuer: issuer,
-			Mode:   cfg.Identity.Mode,
+			Pool:        pool,
+			Store:       identity.NewStore(pool),
+			Permissions: permissions.NewStore(pool),
+			Issuer:      issuer,
+			Mode:        cfg.Identity.Mode,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

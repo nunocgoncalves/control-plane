@@ -32,6 +32,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
+	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/version"
 	// +kubebuilder:scaffold:imports
 )
@@ -213,6 +214,15 @@ func run() int {
 		Store:  store,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up IdentityMapping reconciler")
+		return 1
+	}
+
+	if err = (&controller.PermissionPolicyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: scheme,
+		Store:  permissions.NewStore(pool),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up PermissionPolicy reconciler")
 		return 1
 	}
 
