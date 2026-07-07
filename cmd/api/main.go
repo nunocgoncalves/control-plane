@@ -96,8 +96,8 @@ func runServe(cfg *config.Config, logger *slog.Logger) error {
 	}
 
 	httpSrv := &http.Server{
-		Addr:              cfg.API.Addr,
-		Handler:           server.New(server.Services{
+		Addr: cfg.API.Addr,
+		Handler: server.New(server.Services{
 			Pool:   pool,
 			Store:  identity.NewStore(pool),
 			Issuer: issuer,
@@ -227,5 +227,5 @@ func runBootstrap(cfg *config.Config, logger *slog.Logger, args []string) error 
 // multiString is a repeatable string flag value.
 type multiString []string
 
-func (m *multiString) String() string { return fmt.Sprintf("%v", []string(*m)) }
+func (m *multiString) String() string     { return fmt.Sprintf("%v", []string(*m)) }
 func (m *multiString) Set(v string) error { *m = append(*m, v); return nil }

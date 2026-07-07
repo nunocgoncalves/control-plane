@@ -1,0 +1,16 @@
+apiVersion: platform.iterabase.com/v1alpha1
+kind: IdentityMapping
+metadata:
+  name: alice
+  namespace: default
+spec:
+  identity:
+    kind: user
+    displayName: Alice Wong
+  bindings:
+    - provider: teams
+      type: user
+      externalID: aad:aaaa-1111-2222-3333
+    - provider: slack
+      type: user
+      externalID: U012345ABCD
