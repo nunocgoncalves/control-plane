@@ -58,6 +58,9 @@ func NewIssuer(path, keyID, issuer, audience, ttl string) (*Issuer, error) {
 // KeyID returns the key identifier published in the JWT header and JWKS.
 func (i *Issuer) KeyID() string { return i.keyID }
 
+// TTL returns the token lifetime.
+func (i *Issuer) TTL() time.Duration { return i.ttl }
+
 // Issue signs a JWT for the given identity ID. The token carries iss/sub/aud/
 // iat/exp (and kid in the header); capabilities are intentionally omitted — the
 // gateway enforces them from its permission snapshot (HOR-243/247).

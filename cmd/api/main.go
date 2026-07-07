@@ -24,6 +24,7 @@ import (
 
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/database"
+	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/server"
 	"github.com/nunocgoncalves/control-plane/internal/version"
@@ -79,9 +80,23 @@ func runServe(cfg *config.Config, logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	if err := config.ValidateServe(cfg); err != nil {
+		return err
+	}
+
+	issuer, err := identity.NewIssuer(cfg.JWT.SigningKeyPath, cfg.JWT.KeyID, cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.TTL)
+	if err != nil {
+		return fmt.Errorf("loading jwt issuer: %w", err)
+	}
+
 	httpSrv := &http.Server{
 		Addr:              cfg.API.Addr,
-		Handler:           server.Router(pool),
+		Handler:           server.New(server.Services{
+			Pool:   pool,
+			Store:  identity.NewStore(pool),
+			Issuer: issuer,
+			Mode:   cfg.Identity.Mode,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

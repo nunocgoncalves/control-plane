@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -17,39 +16,16 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
-	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
+	"github.com/nunocgoncalves/control-plane/internal/testutil"
 )
 
-// newPostgresStore starts a fresh pgvector Postgres, applies migrations, and
-// returns a Store. (Duplicated from the identity package tests to avoid a
-// shared test-helper import cycle.) Requires Docker.
+// newPostgresStore returns a Store backed by a fresh migrated Postgres.
 func newPostgresStore(t *testing.T) *identity.Store {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	ctx := context.Background()
-	pgC, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
-		postgres.WithDatabase("controlplane"),
-		postgres.WithUsername("cp"),
-		postgres.WithPassword("cp"),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = pgC.Terminate(ctx) })
-
-	connStr, err := pgC.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool := waitForPool(t, ctx, connStr)
-	t.Cleanup(pool.Close)
-
-	require.NoError(t, database.MigrateUp(connStr))
-	return identity.NewStore(pool)
+	return identity.NewStore(testutil.NewPostgresPool(t))
 }
 
 // TestIdentityMappingReconcile exercises the full Git->DB bridge: creating a CR
@@ -141,25 +117,4 @@ func TestIdentityMappingReconcile(t *testing.T) {
 	// The identity is soft-deleted: bindings gone (access revoked).
 	_, err = store.ResolveByExternalID(ctx, "teams", "user", "aad:1111")
 	assert.ErrorIs(t, err, identity.ErrNotFound, "soft-deleted identity should not resolve")
-}
-
-func waitForPool(t *testing.T, ctx context.Context, connStr string) *pgxpool.Pool {
-	t.Helper()
-	var lastErr error
-	for range 30 {
-		pool, err := pgxpool.New(ctx, connStr)
-		if err == nil {
-			pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			err = pool.Ping(pingCtx)
-			cancel()
-			if err == nil {
-				return pool
-			}
-			pool.Close()
-		}
-		lastErr = err
-		time.Sleep(time.Second)
-	}
-	require.NoError(t, lastErr)
-	return nil
 }
