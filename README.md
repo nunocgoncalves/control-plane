@@ -14,9 +14,10 @@ repo is the source of truth for control-plane infrastructure intent.
 **Walking skeleton.** HOR-241 landed the two-binary foundation (operator +
 API, DB schema, config, CI). HOR-242 adds the identity store: the
 `IdentityMapping` CRD + reconciler, local users, API keys, delegated JWT/JWKS
-issuance, and the admin bootstrap. Per-caller permissions (HOR-243), sandbox
-reconciliation (HOR-245), the model catalog (HOR-268/306), and the durable turn
-runtime (HOR-246) land in their own tickets.
+issuance, and the admin bootstrap. HOR-243 adds the permission engine: the
+`PermissionPolicy` CRD + reconciler and the `effective_capabilities` view
+(broad-default). Sandbox reconciliation (HOR-245), the model catalog
+(HOR-268/306), and the durable turn runtime (HOR-246) land in their own tickets.
 
 ## Binaries
 
@@ -105,12 +106,35 @@ API endpoints:
 from a Kubernetes Secret (forge-provisioned). Open mode + SSO are fast-follows
 (HOR-313/314).
 
+## Permissions (HOR-243)
+
+The operator materializes `PermissionPolicy` CRs into Postgres (`permissions`
+schema), mirroring the IdentityMapping Git→DB bridge. The permission engine is
+the **`permissions.effective_capabilities` view**: `identity_id → (resource,
+action)` rows where presence = allow, absence = deny. Consumers (the
+inference-gateway HOR-247, agent-fleet) read the view **directly** — no
+request-path calls to control-plane — and own their own Redis cache +
+freshness (LISTEN/NOTIFY on the `permissions_changed` channel, emitted by
+triggers on `permissions.policies` and `identity.identities`).
+
+**Broad-default (v1):** every linked (active) identity gets a single wildcard
+`('*', '*')` capability; unknown/soft-deleted identities get no rows (denied).
+`PermissionPolicy` CRs are materialized but **not enforced** in v1 — their
+`subject` is stored; fine-grained `scopes` (narrowing) land in deepen-phase,
+enriching the view's contents without changing the contract or consumer code.
+
+Admin debug endpoint (reads the same view):
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/v1/permissions/identities/{id}` | `scope=admin` | effective capabilities for an identity (404 if none) |
+
 ## CRD landscape
 
 All CRDs use group `platform.iterabase.com` / `v1alpha1`, reconciled by this
 operator: `AgentSandbox` (HOR-245), `ModelBackend` (HOR-306), `Model`
 (HOR-268), `IdentityMapping` (HOR-242, **defined here**), `PermissionPolicy`
-(HOR-243), `Tool` (HOR-271). The others land with their tickets.
+(HOR-243, **defined here**), `Tool` (HOR-271). The others land with their tickets.
 
 ## Git workflow
 
