@@ -1,0 +1,7 @@
+# This kustomization.yaml is not intended to be run by itself,
+# since it depends on all CRDs being installed first (make install).
+# It exists so config/default can include the CRDs.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- bases/platform.iterabase.com_identitymappings.yaml
