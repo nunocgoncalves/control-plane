@@ -8,6 +8,7 @@ rules:
   - platform.iterabase.com
   resources:
   - identitymappings
+  - permissionpolicies
   verbs:
   - create
   - delete
@@ -20,12 +21,14 @@ rules:
   - platform.iterabase.com
   resources:
   - identitymappings/finalizers
+  - permissionpolicies/finalizers
   verbs:
   - update
 - apiGroups:
   - platform.iterabase.com
   resources:
   - identitymappings/status
+  - permissionpolicies/status
   verbs:
   - get
   - patch
