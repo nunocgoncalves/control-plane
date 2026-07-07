@@ -16,10 +16,11 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/database"
 )
 
-// NewPostgresPool starts a fresh pgvector Postgres container, applies all
-// migrations, and returns a ready connection pool. It skips in -short mode.
-// Requires Docker.
-func NewPostgresPool(t *testing.T) *pgxpool.Pool {
+// NewPostgres starts a fresh pgvector Postgres container, applies all
+// migrations, and returns a ready connection pool plus its connection string
+// (useful when a subcommand must connect itself, e.g. bootstrap). It skips in
+// -short mode. Requires Docker.
+func NewPostgres(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -42,6 +43,13 @@ func NewPostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 
 	require.NoError(t, database.MigrateUp(connStr))
+	return pool, connStr
+}
+
+// NewPostgresPool is a convenience wrapper returning only the pool.
+func NewPostgresPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, _ := NewPostgres(t)
 	return pool
 }
 
