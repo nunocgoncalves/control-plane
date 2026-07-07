@@ -69,6 +69,21 @@ func TestMigrations(t *testing.T) {
 		assert.True(t, exists, "identity.%s should exist after MigrateUp", table)
 	}
 
+	// HOR-243: permissions table + view should exist after MigrateUp.
+	var policyTableExists bool
+	err = pool.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'permissions' AND tablename = 'policies')",
+	).Scan(&policyTableExists)
+	require.NoError(t, err)
+	assert.True(t, policyTableExists, "permissions.policies should exist after MigrateUp")
+
+	var viewExists bool
+	err = pool.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_views WHERE schemaname = 'permissions' AND viewname = 'effective_capabilities')",
+	).Scan(&viewExists)
+	require.NoError(t, err)
+	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
+
 	// Down: schemas should be gone.
 	require.NoError(t, database.MigrateDown(connStr, 0))
 
