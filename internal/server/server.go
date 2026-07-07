@@ -15,14 +15,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nunocgoncalves/control-plane/internal/identity"
+	"github.com/nunocgoncalves/control-plane/internal/permissions"
 )
 
 // Services are the dependencies injected into the HTTP API.
 type Services struct {
-	Pool   *pgxpool.Pool
-	Store  *identity.Store
-	Issuer *identity.Issuer
-	Mode   string // enrolled | open
+	Pool        *pgxpool.Pool
+	Store       *identity.Store
+	Permissions *permissions.Store
+	Issuer      *identity.Issuer
+	Mode        string // enrolled | open
 }
 
 type contextKey string
@@ -35,6 +37,7 @@ const (
 // Handler holds the identity service dependencies used by the API handlers.
 type Handler struct {
 	store    *identity.Store
+	perms    *permissions.Store
 	issuer   *identity.Issuer
 	resolver *identity.Resolver
 }
@@ -51,6 +54,7 @@ type Handler struct {
 //	POST /v1/api-keys              - issue an API key (scope=admin)
 //	GET  /v1/api-keys              - list API keys (scope=admin)
 //	DELETE /v1/api-keys/{id}       - revoke an API key (scope=admin)
+//	GET  /v1/permissions/identities/{id} - effective capabilities (scope=admin)
 func New(svc Services) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -62,6 +66,7 @@ func New(svc Services) http.Handler {
 
 	h := &Handler{
 		store:    svc.Store,
+		perms:    svc.Permissions,
 		issuer:   svc.Issuer,
 		resolver: identity.NewResolver(svc.Store, svc.Mode),
 	}
@@ -81,6 +86,7 @@ func New(svc Services) http.Handler {
 		r.Get("/api-keys", h.listAPIKeys)
 		r.Post("/api-keys", h.createAPIKey)
 		r.Delete("/api-keys/{id}", h.deleteAPIKey)
+		r.Get("/permissions/identities/{id}", h.getCapabilities)
 	})
 
 	return r
@@ -307,6 +313,37 @@ func (h *Handler) deleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type capabilityResponse struct {
+	Resource string `json:"resource"`
+	Action   string `json:"action"`
+}
+
+// getCapabilities returns the effective capability rows for an identity (admin
+// debug). It reads the permissions.effective_capabilities view — the same
+// contract the gateway (HOR-247) and agent-fleet consume directly. No rows
+// means the identity is unknown/inactive (denied) -> 404.
+func (h *Handler) getCapabilities(w http.ResponseWriter, r *http.Request) {
+	if h.perms == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "permissions store not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	caps, err := h.perms.EffectiveCapabilities(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: "evaluating capabilities"})
+		return
+	}
+	if len(caps) == 0 {
+		writeJSON(w, http.StatusNotFound, errorBody{Error: "no capabilities for identity"})
+		return
+	}
+	out := make([]capabilityResponse, 0, len(caps))
+	for _, c := range caps {
+		out = append(out, capabilityResponse{Resource: c.Resource, Action: c.Action})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // auth validates the Bearer API key and requires the given scope, then stores

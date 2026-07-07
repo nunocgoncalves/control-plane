@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nunocgoncalves/control-plane/internal/identity"
+	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/server"
 	"github.com/nunocgoncalves/control-plane/internal/testutil"
 )
@@ -83,7 +84,7 @@ func TestAPI(t *testing.T) {
 	issuer := testIssuer(t)
 	ctx := context.Background()
 
-	router := server.New(server.Services{Pool: pool, Store: store, Issuer: issuer, Mode: identity.ModeEnrolled})
+	router := server.New(server.Services{Pool: pool, Store: store, Permissions: permissions.NewStore(pool), Issuer: issuer, Mode: identity.ModeEnrolled})
 
 	// Seed: an admin local user + admin key, an agent-fleet SA + token key, and
 	// a CR-style linked identity (alice) with a teams binding.
@@ -195,6 +196,26 @@ func TestAPI(t *testing.T) {
 		// enforced by control-plane, but revocation makes ValidateAPIKey fail).
 		_, _, err := store.ValidateAPIKey(ctx, full)
 		assert.ErrorIs(t, err, identity.ErrInvalidAPIKey)
+	})
+
+	t.Run("permissions debug: linked identity has wildcard", func(t *testing.T) {
+		rr := do(router, http.MethodGet, "/v1/permissions/identities/"+alice.ID, authHeader(adminKey), nil)
+		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+		var caps []map[string]string
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &caps))
+		require.Len(t, caps, 1)
+		assert.Equal(t, "*", caps[0]["resource"])
+		assert.Equal(t, "*", caps[0]["action"])
+	})
+
+	t.Run("permissions debug: unknown identity 404", func(t *testing.T) {
+		rr := do(router, http.MethodGet, "/v1/permissions/identities/00000000-0000-0000-0000-000000000000", authHeader(adminKey), nil)
+		assert.Equal(t, http.StatusNotFound, rr.Code)
+	})
+
+	t.Run("permissions debug: wrong scope rejected", func(t *testing.T) {
+		rr := do(router, http.MethodGet, "/v1/permissions/identities/"+alice.ID, authHeader(saKey), nil)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
 	})
 }
 
