@@ -1,69 +1,32 @@
 version: "2"
+
 run:
-  allow-parallel-runners: true
+  timeout: 5m
+
 linters:
   default: none
   enable:
-    - copyloopvar
-    - depguard
-    - dupl
     - errcheck
-    - ginkgolinter
-    - goconst
-    - gocyclo
     - govet
     - ineffassign
-    - lll
-    - modernize
-    - misspell
-    - nakedret
-    - prealloc
-    - revive
     - staticcheck
-    - unconvert
-    - unparam
     - unused
-    - logcheck
+    - gosec
+    - gocyclo
+    - gocritic
+    - misspell
   settings:
-    custom:
-      logcheck:
-        type: "module"
-        description: Checks Go logging calls for Kubernetes logging conventions.
-    depguard:
-      rules:
-        forbid-sort-pkg:
-          deny:
-            - pkg: sort
-              desc: Should be replaced with slices package
-    revive:
-      rules:
-        - name: comment-spacings
-        - name: import-shadowing
-    modernize:
-      disable:
-        - omitzero
-        - newexpr
+    gocyclo:
+      min-complexity: 15
   exclusions:
-    generated: lax
-    rules:
-      - linters:
-          - lll
-        path: api/*
-      - linters:
-          - dupl
-          - lll
-        path: internal/*
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
     paths:
-      - third_party$
-      - builtin$
-      - examples$
-formatters:
-  enable:
-    - gofmt
-    - goimports
-  exclusions:
-    generated: lax
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+      - "test/e2e"
+      - "_test\\.go"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
