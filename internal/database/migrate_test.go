@@ -1,4 +1,4 @@
-package database
+package database_test
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/nunocgoncalves/control-plane/internal/database"
 )
 
 // TestMigrations applies the schema scaffold against a real pgvector Postgres
@@ -39,7 +41,7 @@ func TestMigrations(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	// Up: schemas + pgvector should exist.
-	require.NoError(t, MigrateUp(connStr))
+	require.NoError(t, database.MigrateUp(connStr))
 
 	for _, schema := range []string{"identity", "permissions", "usage", "ai_data"} {
 		var exists bool
@@ -58,7 +60,7 @@ func TestMigrations(t *testing.T) {
 	assert.True(t, extExists, "pgvector extension should be installed after MigrateUp")
 
 	// Down: schemas should be gone.
-	require.NoError(t, MigrateDown(connStr, 0))
+	require.NoError(t, database.MigrateDown(connStr, 0))
 
 	for _, schema := range []string{"identity", "permissions", "usage", "ai_data"} {
 		var exists bool
