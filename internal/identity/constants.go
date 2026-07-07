@@ -10,7 +10,7 @@ const (
 
 // Identity sources (identity.identities.source).
 const (
-	SourceLocal        = "local"        // API/bootstrap-created
-	SourceExternal     = "external"     // IdentityMapping CR
+	SourceLocal        = "local"         // API/bootstrap-created
+	SourceExternal     = "external"      // IdentityMapping CR
 	SourceExternalAuto = "external-auto" // open-mode auto-provision (HOR-313, deferred)
 )

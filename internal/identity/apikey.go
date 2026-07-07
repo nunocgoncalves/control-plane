@@ -13,7 +13,7 @@ import (
 //   - admin   - control-plane API management (bootstrap admin)
 //   - token   - service accounts calling POST /v1/token (agent-fleet, Path 2)
 //   - gateway - end users calling the gateway directly (Path 1); validated by
-//               the gateway from its control-plane-synced snapshot, not here.
+//     the gateway from its control-plane-synced snapshot, not here.
 const (
 	ScopeAdmin   = "admin"
 	ScopeToken   = "token"
