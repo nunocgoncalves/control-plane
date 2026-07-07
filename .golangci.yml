@@ -24,7 +24,6 @@ linters:
       - legacy
       - std-error-handling
     paths:
-      - "test/e2e"
       - "_test\\.go"
 
 issues:
