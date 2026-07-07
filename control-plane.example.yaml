@@ -1,0 +1,15 @@
+# control-plane example configuration. Copy to control-plane.yaml and edit.
+# Environment variables (DATABASE_URL, API_ADDR, LOG_LEVEL, LOG_FORMAT) override
+# these values and are the preferred way to inject secrets in Kubernetes.
+
+api:
+  addr: ":8080"
+
+database:
+  url: "${DATABASE_URL}"      # required; e.g. postgres://cp:cp@postgres:5432/controlplane?sslmode=disable
+  max_open_conns: 25
+  max_idle_conns: 10
+
+logging:
+  level: info                  # debug | info | warn | error
+  format: json                 # json | text

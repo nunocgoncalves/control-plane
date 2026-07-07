@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[pre-commit] gofmt check"
+out=$(gofmt -l .)
+if [ -n "$out" ]; then
+  echo "gofmt needed:"
+  echo "$out"
+  exit 1
+fi
+
+echo "[pre-commit] go vet"
+go vet ./...
+
+echo "[pre-commit] done"
