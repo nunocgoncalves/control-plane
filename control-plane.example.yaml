@@ -1,6 +1,10 @@
 # control-plane example configuration. Copy to control-plane.yaml and edit.
-# Environment variables (DATABASE_URL, API_ADDR, LOG_LEVEL, LOG_FORMAT) override
-# these values and are the preferred way to inject secrets in Kubernetes.
+# Environment variables (DATABASE_URL, API_ADDR, LOG_LEVEL, LOG_FORMAT,
+# JWT_SIGNING_KEY_PATH, JWT_KEY_ID, IDENTITY_MODE) override these values and are
+# the preferred way to inject secrets in Kubernetes.
+#
+# The manager binary reads only DATABASE_URL from the environment; it does not
+# load this file.
 
 api:
   addr: ":8080"
@@ -13,3 +17,21 @@ database:
 logging:
   level: info                  # debug | info | warn | error
   format: json                 # json | text
+
+# JWT issuance (cmd/api serve). The signing key is an RSA private key PEM,
+# mounted from a Kubernetes Secret (forge-provisioned). The manager does not
+# read this key; only the api issues JWTs and serves JWKS.
+jwt:
+  signing_key_path: "${JWT_SIGNING_KEY_PATH}"   # e.g. /etc/control-plane/jwt/private.pem
+  key_id: "control-plane-1"                      # kid published in JWKS + JWT header
+  issuer: "control-plane"                        # iss claim
+  audience: "inference-gateway"                  # aud claim (validated by the gateway)
+  ttl: "15m"                                     # token lifetime
+
+# Identity-resolution mode.
+#   enrolled - linked IdentityMapping required; unlinked surface users are
+#              denied (S8 default). Fine-grained narrowing is HOR-243.
+#   open     - auto-provision any workspace member with all capabilities
+#              (deferred, HOR-313; the token endpoint returns 501).
+identity:
+  mode: enrolled
