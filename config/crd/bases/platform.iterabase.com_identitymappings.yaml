@@ -1,0 +1,121 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: identitymappings.platform.iterabase.com
+spec:
+  group: platform.iterabase.com
+  names:
+    kind: IdentityMapping
+    listKind: IdentityMappingList
+    plural: identitymappings
+    shortNames:
+    - im
+    singular: identitymapping
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          IdentityMapping maps an identity to its external provider bindings. The
+          control-plane operator materializes it into the Postgres identity store.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              IdentityMappingSpec defines the desired state of an IdentityMapping: an
+              identity and the external provider bindings that resolve to it. The
+              reconciler materializes this into the Postgres identity store; permission
+              fields belong to PermissionPolicy (HOR-243), not here.
+            properties:
+              bindings:
+                description: bindings are the external provider IDs that resolve to
+                  this identity.
+                items:
+                  description: Binding pairs an identity to an external provider ID.
+                  properties:
+                    externalID:
+                      description: externalID is the provider-specific identifier.
+                      type: string
+                    provider:
+                      description: provider is the external provider.
+                      enum:
+                      - slack
+                      - teams
+                      type: string
+                    type:
+                      description: type is the binding type.
+                      enum:
+                      - user
+                      - group
+                      type: string
+                  required:
+                  - externalID
+                  - provider
+                  - type
+                  type: object
+                type: array
+              identity:
+                description: identity describes the platform identity this mapping
+                  creates.
+                properties:
+                  displayName:
+                    description: displayName is a human-readable name.
+                    type: string
+                  kind:
+                    description: kind is the identity kind.
+                    enum:
+                    - user
+                    - group
+                    type: string
+                required:
+                - kind
+                type: object
+            required:
+            - identity
+            type: object
+          status:
+            description: IdentityMappingStatus is the observed state reported by the
+              reconciler.
+            properties:
+              identityID:
+                description: identityID is the UUID of the materialized identity row.
+                type: string
+              message:
+                description: |-
+                  message surfaces the last reconciliation error (e.g. a binding claimed by
+                  another identity). Empty on success.
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation most recently reconciled.
+                format: int64
+                type: integer
+              ready:
+                description: ready is true once the identity + bindings are materialized
+                  in Postgres.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

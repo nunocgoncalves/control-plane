@@ -5,9 +5,12 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"net/http"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -23,6 +26,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
+	"github.com/nunocgoncalves/control-plane/internal/config"
+	"github.com/nunocgoncalves/control-plane/internal/controller"
+	"github.com/nunocgoncalves/control-plane/internal/database"
+	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/version"
 	// +kubebuilder:scaffold:imports
@@ -35,12 +43,20 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
 
-// nolint:gocyclo
 func main() {
+	os.Exit(run())
+}
+
+// run configures and starts the manager, returning a process exit code so that
+// deferred cleanup (e.g. closing the DB pool) runs before the process exits.
+//
+// nolint:gocyclo
+func run() int {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -167,25 +183,59 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
-		os.Exit(1)
+		return 1
 	}
 
 	// +kubebuilder:scaffold:builder
 
+	// Connect to Postgres (DATABASE_URL). The manager materializes CRs into the
+	// identity store; the api reads it (HOR-242 Q1/Q8). The manager reads only
+	// DATABASE_URL from the environment; it does not load YAML config.
+	dbCfg, err := config.DatabaseFromEnv()
+	if err != nil {
+		setupLog.Error(err, "DATABASE_URL is required")
+		return 1
+	}
+	connectCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	pool, err := database.Connect(connectCtx, dbCfg)
+	cancel()
+	if err != nil {
+		setupLog.Error(err, "Failed to connect to database")
+		return 1
+	}
+	defer pool.Close()
+
+	store := identity.NewStore(pool)
+
+	if err = (&controller.IdentityMappingReconciler{
+		Client: mgr.GetClient(),
+		Scheme: scheme,
+		Store:  store,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up IdentityMapping reconciler")
+		return 1
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
-		os.Exit(1)
+		return 1
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	readyCheck := func(*http.Request) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return pool.Ping(ctx)
+	}
+	if err := mgr.AddReadyzCheck("readyz", readyCheck); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
-		os.Exit(1)
+		return 1
 	}
 
 	setupLog.Info("Starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "Failed to run manager")
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // getenv returns the value of the named env var, or fallback if unset/empty.
