@@ -5,9 +5,34 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - platform.iterabase.com
   resources:
   - identitymappings
+  - modelbackends
   - permissionpolicies
   verbs:
   - create
@@ -21,6 +46,7 @@ rules:
   - platform.iterabase.com
   resources:
   - identitymappings/finalizers
+  - modelbackends/finalizers
   - permissionpolicies/finalizers
   verbs:
   - update
@@ -28,6 +54,7 @@ rules:
   - platform.iterabase.com
   resources:
   - identitymappings/status
+  - modelbackends/status
   - permissionpolicies/status
   verbs:
   - get
