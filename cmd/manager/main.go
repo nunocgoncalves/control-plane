@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
+	"github.com/nunocgoncalves/control-plane/internal/catalog"
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/controller"
 	"github.com/nunocgoncalves/control-plane/internal/database"
@@ -223,6 +224,15 @@ func run() int {
 		Store:  permissions.NewStore(pool),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up PermissionPolicy reconciler")
+		return 1
+	}
+
+	if err = (&controller.ModelBackendReconciler{
+		Client: mgr.GetClient(),
+		Scheme: scheme,
+		Store:  catalog.NewStore(pool),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up ModelBackend reconciler")
 		return 1
 	}
 
