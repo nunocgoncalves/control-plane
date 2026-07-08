@@ -1,0 +1,262 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: modelbackends.platform.iterabase.com
+spec:
+  group: platform.iterabase.com
+  names:
+    kind: ModelBackend
+    listKind: ModelBackendList
+    plural: modelbackends
+    shortNames:
+    - mb
+    singular: modelbackend
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ModelBackend is a compute/provider backend that serves a model. The
+          control-plane operator deploys internal vLLM/SGLang workloads or records an
+          external provider endpoint, and materializes the backend into the catalog
+          (catalog.backends) for the Model CRD (HOR-268) to reference.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ModelBackendSpec defines the desired state of a ModelBackend: a compute
+              backend that serves a model. For internal kinds (vLLM/SGLang) the reconciler
+              deploys a GPU workload; for external it records a base URL. The ModelBackend
+              owns the serving lifecycle only — the Model CRD (HOR-268) is the catalog
+              offering that references it. The reconciler materializes this into the
+              Postgres catalog.backends table (Git -> DB bridge).
+            properties:
+              external:
+                description: |-
+                  external configures an external (non-deployed) backend. Required when
+                  kind is external.
+                properties:
+                  authRef:
+                    description: |-
+                      authRef is the name of a Kubernetes Secret holding the provider
+                      credential (key API key/token).
+                    type: string
+                  baseURL:
+                    description: baseURL is the OpenAI-compatible endpoint of the
+                      external provider.
+                    type: string
+                required:
+                - baseURL
+                type: object
+              healthProbe:
+                description: |-
+                  healthProbe overrides the readiness/liveness probe target. Defaults to
+                  GET /health on the serving port.
+                properties:
+                  path:
+                    description: path is the HTTP path probed (default /health).
+                    type: string
+                  port:
+                    description: port is the probed port (default 8000).
+                    format: int32
+                    type: integer
+                type: object
+              image:
+                description: |-
+                  image is the serving container image. If empty the reconciler applies a
+                  default per kind (e.g. vllm/vllm-openai for vLLM).
+                type: string
+              kind:
+                description: |-
+                  kind is the backend kind. vLLM and SGLang deploy an internal GPU
+                  workload; external records a base URL (reachability validation is
+                  deferred to HOR-307).
+                enum:
+                - vLLM
+                - SGLang
+                - external
+                type: string
+              model:
+                description: |-
+                  model is the HuggingFace model id the backend loads (vLLM/SGLang
+                  `--model`). Required for vLLM/SGLang; ignored for external.
+                type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  nodeSelector constrains the pod to GPU nodes. If empty the reconciler
+                  defaults to {nvidia.com/gpu.present: "true"} (applied by the GPU
+                  Operator's GFD).
+                type: object
+              replicas:
+                description: |-
+                  replicas is the desired pod count. v1 runs a single replica; multi-replica
+                  (Tensor/Pipeline Parallel) is deferred to deepen.
+                format: int32
+                minimum: 1
+                type: integer
+              resources:
+                description: |-
+                  resources are the workload's resource requirements. If the GPU request is
+                  absent the reconciler defaults nvidia.com/gpu to "1".
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              tolerations:
+                description: |-
+                  tolerations are applied to the pod. forge applies no default GPU taint,
+                  so this is typically empty.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+            required:
+            - kind
+            type: object
+          status:
+            description: ModelBackendStatus is the observed state reported by the
+              reconciler.
+            properties:
+              deployed:
+                description: |-
+                  deployed is true once the workload + Service are reconciled (internal) or
+                  the external entry is recorded.
+                type: boolean
+              healthy:
+                description: |-
+                  healthy is true once the workload is reporting ready (internal). For
+                  external, healthy is assumed true in the skeleton (reachability deferred
+                  to HOR-307).
+                type: boolean
+              lastReconciled:
+                description: lastReconciled is the time of the last successful reconciliation.
+                format: date-time
+                type: string
+              message:
+                description: message surfaces the last reconciliation error or notice.
+                  Empty on success.
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation most recently reconciled.
+                format: int64
+                type: integer
+              serviceURL:
+                description: |-
+                  serviceURL is the in-cluster address the gateway routes to
+                  (<name>.<ns>.svc:<port> for internal; baseURL for external).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
