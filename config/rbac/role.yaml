@@ -33,6 +33,7 @@ rules:
   resources:
   - identitymappings
   - modelbackends
+  - models
   - permissionpolicies
   verbs:
   - create
@@ -47,6 +48,7 @@ rules:
   resources:
   - identitymappings/finalizers
   - modelbackends/finalizers
+  - models/finalizers
   - permissionpolicies/finalizers
   verbs:
   - update
@@ -55,6 +57,7 @@ rules:
   resources:
   - identitymappings/status
   - modelbackends/status
+  - models/status
   - permissionpolicies/status
   verbs:
   - get

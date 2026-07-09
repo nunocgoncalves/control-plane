@@ -236,6 +236,15 @@ func run() int {
 		return 1
 	}
 
+	if err = (&controller.ModelReconciler{
+		Client: mgr.GetClient(),
+		Scheme: scheme,
+		Store:  catalog.NewStore(pool),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up Model reconciler")
+		return 1
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
 		return 1
