@@ -1,12 +1,14 @@
 // Package permissions implements the control-plane permission store: the
 // Postgres materialization of PermissionPolicy CRs and the effective-capabilities
-// view that is the permission engine. It is shared by the manager (reconciler)
-// and the api (admin debug endpoint). The view is the contract consumed by the
-// gateway (HOR-247) and agent-fleet; they read it directly and own their cache.
+// + effective-rate-limits views that are the permission/rate-limit engine. It is
+// shared by the manager (reconciler) and the api (admin debug endpoint). The
+// views are the contract consumed by the gateway (HOR-247) and agent-fleet; they
+// read them directly and own their cache.
 package permissions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -26,6 +28,13 @@ type Policy struct {
 	Key         string
 	SubjectKind string // user | group | service_account | workflow
 	SubjectKey  string
+	RateLimits  *RateLimits // nil = unlimited
+}
+
+// RateLimits is a per-identity throughput limit (gateway-enforced).
+type RateLimits struct {
+	RPM int
+	TPM int
 }
 
 // Capability is a row from permissions.effective_capabilities: an identity is
@@ -47,20 +56,21 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // UpsertPolicy inserts a policy keyed by `key`, or — if the row exists
-// (including a soft-deleted one) — revives it and updates its subject. This is
-// the reconciler's primary write on add/update and the foundation of
-// revive-on-recreate.
-func (s *Store) UpsertPolicy(ctx context.Context, key, subjectKind, subjectKey string) (Policy, error) {
+// (including a soft-deleted one) — revives it and updates its subject + rate
+// limits. This is the reconciler's primary write on add/update and the
+// foundation of revive-on-recreate. A nil rateLimits clears the limit.
+func (s *Store) UpsertPolicy(ctx context.Context, key, subjectKind, subjectKey string, rateLimits *RateLimits) (Policy, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO permissions.policies (key, subject_kind, subject_key)
-		VALUES ($1, $2, $3)
+		INSERT INTO permissions.policies (key, subject_kind, subject_key, rate_limits)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (key) DO UPDATE
 			SET subject_kind = EXCLUDED.subject_kind,
 			    subject_key  = EXCLUDED.subject_key,
+			    rate_limits  = EXCLUDED.rate_limits,
 			    deleted_at   = NULL,
 			    updated_at   = now()
-		RETURNING id, key, subject_kind, subject_key`,
-		key, subjectKind, subjectKey)
+		RETURNING id, key, subject_kind, subject_key, rate_limits`,
+		key, subjectKind, subjectKey, rateLimitsJSONB(rateLimits))
 	return scanPolicy(row)
 }
 
@@ -79,7 +89,7 @@ func (s *Store) SoftDeletePolicyByKey(ctx context.Context, key string) error {
 // GetPolicyByKey fetches an active policy by its natural key.
 func (s *Store) GetPolicyByKey(ctx context.Context, key string) (Policy, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, key, subject_kind, subject_key
+		SELECT id, key, subject_kind, subject_key, rate_limits
 		FROM permissions.policies WHERE key = $1 AND deleted_at IS NULL`, key)
 	p, err := scanPolicy(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -111,9 +121,48 @@ func (s *Store) EffectiveCapabilities(ctx context.Context, identityID string) ([
 	return out, rows.Err()
 }
 
-// scanPolicy scans a 4-column policy row.
+// EffectiveRateLimits returns the per-identity throughput limit from the
+// effective_rate_limits view, or ErrNotFound if the identity has no rate-limit
+// policy (caller treats not-found as unlimited).
+func (s *Store) EffectiveRateLimits(ctx context.Context, identityID string) (RateLimits, error) {
+	var rl RateLimits
+	err := s.pool.QueryRow(ctx, `
+		SELECT rpm, tpm FROM permissions.effective_rate_limits WHERE identity_id = $1`,
+		identityID).Scan(&rl.RPM, &rl.TPM)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RateLimits{}, ErrNotFound
+	}
+	return rl, err
+}
+
+// rateLimitsJSONB marshals rate limits for the jsonb column, or returns nil
+// (→ NULL) when unlimited.
+func rateLimitsJSONB(rl *RateLimits) any {
+	if rl == nil {
+		return nil
+	}
+	b, err := json.Marshal(map[string]int{"rpm": rl.RPM, "tpm": rl.TPM})
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+// scanPolicy scans a 5-column policy row (rate_limits is nullable jsonb).
 func scanPolicy(row pgx.Row) (Policy, error) {
 	var p Policy
-	err := row.Scan(&p.ID, &p.Key, &p.SubjectKind, &p.SubjectKey)
-	return p, err
+	var rlBytes []byte
+	if err := row.Scan(&p.ID, &p.Key, &p.SubjectKind, &p.SubjectKey, &rlBytes); err != nil {
+		return Policy{}, err
+	}
+	if len(rlBytes) > 0 {
+		var raw struct {
+			RPM int `json:"rpm"`
+			TPM int `json:"tpm"`
+		}
+		if err := json.Unmarshal(rlBytes, &raw); err == nil {
+			p.RateLimits = &RateLimits{RPM: raw.RPM, TPM: raw.TPM}
+		}
+	}
+	return p, nil
 }

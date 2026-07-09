@@ -76,7 +76,7 @@ func (r *PermissionPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Materialize the policy.
 	key := policyKey(&pp)
-	pol, err := r.Store.UpsertPolicy(ctx, key, pp.Spec.Subject.Kind, pp.Spec.Subject.Key)
+	pol, err := r.Store.UpsertPolicy(ctx, key, pp.Spec.Subject.Kind, pp.Spec.Subject.Key, toRateLimits(pp.Spec.RateLimits))
 	if err != nil {
 		_ = r.patchStatus(ctx, &pp, false, "", fmt.Sprintf("upsert policy: %v", err))
 		return ctrl.Result{}, err
@@ -103,6 +103,14 @@ func (r *PermissionPolicyReconciler) patchStatus(ctx context.Context, pp *v1alph
 // ("<namespace>/<name>"), globally unique across namespaces.
 func policyKey(pp *v1alpha1.PermissionPolicy) string {
 	return fmt.Sprintf("%s/%s", pp.Namespace, pp.Name)
+}
+
+// toRateLimits converts the CRD rate-limits spec to the store type (nil = unlimited).
+func toRateLimits(rl *v1alpha1.RateLimitsSpec) *permissions.RateLimits {
+	if rl == nil {
+		return nil
+	}
+	return &permissions.RateLimits{RPM: rl.RPM, TPM: rl.TPM}
 }
 
 // SetupWithManager registers the reconciler with the controller-runtime manager.

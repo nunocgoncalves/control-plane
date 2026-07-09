@@ -104,6 +104,25 @@ func TestPermissionPolicyReconcile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user", pol.SubjectKind)
 	assert.Equal(t, "default/alice", pol.SubjectKey)
+	assert.Nil(t, pol.RateLimits, "policy without rateLimits is unlimited")
+
+	// Update the CR to add rateLimits -> reconciler re-materializes them.
+	var fresh v1alpha1.PermissionPolicy
+	require.NoError(t, adminClient.Get(ctx, nn, &fresh))
+	fresh.Spec.RateLimits = &v1alpha1.RateLimitsSpec{RPM: 60, TPM: 100000}
+	require.NoError(t, adminClient.Update(ctx, &fresh))
+	require.Eventually(t, func() bool {
+		var got v1alpha1.PermissionPolicy
+		if err := adminClient.Get(ctx, nn, &got); err != nil {
+			return false
+		}
+		return got.Status.ObservedGeneration == got.Generation
+	}, 15*time.Second, 200*time.Millisecond, "policy should re-reconcile after rateLimits update")
+	pol, err = store.GetPolicyByKey(ctx, "default/alice")
+	require.NoError(t, err)
+	require.NotNil(t, pol.RateLimits)
+	assert.Equal(t, 60, pol.RateLimits.RPM)
+	assert.Equal(t, 100000, pol.RateLimits.TPM)
 
 	// Delete the CR (finalizer cleanup must also be authorized under RBAC).
 	require.NoError(t, adminClient.Delete(ctx, pp))

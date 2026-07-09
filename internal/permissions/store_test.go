@@ -21,7 +21,7 @@ func TestStore_UpsertPolicyAndRevive(t *testing.T) {
 	ctx := context.Background()
 
 	// Create.
-	p1, err := store.UpsertPolicy(ctx, "default/alice", "user", "default/alice")
+	p1, err := store.UpsertPolicy(ctx, "default/alice", "user", "default/alice", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "default/alice", p1.Key)
 
@@ -35,7 +35,7 @@ func TestStore_UpsertPolicyAndRevive(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 
 	// Re-create -> revives the same row (same UUID) with updated subject.
-	p2, err := store.UpsertPolicy(ctx, "default/alice", "group", "eng")
+	p2, err := store.UpsertPolicy(ctx, "default/alice", "group", "eng", nil)
 	require.NoError(t, err)
 	assert.Equal(t, p1.ID, p2.ID, "revive should reuse the existing policy row")
 	assert.Equal(t, "group", p2.SubjectKind)
@@ -64,7 +64,7 @@ func TestStore_EffectiveCapabilities(t *testing.T) {
 	assert.Equal(t, Capability{IdentityID: aliceID, Resource: "*", Action: "*"}, caps[0])
 
 	// A policy row does NOT affect the view in v1 (broad-default ignores it).
-	_, err = store.UpsertPolicy(ctx, "default/alice", "user", "default/alice")
+	_, err = store.UpsertPolicy(ctx, "default/alice", "user", "default/alice", nil)
 	require.NoError(t, err)
 	caps, err = store.EffectiveCapabilities(ctx, aliceID)
 	require.NoError(t, err)
@@ -81,4 +81,51 @@ func TestStore_EffectiveCapabilities(t *testing.T) {
 	caps, err = store.EffectiveCapabilities(ctx, "00000000-0000-0000-0000-000000000000")
 	require.NoError(t, err)
 	assert.Empty(t, caps)
+}
+
+// TestStore_EffectiveRateLimits asserts the effective_rate_limits view: a policy
+// with rateLimits targeting an identity exposes identity_id -> (rpm, tpm);
+// multiple policies collapse to the min (most restrictive); absent = ErrNotFound
+// (unlimited). Requires Docker.
+func TestStore_EffectiveRateLimits(t *testing.T) {
+	pool := testutil.NewPostgresPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	var bobID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO identity.identities (key, kind, source, display_name)
+		VALUES ('default/bob', 'user', 'external', 'Bob') RETURNING id`).Scan(&bobID))
+
+	// No rate-limit policy -> not found (unlimited).
+	_, err := store.EffectiveRateLimits(ctx, bobID)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Policy with rate limits targeting bob.
+	_, err = store.UpsertPolicy(ctx, "default/bob", "user", "default/bob", &RateLimits{RPM: 60, TPM: 100000})
+	require.NoError(t, err)
+	rl, err := store.EffectiveRateLimits(ctx, bobID)
+	require.NoError(t, err)
+	assert.Equal(t, RateLimits{RPM: 60, TPM: 100000}, rl)
+
+	// A second policy on bob with a lower rpm -> most restrictive (min) wins.
+	_, err = store.UpsertPolicy(ctx, "default/bob-rl2", "user", "default/bob", &RateLimits{RPM: 30, TPM: 200000})
+	require.NoError(t, err)
+	rl, err = store.EffectiveRateLimits(ctx, bobID)
+	require.NoError(t, err)
+	assert.Equal(t, RateLimits{RPM: 30, TPM: 100000}, rl, "min rpm/tpm across policies wins")
+
+	// A policy without rateLimits (nil) does not contribute.
+	_, err = store.UpsertPolicy(ctx, "default/bob-rl3", "user", "default/bob", nil)
+	require.NoError(t, err)
+	rl, err = store.EffectiveRateLimits(ctx, bobID)
+	require.NoError(t, err)
+	assert.Equal(t, RateLimits{RPM: 30, TPM: 100000}, rl)
+
+	// Soft-deleting all rate-limit policies -> unlimited.
+	require.NoError(t, store.SoftDeletePolicyByKey(ctx, "default/bob"))
+	require.NoError(t, store.SoftDeletePolicyByKey(ctx, "default/bob-rl2"))
+	require.NoError(t, store.SoftDeletePolicyByKey(ctx, "default/bob-rl3"))
+	_, err = store.EffectiveRateLimits(ctx, bobID)
+	assert.ErrorIs(t, err, ErrNotFound)
 }
