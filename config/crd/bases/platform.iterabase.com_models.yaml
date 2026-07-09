@@ -1,0 +1,160 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: models.platform.iterabase.com
+spec:
+  group: platform.iterabase.com
+  names:
+    kind: Model
+    listKind: ModelList
+    plural: models
+    shortNames:
+    - mdl
+    singular: model
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Model is a catalog offering the inference-gateway consumes. It references a
+          ModelBackend (HOR-306) and carries per-alias request config. The control-plane
+          operator materializes it into catalog.models; the effective_catalog view joins
+          Model -> ModelBackend for the gateway (HOR-247) to read directly.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ModelSpec defines the desired state of a Model: a catalog offering the
+              inference-gateway consumes. It references a ModelBackend (HOR-306) that serves
+              it and carries per-alias request config (translating the gateway's
+              registry.Model). Multiple Models may reference one ModelBackend (aliases). The
+              reconciler materializes this into catalog.models (Git -> DB bridge).
+            properties:
+              backendRef:
+                description: |-
+                  backendRef is the name of the ModelBackend (same namespace) that serves
+                  this model.
+                type: string
+              capabilities:
+                description: capabilities advertise what the model supports (e.g.
+                  ["chat","tools"]).
+                items:
+                  type: string
+                type: array
+              contextLength:
+                description: contextLength is the model's maximum context window (tokens).
+                type: integer
+              defaultParams:
+                description: |-
+                  defaultParams are default sampling parameters injected when the client
+                  omits them. Pointer fields keep "not set" distinct from zero.
+                properties:
+                  frequency_penalty:
+                    type: number
+                  max_tokens:
+                    type: integer
+                  min_p:
+                    type: number
+                  presence_penalty:
+                    type: number
+                  repetition_penalty:
+                    type: number
+                  stop:
+                    items:
+                      type: string
+                    type: array
+                  temperature:
+                    type: number
+                  top_k:
+                    type: integer
+                  top_p:
+                    type: number
+                type: object
+              displayName:
+                description: displayName is a human-readable name.
+                type: string
+              modelID:
+                description: |-
+                  modelID is the client-facing alias clients put in the OpenAI `model` field
+                  (e.g. "qwen3-27b-thinking"). Unique per namespace.
+                type: string
+              rateLimits:
+                description: rateLimits are per-alias rate-limit overrides.
+                properties:
+                  rpm:
+                    type: integer
+                  tpm:
+                    type: integer
+                type: object
+              reasoningConfig:
+                description: |-
+                  reasoningConfig controls reasoning/thinking behaviour (forwarded to vLLM
+                  as chat_template_kwargs.enable_thinking).
+                properties:
+                  enable_thinking:
+                    type: boolean
+                type: object
+              transforms:
+                description: transforms define request/response transformation rules
+                  applied per alias.
+                properties:
+                  rewrite_model_name:
+                    description: |-
+                      RewriteModelName rewrites the request `model` field from the alias to the
+                      backend's served id (the gateway's existing transform).
+                    type: boolean
+                  system_prompt_prefix:
+                    type: string
+                type: object
+            required:
+            - backendRef
+            - modelID
+            type: object
+          status:
+            description: ModelStatus is the observed state reported by the reconciler.
+            properties:
+              available:
+                description: available is true once the referenced ModelBackend is
+                  deployed+healthy.
+                type: boolean
+              healthy:
+                description: healthy mirrors the referenced ModelBackend's health.
+                type: boolean
+              lastChecked:
+                description: lastChecked is the time health was last evaluated.
+                format: date-time
+                type: string
+              message:
+                description: message surfaces the last reconciliation error or notice.
+                  Empty on success.
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation most recently reconciled.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
