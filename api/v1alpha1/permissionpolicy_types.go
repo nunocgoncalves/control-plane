@@ -15,6 +15,26 @@ type PermissionPolicySpec struct {
 	// subject is the identity or group this policy targets (by kind + key).
 	// +kubebuilder:validation:Required
 	Subject SubjectSpec `json:"subject"`
+
+	// rateLimits are optional per-identity throughput limits (RPM/TPM) the
+	// gateway enforces. Absent = unlimited. Multiple policies targeting the same
+	// identity collapse to the most restrictive (min).
+	// +optional
+	RateLimits *RateLimitsSpec `json:"rateLimits,omitempty"`
+}
+
+// RateLimitsSpec is a per-identity throughput limit (gateway-enforced).
+// +kubebuilder:object:generate=true
+type RateLimitsSpec struct {
+	// rpm is the max requests per minute.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	RPM int `json:"rpm"`
+
+	// tpm is the max tokens per minute.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	TPM int `json:"tpm"`
 }
 
 // SubjectSpec identifies the subject a PermissionPolicy applies to. key

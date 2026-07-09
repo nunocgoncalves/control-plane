@@ -49,6 +49,24 @@ spec:
               capabilities via the permissions.effective_capabilities view; fine-grained
               scopes (PermissionPolicy.scopes) land in deepen-phase.
             properties:
+              rateLimits:
+                description: |-
+                  rateLimits are optional per-identity throughput limits (RPM/TPM) the
+                  gateway enforces. Absent = unlimited. Multiple policies targeting the same
+                  identity collapse to the most restrictive (min).
+                properties:
+                  rpm:
+                    description: rpm is the max requests per minute.
+                    minimum: 1
+                    type: integer
+                  tpm:
+                    description: tpm is the max tokens per minute.
+                    minimum: 1
+                    type: integer
+                required:
+                - rpm
+                - tpm
+                type: object
               subject:
                 description: subject is the identity or group this policy targets
                   (by kind + key).

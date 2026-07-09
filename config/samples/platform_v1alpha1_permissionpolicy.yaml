@@ -7,3 +7,8 @@ spec:
   subject:
     kind: user
     key: default/alice
+  # Optional per-identity throughput limits the gateway enforces (HOR-326).
+  # Absent = unlimited.
+  rateLimits:
+    rpm: 60
+    tpm: 100000
