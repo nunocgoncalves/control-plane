@@ -1,17 +1,17 @@
 apiVersion: platform.iterabase.com/v1alpha1
 kind: Model
 metadata:
-  name: qwen3-27b
+  name: qwen3.6-27b
   namespace: default
 spec:
   # modelID is the client-facing alias clients request (unique per namespace).
-  modelID: qwen3-27b
-  displayName: Qwen3 27B
+  modelID: qwen3.6-27b
+  displayName: Qwen3.6 27B
   contextLength: 131072
   capabilities:
   - chat
   # backendRef names the ModelBackend (same namespace) that serves this model.
-  backendRef: qwen3-27b
+  backendRef: qwen3.6-27b
   # Per-alias request config (mirrors the inference-gateway registry.Model).
   defaultParams:
     temperature: 0.7
@@ -23,16 +23,16 @@ spec:
 apiVersion: platform.iterabase.com/v1alpha1
 kind: Model
 metadata:
-  name: qwen3-27b-thinking
+  name: qwen3.6-27b-thinking
   namespace: default
 spec:
   # An alias of the same backend with reasoning enabled (one-to-many).
-  modelID: qwen3-27b-thinking
-  displayName: Qwen3 27B Thinking
+  modelID: qwen3.6-27b-thinking
+  displayName: Qwen3.6 27B Thinking
   contextLength: 131072
   capabilities:
   - chat
-  backendRef: qwen3-27b
+  backendRef: qwen3.6-27b
   reasoningConfig:
     enable_thinking: true
   transforms:
