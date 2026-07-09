@@ -13,3 +13,9 @@
 - A ticket is not complete until its branch has been merged to `master` and any required external checks have passed.
 - The repository is the source of truth for non-secret infrastructure intent and architecture.
 - Linear is the source of truth for ticket state, ownership, sequencing, and completion status.
+
+## Architecture decisions
+
+- Architectural decisions always require explicit user approval **before** implementation — regardless of whether they were covered in the agreed plan or appear to match existing guidelines/docs.
+- If a decision is ambiguous or seems to call for a deviation (even a seemingly beneficial one), surface it and get approval first; do not make architectural choices unilaterally.
+- "Architectural" includes, non-exhaustively: choosing or changing a datastore, cache, or transport mechanism; cross-service contracts; failure/isolation models; and anything that sets a pattern other tickets will follow. When unsure whether a change is architectural, treat it as architectural and ask.
