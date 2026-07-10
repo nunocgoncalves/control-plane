@@ -122,7 +122,7 @@ func (r *ModelBackendReconciler) reconcileVLLM(ctx context.Context, mb *v1alpha1
 	}
 
 	healthy := r.deploymentHealthy(ctx, mb)
-	serviceURL := fmt.Sprintf("%s.%s.svc:%d", mb.Name, mb.Namespace, port)
+	serviceURL := fmt.Sprintf("http://%s.%s.svc:%d", mb.Name, mb.Namespace, port)
 	if err := r.materialize(ctx, mb, serviceURL, true, healthy); err != nil {
 		return ctrl.Result{}, err
 	}

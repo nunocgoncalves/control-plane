@@ -137,7 +137,7 @@ func TestModelBackendReconcile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "vLLM", b.Kind)
 		assert.Equal(t, "Qwen/Qwen3-27B", b.Model)
-		assert.Equal(t, "vllm-qwen.default.svc:8000", b.ServiceURL)
+		assert.Equal(t, "http://vllm-qwen.default.svc:8000", b.ServiceURL)
 		assert.True(t, b.Deployed)
 		assert.False(t, b.Healthy, "healthy must stay false without a real running pod")
 
