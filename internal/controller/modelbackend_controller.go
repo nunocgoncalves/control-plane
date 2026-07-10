@@ -268,6 +268,15 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 			HTTPGet: &corev1.HTTPGetAction{Path: healthPath(mb), Port: intstr.FromInt(int(port))},
 		},
 	}
+	// startupProbe gives vLLM time to download the model + load it into GPU before
+	// the liveness probe can kill it. vLLM is slow to start serving /health
+	// (model download + GPU load takes minutes); without this the liveness probe
+	// (30s) kills the container in a CrashLoopBackOff before it ever serves.
+	startupProbe := &corev1.Probe{
+		ProbeHandler:     probe.ProbeHandler,
+		PeriodSeconds:    10,
+		FailureThreshold: 60, // 10 minutes for model download + GPU load
+	}
 
 	return appsv1.DeploymentSpec{
 		Replicas: &replicas,
@@ -298,6 +307,7 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 						MountPath: defaultModelCachePath,
 					}},
 					Resources:      resources,
+					StartupProbe:   startupProbe,
 					ReadinessProbe: probe,
 					LivenessProbe:  probe,
 				}},

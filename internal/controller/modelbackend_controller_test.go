@@ -118,6 +118,10 @@ func TestModelBackendReconcile(t *testing.T) {
 		require.NotNil(t, c.ReadinessProbe)
 		require.NotNil(t, c.ReadinessProbe.HTTPGet)
 		assert.Equal(t, "/health", c.ReadinessProbe.HTTPGet.Path)
+		// startupProbe gives vLLM time to download + load the model before the
+		// liveness probe can kill it (HOR-338).
+		require.NotNil(t, c.StartupProbe, "vLLM pod must have a startupProbe")
+		assert.Equal(t, int32(60), c.StartupProbe.FailureThreshold, "startupProbe should allow ~10m for model download + GPU load")
 
 		// The Service exposes the serving port and selects the workload.
 		var svc corev1.Service
