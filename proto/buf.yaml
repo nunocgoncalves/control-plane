@@ -1,0 +1,14 @@
+# buf module for the harness RPC contract (HOR-351).
+# Run `make proto` from the repo root (it cd's here and runs buf generate).
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - RPC_RESPONSE_STANDARD_NAME # Event is a streamed event, not a FooResponse wrapper
+    - SERVICE_SUFFIX              # Connect appends "Service" to the descriptor (Harness -> HarnessService)
+breaking:
+  use:
+    - FILE

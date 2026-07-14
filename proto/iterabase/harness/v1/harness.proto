@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package iterabase.harness.v1;
+
+// The AgentSandbox harness RPC contract (HOR-351).
+//
+// The Go control-plane (HOR-249) drives the Node pi harness (HOR-351) over
+// this contract. Transport: Connect (HTTP/1.1) + mTLS. One pod = one pi
+// session = one workflow-run/thread; the session is selected by `session.id`
+// in the harness config (control-plane-owned mapping), NOT via RPC.
+//
+// v1 surface: Prompt (server-streaming) + Abort (unary). /readyz + /healthz
+// are plain HTTP (kubelet probes), not RPC. No session-management RPC, no
+// Health/GetState RPC (the control-plane owns the session.id).
+//
+// Deferred (non-breaking oneof/RPC additions): Steer/FollowUp unary RPCs +
+// live token streaming (message_update deltas) + queue_update events — the
+// "interactive surfaces" extension required by Teams (HOR-248) and Slack
+// (HOR-261/262).
+//
+// Ref: Platform Direction doc (Obsidian: Horizonshift Platform Direction)
+// §4/§7; Linear HOR-351.
+
+option go_package = "github.com/nunocgoncalves/control-plane/internal/harnessrpc/iterabase/harness/v1;harnessv1";
+
+service Harness {
+  // Prompt sends a user message and streams curated agent events until the
+  // turn settles, then the stream closes. The control-plane records events to
+  // the Postgres event/audit log (HOR-249). Per-task instructions ride in
+  // `message`; the persona/system prompt is pod-level config.
+  rpc Prompt(PromptRequest) returns (stream Event);
+
+  // Abort cancels the pod's active turn (one pod = one active turn). The
+  // in-flight Prompt stream then emits Settled{aborted} and closes.
+  rpc Abort(AbortRequest) returns (AbortResponse);
+}
+
+message PromptRequest {
+  string message = 1;
+  repeated Image images = 2; // optional; the email demo is text-only
+}
+
+message Image {
+  bytes data = 1;
+  string mime_type = 2;
+}
+
+message AbortRequest {}
+
+message AbortResponse {}
+
+// Event is the streamed pi event, curated to the semantic set the
+// control-plane records. Deferred: message_update deltas (live token
+// streaming), queue_update, compaction/retry detail.
+message Event {
+  oneof kind {
+    TurnStarted turn_started = 1;
+    AssistantMessage assistant_message = 2;
+    ToolResult tool_result = 3;
+    Error error = 4;
+    Settled settled = 5; // terminal; the stream closes after this
+  }
+}
+
+message TurnStarted {
+  string model = 1;           // provider/modelId in use
+  string thinking_level = 2;  // off|low|medium|high|...
+}
+
+// AssistantMessage carries the turn's assistant output: text + tool calls +
+// usage. Emitted at pi message_end (role=assistant).
+message AssistantMessage {
+  string text = 1;
+  repeated ToolCall tool_calls = 2;
+  Usage usage = 3;
+  string stop_reason = 4;  // stop|length|toolUse|error|aborted
+  int64 timestamp_ms = 5;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3; // the LLM's raw tool-call args (JSON string)
+}
+
+// ToolResult is the granular per-call audit record (pi tool_execution_end).
+message ToolResult {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  string result_text = 4; // result content (text); large blobs offloaded by control-plane
+  bool is_error = 5;
+  int64 timestamp_ms = 6;
+}
+
+message Usage {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int64 cache_read_tokens = 3;
+  int64 cache_write_tokens = 4;
+  double cost_usd = 5;
+}
+
+// Error is non-terminal: a tool/extension/retry error mid-turn that the turn
+// may recover from. Terminal failures surface as Settled{failed}.
+message Error {
+  string source = 1;  // extension|retry|internal|tool
+  string message = 2;
+}
+
+// Settled is the terminal event; the stream closes after it.
+message Settled {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_COMPLETED = 1; // normal agent_settled
+    REASON_ABORTED = 2;   // Abort RPC fired
+    REASON_FAILED = 3;    // unrecoverable error
+  }
+  Reason reason = 1;
+  int32 message_count = 2; // session message count after the turn
+}

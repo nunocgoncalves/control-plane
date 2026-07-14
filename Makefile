@@ -132,6 +132,50 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster in ~/.kube/c
 undeploy: kustomize ## Undeploy controller from the K8s cluster in ~/.kube/config.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
+##@ Harness (Node pi harness — HOR-351)
+
+HARNESS_IMG ?= control-plane-harness:latest
+BUF ?= buf
+
+.PHONY: proto-tools
+proto-tools: ## Install buf + protoc plugins (proto lint + codegen). buf: brew install buf (or GOBIN=$$PWD/bin go install github.com/bufbuild/buf/cmd/buf@latest).
+	@command -v $(BUF) >/dev/null 2>&1 || GOBIN="$(LOCALBIN)" go install github.com/bufbuild/buf/cmd/buf@latest
+	@command -v protoc-gen-go >/dev/null 2>&1 || GOBIN="$(LOCALBIN)" go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	@command -v protoc-gen-connect-go >/dev/null 2>&1 || GOBIN="$(LOCALBIN)" go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+	@command -v protoc-gen-es >/dev/null 2>&1 || npm install -g @bufbuild/protoc-gen-es
+	@command -v protoc-gen-connect-es >/dev/null 2>&1 || npm install -g @connectrpc/protoc-gen-connect-es
+	@PATH="$(LOCALBIN):$$PATH" $(BUF) --version
+
+.PHONY: proto
+proto: proto-tools ## Generate Go (internal/harnessrpc) + TS (harness/src/gen) stubs from proto/.
+	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint && PATH="$(LOCALBIN):$$PATH" $(BUF) generate
+
+.PHONY: proto-check
+proto-check: proto-tools ## CI guard: proto lints clean and generated code is fresh.
+	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint
+	@git diff --exit-code -- internal/harnessrpc harness/src/gen || { \
+		echo "generated code is stale; run 'make proto' and commit"; exit 1; }
+
+.PHONY: harness-deps
+harness-deps: ## Install harness Node deps (npm install).
+	cd harness && npm install
+
+.PHONY: harness-build
+harness-build: ## Build the harness (tsc -> dist).
+	cd harness && npm run build
+
+.PHONY: harness-test
+harness-test: ## Run harness unit + integration tests (vitest).
+	cd harness && npm test
+
+.PHONY: harness-lint
+harness-lint: ## Typecheck the harness (tsc --noEmit).
+	cd harness && npm run lint
+
+.PHONY: harness-image
+harness-image: ## Build the harness container image.
+	$(CONTAINER_TOOL) build -t $(HARNESS_IMG) -f harness/Dockerfile harness/
+
 ##@ Tooling
 
 .PHONY: install-hooks
