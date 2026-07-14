@@ -1,47 +1,125 @@
 // pi event -> proto Event mapping (HOR-351). Translates pi's
 // AgentSessionEvent stream into the curated 5-kind Event oneof the
-// control-plane records (HOR-249). v1 forwards only the semantic events:
-// TurnStarted, AssistantMessage, ToolResult, Error, Settled. Deferred:
-// message_update deltas (live token streaming), queue_update, compaction/retry.
-//
-// SKELETON: the generated Event types come from `make proto`
-// (./gen/harness/v1/harness_pb.ts + connect-es). The mapping below is the
-// intended shape; wire it to session.subscribe() in server.ts.
+// control-plane records (HOR-249). v1 forwards only the semantic events;
+// message_update deltas (live token streaming), queue_update, and compaction
+// detail are deferred. agent_settled is NOT mapped here — the server builds
+// the terminal Settled event (it owns the aborted/failed reason).
 
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-// TODO after `make proto`:
-// import { create, toBinary } from "@bufbuild/protobuf";
-// import * as pb from "./gen/harness/v1/harness_pb.js";
+import { create } from "@bufbuild/protobuf";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageSchema,
+  ErrorSchema,
+  EventSchema,
+  ToolCallSchema,
+  ToolResultSchema,
+  TurnStartedSchema,
+  UsageSchema,
+  type Event,
+} from "./gen/iterabase/harness/v1/harness_pb.js";
 
-export type HarnessEvent =
-  | { $case: "turn_started"; model: string; thinkingLevel: string }
-  | { $case: "assistant_message"; text: string; toolCalls: ToolCall[]; usage: Usage; stopReason: string }
-  | { $case: "tool_result"; toolCallId: string; toolName: string; argumentsJson: string; resultText: string; isError: boolean }
-  | { $case: "error"; source: string; message: string }
-  | { $case: "settled"; reason: "completed" | "aborted" | "failed"; messageCount: number };
-
-interface ToolCall {
+interface TextLike {
+  type: "text";
+  text: string;
+}
+interface ToolCallLike {
+  type: "toolCall";
   id: string;
   name: string;
-  argumentsJson: string;
+  arguments: unknown;
 }
-interface Usage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  costUsd: number;
+interface ContentBlock {
+  type: string;
+  text?: string;
 }
 
-// Map a pi event to zero or one HarnessEvent. pi emits many event types; v1
-// keeps only the semantic ones. Returns undefined to drop (e.g. deltas).
-export function mapEvent(_e: AgentSessionEvent): HarnessEvent | undefined {
-  // TODO: switch on _e.type:
-  //   turn_start        -> { $case: "turn_started", model, thinkingLevel }
-  //   message_end       -> { $case: "assistant_message", ... } (role=assistant only)
-  //   tool_execution_end-> { $case: "tool_result", ... }
-  //   extension_error   -> { $case: "error", source: "extension", ... }
-  //   agent_settled     -> { $case: "settled", reason: "completed" }
-  // (agent_end with willRetry / auto_retry_end final failure -> error + settled{failed})
-  return undefined;
+// Stateful: tracks tool-call args from tool_execution_start so the
+// tool_execution_end Event can carry them (pi puts args on start, result on end).
+export class EventMapper {
+  private readonly args = new Map<string, unknown>();
+  constructor(private readonly session: AgentSession) {}
+
+  map(ev: AgentSessionEvent): Event | undefined {
+    switch (ev.type) {
+      case "turn_start":
+        return create(EventSchema, {
+          kind: {
+            case: "turnStarted",
+            value: create(TurnStartedSchema, {
+              model: this.session.model?.id ?? "",
+              thinkingLevel: this.session.thinkingLevel ?? "",
+            }),
+          },
+        });
+
+      case "message_end": {
+        const m = ev.message;
+        if (m.role !== "assistant") return undefined;
+        const blocks = m.content as ContentBlock[];
+        const text = blocks.filter((c): c is TextLike => c.type === "text").map((c) => c.text).join("");
+        const toolCalls = blocks
+          .filter((c): c is ToolCallLike => c.type === "toolCall")
+          .map((c) =>
+            create(ToolCallSchema, { id: c.id, name: c.name, argumentsJson: JSON.stringify(c.arguments) }),
+          );
+        const u = m.usage;
+        return create(EventSchema, {
+          kind: {
+            case: "assistantMessage",
+            value: create(AssistantMessageSchema, {
+              text,
+              toolCalls,
+              usage: create(UsageSchema, {
+                inputTokens: BigInt(u.input),
+                outputTokens: BigInt(u.output),
+                cacheReadTokens: BigInt(u.cacheRead),
+                cacheWriteTokens: BigInt(u.cacheWrite),
+                costUsd: u.cost.total,
+              }),
+              stopReason: m.stopReason,
+              timestampMs: BigInt(m.timestamp),
+            }),
+          },
+        });
+      }
+
+      case "tool_execution_start":
+        this.args.set(ev.toolCallId, ev.args);
+        return undefined;
+
+      case "tool_execution_end": {
+        const content = (ev.result?.content as ContentBlock[] | undefined) ?? [];
+        const resultText = content.filter((c): c is TextLike => c.type === "text").map((c) => c.text).join("");
+        return create(EventSchema, {
+          kind: {
+            case: "toolResult",
+            value: create(ToolResultSchema, {
+              toolCallId: ev.toolCallId,
+              toolName: ev.toolName,
+              argumentsJson: JSON.stringify(this.args.get(ev.toolCallId) ?? {}),
+              resultText,
+              isError: ev.isError,
+              timestampMs: BigInt(Date.now()),
+            }),
+          },
+        });
+      }
+
+      // extension_error is not a subscribe event (extension errors surface via
+      // the session's error listener, not the event stream) — not mapped in v1.
+
+      case "auto_retry_end":
+        return ev.success
+          ? undefined
+          : create(EventSchema, {
+              kind: {
+                case: "error",
+                value: create(ErrorSchema, { source: "retry", message: ev.finalError ?? "retry failed" }),
+              },
+            });
+
+      default:
+        return undefined;
+    }
+  }
 }

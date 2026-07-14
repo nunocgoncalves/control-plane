@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.6",
-    "@bufbuild/protobuf": "^2.2.0",
-    "@connectrpc/connect": "^2.5.0",
-    "@connectrpc/connect-node": "^2.5.0",
+    "@bufbuild/protobuf": "^2.12.1",
+    "@connectrpc/connect": "^2.1.2",
+    "@connectrpc/connect-node": "^2.1.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
