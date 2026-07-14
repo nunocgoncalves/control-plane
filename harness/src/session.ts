@@ -2,75 +2,97 @@
 // the harness IS the agent. One pod = one session, selected by config.session.id
 // (control-plane-owned mapping, HOR-249): resume (SessionManager.open) if a
 // session exists for the id, else create (scoped to a per-id dir). Built-in
-// coding tools are OFF (tools: []); the agent's tools come from the overlay
-// pi/ tree. Model traffic routes to the egress proxy with a placeholder key.
-//
-// SKELETON: requires `make proto` (Connect stubs) + `npm install` to compile.
+// coding tools are off; the agent's tools come from the overlay pi/ tree.
+// Model traffic routes to the egress proxy with a placeholder key (the proxy
+// substitutes the real gateway key — HOR-244); the harness holds no real creds.
 
 import {
+  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
+  ModelRegistry,
   SessionManager,
   type AgentSession,
+  type ExtensionFactory,
+  type ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
 import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { HarnessConfig } from "./config.js";
-import { filterTools } from "./enforcement.js";
+import { toolOptions } from "./enforcement.js";
+
+const PROVIDER = "iterabase-inference";
 
 export interface SessionHandle {
   session: AgentSession;
-  isNew: boolean; // true if created (vs resumed) — useful for the control-plane's mapping
+  isNew: boolean;
 }
 
-// Build the pi session from config. The persona is pod-level (systemPromptOverride);
-// per-task instructions ride in each Prompt message.
 export async function createSession(cfg: HarnessConfig): Promise<SessionHandle> {
-  const sessionDir = join(cfg.session.dir, cfg.session.id); // scope by id; never scan "most recent"
+  const sessionDir = join(cfg.session.dir, cfg.session.id);
   const existing = findSessionFile(sessionDir);
+
+  const authStorage = AuthStorage.create(join(sessionDir, "auth.json"));
+  const modelRegistry = ModelRegistry.create(authStorage);
+
+  // Register the egress-proxy-backed model provider. The placeholder key is
+  // what the per-sandbox egress proxy swaps for the real gateway key on the
+  // wire (HOR-244). pi.registerProvider -> modelRegistry.registerProvider, so
+  // modelRegistry.find() sees it after the factory runs (during createAgentSession).
+  const providerFactory: ExtensionFactory = (pi) => {
+    const provider: ProviderConfig = {
+      baseUrl: cfg.model.endpoint,
+      apiKey: "placeholder",
+      api: cfg.model.api as unknown as ProviderConfig["api"],
+      models: [
+        {
+          id: cfg.model.id,
+          name: cfg.model.id,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: cfg.model.contextWindow,
+          maxTokens: 4096,
+        },
+      ],
+    };
+    pi.registerProvider(PROVIDER, provider);
+  };
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: sessionDir,
+    agentDir: sessionDir, // scope discovery to the session (no global ~/.pi)
     additionalExtensionPaths: cfg.piDirs, // product first, then client (last-wins precedence)
+    extensionFactories: [providerFactory],
     systemPromptOverride: () => cfg.persona,
   });
   await resourceLoader.reload();
 
   const sessionManager = existing
-    ? SessionManager.open(existing, sessionDir) // resume
-    : SessionManager.create(sessionDir, sessionDir); // create new, scoped to the per-id dir
+    ? SessionManager.open(existing, sessionDir, sessionDir) // resume
+    : SessionManager.create(sessionDir, sessionDir); // create, scoped to the per-id dir
 
   const { session } = await createAgentSession({
     cwd: sessionDir,
+    authStorage,
+    modelRegistry,
     resourceLoader,
     sessionManager,
-    tools: [], // no built-in coding tools; tools come from the overlay pi/ tree
-    // model: TODO register the egress-proxy provider via an inline extension:
-    //   pi.registerProvider("iterabase-inference", {
-    //     baseUrl: cfg.model.endpoint, api: cfg.model.api, apiKey: "placeholder",
-    //     models: [{ id: cfg.model.id, contextWindow: cfg.model.contextWindow, ... }],
-    //   });
-    // then select cfg.model.id. The proxy substitutes the placeholder for the
-    // real gateway key on the wire (HOR-244).
+    ...toolOptions(cfg.toolAllowList),
   });
 
-  // Load-time allow-list enforcement (in-process). Broad-default ("*") passes
-  // all registered tools through; a list filters to it. Runtime tool_call
-  // interception (per-action) is deferred to HOR-283.
-  filterTools(session, cfg.toolAllowList);
+  const model = modelRegistry.find(PROVIDER, cfg.model.id);
+  if (!model) throw new Error(`harness: model not found after provider registration: ${cfg.model.id}`);
+  await session.setModel(model);
 
   return { session, isNew: !existing };
 }
 
-// A session dir holds at most one active session file (the harness never forks
-// in v1). If present, resume it; else create new.
+// A session dir holds at most one active session file in v1 (no forking).
+// Scoped to config.session.id — never a cross-session "most recent" scan.
 function findSessionFile(sessionDir: string): string | undefined {
   if (!existsSync(sessionDir)) return undefined;
   const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
   if (files.length === 0) return undefined;
-  if (files.length > 1) {
-    // Unexpected in v1 (no forking); resume the most recent in THIS id's dir.
-    // This is NOT cross-session "most recent" — it is scoped to session.id.
-  }
   return join(sessionDir, files.sort().at(-1)!);
 }

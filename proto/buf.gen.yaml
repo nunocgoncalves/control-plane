@@ -10,8 +10,6 @@ plugins:
   - local: protoc-gen-es
     out: ../harness/src/gen
     opt: target=ts
-  - local: protoc-gen-connect-es
-    out: ../harness/src/gen
   - local: protoc-gen-go
     out: ../internal/harnessrpc
     opt: paths=source_relative

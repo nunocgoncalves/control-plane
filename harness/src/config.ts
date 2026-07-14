@@ -38,15 +38,15 @@ export interface HarnessConfig {
   server: { port: number; healthPort: number };
 }
 
-const DEFAULTS = {
-  model: { api: "openai-completions", contextWindow: 131072 },
+export class ConfigError extends Error {}
+
+const DEFAULTS: Pick<HarnessConfig, "model" | "piDirs" | "session" | "tls" | "server"> = {
+  model: { id: "", endpoint: "", api: "openai-completions", contextWindow: 131072 },
   piDirs: ["/pi/product", "/pi/client"],
-  session: { dir: "/data/sessions" },
+  session: { id: "", dir: "/data/sessions" },
   tls: { cert: "/etc/harness/tls/tls.crt", key: "/etc/harness/tls/tls.key", ca: "/etc/harness/tls/ca.crt" },
   server: { port: 8443, healthPort: 8081 },
-} as const;
-
-export class ConfigError extends Error {}
+};
 
 export function loadConfig(
   path: string = process.env.HARNESS_CONFIG ?? "/etc/harness/config.yaml",
@@ -54,7 +54,7 @@ export function loadConfig(
   const raw = parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   if (!raw || typeof raw !== "object") throw new ConfigError(`config at ${path} is empty or invalid`);
 
-  const cfg: HarnessConfig = {
+  const cfg = {
     persona: str(raw, "persona"),
     model: { ...DEFAULTS.model, ...obj(raw, "model") },
     toolAllowList: allowList(raw, "toolAllowList"),
@@ -63,7 +63,7 @@ export function loadConfig(
     egressProxyUrl: str(raw, "egressProxyUrl"),
     tls: { ...DEFAULTS.tls, ...obj(raw, "tls") },
     server: { ...DEFAULTS.server, ...obj(raw, "server") },
-  };
+  } as HarnessConfig;
 
   requireValue(cfg.persona, "persona");
   requireValue(cfg.model.id, "model.id");

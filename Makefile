@@ -143,7 +143,6 @@ proto-tools: ## Install buf + protoc plugins (proto lint + codegen). buf: brew i
 	@command -v protoc-gen-go >/dev/null 2>&1 || GOBIN="$(LOCALBIN)" go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	@command -v protoc-gen-connect-go >/dev/null 2>&1 || GOBIN="$(LOCALBIN)" go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
 	@command -v protoc-gen-es >/dev/null 2>&1 || npm install -g @bufbuild/protoc-gen-es
-	@command -v protoc-gen-connect-es >/dev/null 2>&1 || npm install -g @connectrpc/protoc-gen-connect-es
 	@PATH="$(LOCALBIN):$$PATH" $(BUF) --version
 
 .PHONY: proto
@@ -151,8 +150,7 @@ proto: proto-tools ## Generate Go (internal/harnessrpc) + TS (harness/src/gen) s
 	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint && PATH="$(LOCALBIN):$$PATH" $(BUF) generate
 
 .PHONY: proto-check
-proto-check: proto-tools ## CI guard: proto lints clean and generated code is fresh.
-	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint
+proto-check: proto ## CI guard: proto lints clean and generated code is fresh (regenerate + diff).
 	@git diff --exit-code -- internal/harnessrpc harness/src/gen || { \
 		echo "generated code is stale; run 'make proto' and commit"; exit 1; }
 
