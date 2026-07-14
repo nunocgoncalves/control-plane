@@ -1,0 +1,24 @@
+{
+  "name": "control-plane-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The pi harness running in the AgentSandbox — the agent. HOR-351.",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@bufbuild/protobuf": "^2.2.0",
+    "@connectrpc/connect": "^2.5.0",
+    "@connectrpc/connect-node": "^2.5.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  }
+}

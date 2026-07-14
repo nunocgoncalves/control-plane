@@ -1,0 +1,20 @@
+# Codegen for the harness RPC contract (HOR-351).
+# Generates:
+#   - Go stubs      -> internal/harnessrpc/iterabase/harness/v1  (protoc-gen-go + connect-go; HOR-249 consumes)
+#   - TypeScript     -> harness/src/gen/iterabase/harness/v1      (protoc-gen-es + connect-es; the harness server)
+# Local plugins (install via `make proto-tools` + go install / npm i -g). Run `make proto`.
+version: v2
+managed:
+  enabled: true
+plugins:
+  - local: protoc-gen-es
+    out: ../harness/src/gen
+    opt: target=ts
+  - local: protoc-gen-connect-es
+    out: ../harness/src/gen
+  - local: protoc-gen-go
+    out: ../internal/harnessrpc
+    opt: paths=source_relative
+  - local: protoc-gen-connect-go
+    out: ../internal/harnessrpc
+    opt: paths=source_relative
