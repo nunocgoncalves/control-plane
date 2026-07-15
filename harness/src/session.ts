@@ -16,7 +16,7 @@ import {
   type ExtensionFactory,
   type ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "./config.js";
 import { toolOptions } from "./enforcement.js";
@@ -30,6 +30,7 @@ export interface SessionHandle {
 
 export async function createSession(cfg: HarnessConfig): Promise<SessionHandle> {
   const sessionDir = join(cfg.session.dir, cfg.session.id);
+  mkdirSync(sessionDir, { recursive: true });
   const existing = findSessionFile(sessionDir);
 
   const authStorage = AuthStorage.create(join(sessionDir, "auth.json"));

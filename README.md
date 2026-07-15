@@ -45,6 +45,9 @@ internal/logging/   shared slog logger + logr bridge
 internal/version/   build-time version metadata
 internal/testutil/  shared Postgres test helper (testcontainers)
 config/             kubebuilder Kustomize — DEV/envtest only (prod = forge Helm)
+proto/              harness RPC contract (buf) — HOR-351
+harness/            Node pi harness (the agent) — HOR-351; see harness/README.md
+internal/harnessrpc/ generated Go Connect stubs (HOR-249 consumes) — HOR-351
 ```
 
 ## Develop
