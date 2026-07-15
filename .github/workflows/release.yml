@@ -109,6 +109,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push harness image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: harness
@@ -117,3 +118,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/nunocgoncalves/control-plane-harness@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-harness.spdx.json
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach SBOM to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom-harness.spdx.json
