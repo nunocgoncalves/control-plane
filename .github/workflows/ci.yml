@@ -9,6 +9,7 @@ permissions:
   contents: read
 
 jobs:
+  # Go control-plane (existing).
   ci:
     runs-on: ubuntu-latest
     steps:
@@ -31,3 +32,44 @@ jobs:
 
       - name: test
         run: make test
+
+  # Node pi harness (HOR-351): typecheck + tests against the committed generated stubs.
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: harness/package-lock.json
+
+      - name: install deps
+        run: npm ci
+        working-directory: harness
+
+      - name: typecheck
+        run: make harness-lint
+
+      - name: test
+        run: make harness-test
+
+  # Generated stubs are fresh: regenerate (buf + protoc plugins) + git diff.
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      # make proto-check -> make proto -> make proto-tools installs buf + the
+      # protoc plugins (go install for buf/go/connect-go, npm i -g for es).
+      - name: proto-check
+        run: make proto-check
