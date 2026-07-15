@@ -16,8 +16,11 @@ API, DB schema, config, CI). HOR-242 adds the identity store: the
 `IdentityMapping` CRD + reconciler, local users, API keys, delegated JWT/JWKS
 issuance, and the admin bootstrap. HOR-243 adds the permission engine: the
 `PermissionPolicy` CRD + reconciler and the `effective_capabilities` view
-(broad-default). Sandbox reconciliation (HOR-245), the model catalog
-(HOR-268/306), and the durable turn runtime (HOR-246) land in their own tickets.
+(broad-default). HOR-306/268 add the model catalog (`ModelBackend`/`Model` CRDs
++ the `effective_catalog` view). HOR-246 adds the durable turn runtime: the
+`runtime` schema + store (workflow_run/step/turn state machines + append-only
+event/audit log) — the data layer HOR-249 (orchestration) and HOR-252 (workflow
+definitions) consume. Sandbox reconciliation (HOR-245) lands in its own ticket.
 
 ## Binaries
 
@@ -40,6 +43,7 @@ internal/config/    YAML + env config (api) + DatabaseFromEnv (manager)
 internal/database/  pgx pool + embedded golang-migrate migrations
 internal/identity/  identity store, API keys, JWT/JWKS issuer, resolver
 internal/controller/ IdentityMapping reconciler (Git -> DB bridge)
+internal/runtime/   durable turn runtime store (run/step/turn SM + event log) — HOR-246
 internal/server/    chi HTTP routes (health, jwks, token, admin CRUD)
 internal/logging/   shared slog logger + logr bridge
 internal/version/   build-time version metadata
