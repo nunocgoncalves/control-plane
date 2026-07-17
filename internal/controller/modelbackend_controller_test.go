@@ -124,6 +124,17 @@ func TestModelBackendReconcile(t *testing.T) {
 		require.NotNil(t, c.StartupProbe, "vLLM pod must have a startupProbe")
 		assert.Equal(t, int32(60), c.StartupProbe.FailureThreshold, "startupProbe should allow ~10m for model download + GPU load")
 
+		// GPU-safe rollout (HOR-378): maxSurge=0 + maxUnavailable=1 so a
+		// single-GPU node doesn't deadlock (new pod Pending while the old pod
+		// holds the only nvidia.com/gpu); the grace period lets vLLM drain on SIGTERM.
+		assert.Equal(t, appsv1.RollingUpdateDeploymentStrategyType, dep.Spec.Strategy.Type)
+		require.NotNil(t, dep.Spec.Strategy.RollingUpdate)
+		assert.Equal(t, "0", dep.Spec.Strategy.RollingUpdate.MaxSurge.String(),
+			"maxSurge must be 0 to avoid surging a pod the GPU can't satisfy")
+		assert.Equal(t, "1", dep.Spec.Strategy.RollingUpdate.MaxUnavailable.String())
+		require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+		assert.Equal(t, int64(defaultTerminationGracePeriodSeconds), *dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+
 		// The Service exposes the serving port and selects the workload.
 		var svc corev1.Service
 		require.NoError(t, adminClient.Get(ctx, nn, &svc))

@@ -32,6 +32,9 @@ const (
 	gpuNodeLabel          = "nvidia.com/gpu.present"
 	nvidiaRuntimeClass    = "nvidia"
 	healthRequeueSeconds  = 30
+	// defaultTerminationGracePeriodSeconds lets vLLM drain in-flight requests on
+	// SIGTERM before releasing the GPU during a GPU-safe rollout (HOR-378).
+	defaultTerminationGracePeriodSeconds = 180
 )
 
 // ModelBackendReconciler deploys internal serving workloads (vLLM) or records
@@ -284,15 +287,33 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 	args := []string{"--model", mb.Spec.Model, "--port", fmt.Sprintf("%d", port), "--host", "0.0.0.0"}
 	args = append(args, mb.Spec.ExtraArgs...)
 
+	// GPU-safe rollout (HOR-378): maxSurge=0 + maxUnavailable=1 means k8s
+	// terminates the old pod before creating the new one. With the default
+	// maxSurge=1 the new pod is created first and, on a single-GPU node where
+	// the old pod holds the only nvidia.com/gpu, stays Pending forever — the
+	// rollout deadlocks and the new spec never applies. No surge avoids that at
+	// the cost of downtime during model reload (unavoidable on one GPU).
+	maxSurge := intstr.FromInt(0)
+	maxUnavailable := intstr.FromInt(1)
+	terminationGracePeriodSeconds := int64(defaultTerminationGracePeriodSeconds)
+
 	return appsv1.DeploymentSpec{
 		Replicas: &replicas,
 		Selector: &metav1.LabelSelector{MatchLabels: backendLabels(mb)},
+		Strategy: appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxSurge:       &maxSurge,
+				MaxUnavailable: &maxUnavailable,
+			},
+		},
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: backendLabels(mb)},
 			Spec: corev1.PodSpec{
-				RuntimeClassName: &runtimeClassName,
-				NodeSelector:     nodeSelector,
-				Tolerations:      mb.Spec.Tolerations,
+				RuntimeClassName:              &runtimeClassName,
+				TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
+				NodeSelector:                  nodeSelector,
+				Tolerations:                   mb.Spec.Tolerations,
 				Volumes: []corev1.Volume{{
 					Name: "hf-cache",
 					VolumeSource: corev1.VolumeSource{
