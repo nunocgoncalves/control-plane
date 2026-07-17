@@ -14,3 +14,12 @@ spec:
   replicas: 1
   # resources default nvidia.com/gpu: "1" when the GPU request is absent.
   # nodeSelector defaults to {nvidia.com/gpu.present: "true"} when empty.
+  # extraArgs are appended after the controller-managed
+  # --model/--port/--host defaults, e.g. for NVFP4 quantization or an explicit
+  # context cap. --port and --host may not be set here (they back the Service +
+  # probe contract) and are rejected by the reconciler.
+  # extraArgs:
+  #   - --quantization
+  #   - modelopt
+  #   - --max-model-len
+  #   - "262144"
