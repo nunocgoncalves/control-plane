@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -240,4 +241,103 @@ func TestModelBackendReconcile(t *testing.T) {
 		assert.Equal(t, "2", twoGpu.String(),
 			"a pre-set GPU request must not be overwritten by the default")
 	})
+
+	// extraArgs (HOR-370) are appended after the controller-managed
+	// --model/--port/--host; --port/--host overrides are rejected (Service +
+	// probe contract).
+	t.Run("vLLM appends spec.extraArgs after the controller-managed args", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-extraargs", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:  "vLLM",
+				Model: "Qwen/Qwen3-27B",
+				ExtraArgs: []string{
+					"--quantization", "modelopt",
+					"--max-model-len", "262144",
+				},
+			},
+		}
+		require.NoError(t, adminClient.Create(ctx, mb))
+		nn := types.NamespacedName{Name: "vllm-extraargs", Namespace: "default"}
+
+		require.Eventually(t, func() bool {
+			var got v1alpha1.ModelBackend
+			return adminClient.Get(ctx, nn, &got) == nil && got.Status.Deployed
+		}, 15*time.Second, 200*time.Millisecond, "ModelBackend with extraArgs should report deployed")
+
+		var dep appsv1.Deployment
+		require.NoError(t, adminClient.Get(ctx, nn, &dep))
+		c := dep.Spec.Template.Spec.Containers[0]
+		// extraArgs are appended after the controller-managed --model/--port/--host.
+		assert.Equal(t, []string{
+			"--model", "Qwen/Qwen3-27B",
+			"--port", fmt.Sprintf("%d", defaultServingPort),
+			"--host", "0.0.0.0",
+			"--quantization", "modelopt",
+			"--max-model-len", "262144",
+		}, c.Args, "extraArgs must be appended after the controller-managed defaults")
+	})
+
+	t.Run("vLLM rejects --port/--host overrides in spec.extraArgs", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-badargs", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:  "vLLM",
+				Model: "Qwen/Qwen3-27B",
+				// --port is controller-managed (backs the Service + probes); rejected.
+				ExtraArgs: []string{"--port", "9000"},
+			},
+		}
+		require.NoError(t, adminClient.Create(ctx, mb))
+		nn := types.NamespacedName{Name: "vllm-badargs", Namespace: "default"}
+
+		require.Eventually(t, func() bool {
+			var got v1alpha1.ModelBackend
+			if err := adminClient.Get(ctx, nn, &got); err != nil {
+				return false
+			}
+			return !got.Status.Deployed && got.Status.Message != ""
+		}, 15*time.Second, 200*time.Millisecond, "ModelBackend with --port in extraArgs should be rejected")
+
+		var got v1alpha1.ModelBackend
+		require.NoError(t, adminClient.Get(ctx, nn, &got))
+		assert.False(t, got.Status.Deployed, "rejected extraArgs must not deploy a workload")
+		assert.Contains(t, got.Status.Message, "--port")
+		assert.Contains(t, got.Status.Message, "extraArgs")
+
+		// No Deployment is created for a rejected backend.
+		var dep appsv1.Deployment
+		assert.True(t, errors.IsNotFound(adminClient.Get(ctx, nn, &dep)),
+			"rejected extraArgs must not create a Deployment")
+	})
+}
+
+// TestValidateExtraArgs covers the controller-managed --port/--host rejection
+// (both space- and =-separated forms) without needing envtest.
+func TestValidateExtraArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "empty", args: nil},
+		{name: "valid serving flags", args: []string{"--quantization", "modelopt", "--max-model-len", "262144"}},
+		{name: "valid =-form flag", args: []string{"--quantization=modelopt"}},
+		{name: "rejects --port space form", args: []string{"--port", "9000"}, wantErr: "--port"},
+		{name: "rejects --host space form", args: []string{"--host", "0.0.0.0"}, wantErr: "--host"},
+		{name: "rejects --port= form", args: []string{"--port=9000"}, wantErr: "--port"},
+		{name: "rejects --host= form", args: []string{"--host=0.0.0.0"}, wantErr: "--host"},
+		{name: "rejects after valid flags", args: []string{"--max-model-len", "262144", "--port", "9000"}, wantErr: "--port"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateExtraArgs(tc.args)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }

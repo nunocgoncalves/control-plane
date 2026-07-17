@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -109,6 +110,9 @@ func (r *ModelBackendReconciler) reconcileVLLM(ctx context.Context, mb *v1alpha1
 
 	if mb.Spec.Model == "" {
 		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", "spec.model is required for kind vLLM")
+	}
+	if err := validateExtraArgs(mb.Spec.ExtraArgs); err != nil {
+		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", fmt.Sprintf("spec.extraArgs: %v", err))
 	}
 
 	port := servingPort(mb)
@@ -277,6 +281,8 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 		PeriodSeconds:    10,
 		FailureThreshold: 60, // 10 minutes for model download + GPU load
 	}
+	args := []string{"--model", mb.Spec.Model, "--port", fmt.Sprintf("%d", port), "--host", "0.0.0.0"}
+	args = append(args, mb.Spec.ExtraArgs...)
 
 	return appsv1.DeploymentSpec{
 		Replicas: &replicas,
@@ -299,7 +305,7 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 				Containers: []corev1.Container{{
 					Name:  "server",
 					Image: image,
-					Args:  []string{"--model", mb.Spec.Model, "--port", fmt.Sprintf("%d", port), "--host", "0.0.0.0"},
+					Args:  args,
 					Env:   []corev1.EnvVar{{Name: "HF_HOME", Value: defaultModelCachePath}},
 					Ports: []corev1.ContainerPort{{ContainerPort: port, Name: "http"}},
 					VolumeMounts: []corev1.VolumeMount{{
@@ -337,6 +343,22 @@ func healthPath(mb *v1alpha1.ModelBackend) string {
 		return mb.Spec.HealthProbe.Path
 	}
 	return defaultHealthPath
+}
+
+// validateExtraArgs rejects extraArgs that would override the controller-managed
+// --port/--host defaults. Overriding either breaks the Service + probe contract
+// (the Service targets servingPort and the probes hit /health on that port), so
+// they are rejected rather than silently overridden.
+func validateExtraArgs(extraArgs []string) error {
+	for _, a := range extraArgs {
+		switch {
+		case a == "--port" || a == "--host":
+			return fmt.Errorf("%q is controller-managed and may not be set via extraArgs", a)
+		case strings.HasPrefix(a, "--port=") || strings.HasPrefix(a, "--host="):
+			return fmt.Errorf("%q is controller-managed and may not be set via extraArgs", a)
+		}
+	}
+	return nil
 }
 
 // backendKey is the stable natural key for a CR-sourced backend

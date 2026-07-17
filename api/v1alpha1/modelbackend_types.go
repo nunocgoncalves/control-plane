@@ -30,6 +30,16 @@ type ModelBackendSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
+	// extraArgs are additional vLLM serving flags appended after the
+	// controller-managed --model/--port/--host defaults. Use this to pass flags
+	// the controller does not model, e.g. --quantization modelopt,
+	// --max-model-len 262144, or --tool-call-parser qwen3_coder
+	// --enable-auto-tool-choice. The controller-managed --port and --host may
+	// not be overridden here: they back the Service + probe contract, so the
+	// reconciler rejects any extraArgs setting either. Ignored for external.
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+
 	// replicas is the desired pod count. v1 runs a single replica; multi-replica
 	// (Tensor/Pipeline Parallel) is deferred to deepen.
 	// +kubebuilder:validation:Minimum=1
