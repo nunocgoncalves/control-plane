@@ -1,0 +1,22 @@
+apiVersion: platform.iterabase.com/v1alpha1
+kind: EgressRoute
+metadata:
+  name: graph
+  namespace: default
+spec:
+  # The real upstream the proxy forwards /upstreams/graph/<rest> to.
+  upstream:
+    baseURL: https://graph.microsoft.com
+  # The proxy acquires + refreshes an OAuth2 client-credentials token and
+  # injects it as Authorization: Bearer <token>. The client secret value lives
+  # in the graph-oauth Secret (referenced by name; never in Postgres).
+  auth:
+    scheme: oauthClientCredentials
+    tokenURL: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+    clientID: <app-id>
+    clientSecretRef:
+      name: graph-oauth
+      key: client_secret
+    scope: https://graph.microsoft.com/.default
+  # subject omitted = broad-default (every active identity) in v1. A specific
+  # subject is stored but not enforced until group-scoping lands (SSO/HOR-314).
