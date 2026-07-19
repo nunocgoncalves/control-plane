@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+
+# Egress proxy image (HOR-244). A separate, minimal image from the control-plane
+# image (manager/api): the proxy runs in AgentSandbox pods (less-trusted) and is
+# self-contained (no control-plane packages). One entrypoint: cmd/proxy.
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache git
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+ENV LDFLAGS="-X github.com/nunocgoncalves/control-plane/internal/version.version=${VERSION} \
+             -X github.com/nunocgoncalves/control-plane/internal/version.commit=${COMMIT} \
+             -X github.com/nunocgoncalves/control-plane/internal/version.date=${DATE}"
+
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/proxy ./cmd/proxy
+
+# Runtime: minimal, non-root, CA certs for outbound TLS to upstreams.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /out/proxy /proxy
+USER 65532:65532
+ENTRYPOINT ["/proxy"]
