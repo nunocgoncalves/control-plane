@@ -30,6 +30,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(GroupVersion, &PermissionPolicy{}, &PermissionPolicyList{})
 	scheme.AddKnownTypes(GroupVersion, &ModelBackend{}, &ModelBackendList{})
 	scheme.AddKnownTypes(GroupVersion, &Model{}, &ModelList{})
+	scheme.AddKnownTypes(GroupVersion, &EgressRoute{}, &EgressRouteList{})
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
 }
