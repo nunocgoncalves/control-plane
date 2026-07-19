@@ -1,0 +1,174 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: egressroutes.platform.iterabase.com
+spec:
+  group: platform.iterabase.com
+  names:
+    kind: EgressRoute
+    listKind: EgressRouteList
+    plural: egressroutes
+    shortNames:
+    - er
+    singular: egressroute
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          EgressRoute declares one upstream the per-sandbox egress proxy may forward
+          to, plus how it injects the real credential. The control-plane operator
+          materializes it into the Postgres egress store; the AgentSandbox operator
+          (HOR-245) resolves the effective routes per sandbox scope identity.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              EgressRouteSpec defines the desired state of an EgressRoute: one upstream
+              the per-sandbox egress proxy (HOR-244) may forward to, plus how it injects
+              the real credential on the wire (credentials-as-scope). The reconciler
+              materializes this into the Postgres egress store; the AgentSandbox operator
+              (HOR-245) resolves the effective routes for a sandbox's scope identity via
+              internal/egress.Resolve and bakes them into the proxy. The credential value
+              never lives here or in Postgres -- only the K8s Secret reference; the value
+              stays in a Secret mounted into the proxy.
+            properties:
+              auth:
+                description: |-
+                  auth is how the proxy injects the real credential. The proxy strips any
+                  inbound Authorization/api-key (the harness/tool sends a placeholder or
+                  none) and injects this. scheme selects which fields apply.
+                properties:
+                  clientID:
+                    description: |-
+                      clientID is the OAuth2 client id. Required when scheme is
+                      oauthClientCredentials.
+                    type: string
+                  clientSecretRef:
+                    description: |-
+                      clientSecretRef names the K8s Secret key holding the OAuth2 client
+                      secret. Required when scheme is oauthClientCredentials.
+                    properties:
+                      key:
+                        description: key is the key within the Secret.
+                        type: string
+                      name:
+                        description: name is the Kubernetes Secret name.
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  scheme:
+                    description: scheme is the credential-injection scheme.
+                    enum:
+                    - bearer
+                    - oauthClientCredentials
+                    type: string
+                  scope:
+                    description: scope is the OAuth2 scope requested. Optional.
+                    type: string
+                  secretRef:
+                    description: |-
+                      secretRef names the K8s Secret key holding a static bearer token.
+                      Required when scheme is bearer.
+                    properties:
+                      key:
+                        description: key is the key within the Secret.
+                        type: string
+                      name:
+                        description: name is the Kubernetes Secret name.
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  tokenURL:
+                    description: |-
+                      tokenURL is the OAuth2 token endpoint. Required when scheme is
+                      oauthClientCredentials.
+                    type: string
+                required:
+                - scheme
+                type: object
+              subject:
+                description: |-
+                  subject scopes the route to an identity/group. Omitted (or "*") =
+                  broad-default (every active identity) in v1. A specific subject is
+                  stored but NOT enforced in v1 (the effective_routes view ignores it);
+                  group-scoped narrowing is additive later (SSO/HOR-314).
+                properties:
+                  key:
+                    description: key is the subject's identity key (e.g. "default/alice").
+                    type: string
+                  kind:
+                    description: kind is the subject's identity kind.
+                    enum:
+                    - user
+                    - group
+                    - service_account
+                    - workflow
+                    type: string
+                required:
+                - key
+                - kind
+                type: object
+              upstream:
+                description: |-
+                  upstream is the real target the proxy forwards to. The proxy terminates
+                  the inbound leg (TLS, localhost) and originates a fresh outbound TLS
+                  connection here.
+                properties:
+                  baseURL:
+                    description: |-
+                      baseURL is the absolute upstream origin, e.g. https://graph.microsoft.com.
+                      The proxy forwards /upstreams/<route-id>/<rest> -> <baseURL>/<rest>.
+                    pattern: ^https?://
+                    type: string
+                required:
+                - baseURL
+                type: object
+            required:
+            - auth
+            - upstream
+            type: object
+          status:
+            description: EgressRouteStatus is the observed state reported by the reconciler.
+            properties:
+              message:
+                description: message surfaces the last reconciliation error. Empty
+                  on success.
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation most recently reconciled.
+                format: int64
+                type: integer
+              ready:
+                description: ready is true once the route is materialized in Postgres.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

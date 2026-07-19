@@ -31,6 +31,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/controller"
 	"github.com/nunocgoncalves/control-plane/internal/database"
+	"github.com/nunocgoncalves/control-plane/internal/egress"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
@@ -242,6 +243,15 @@ func run() int {
 		Store:  catalog.NewStore(pool),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up Model reconciler")
+		return 1
+	}
+
+	if err = (&controller.EgressRouteReconciler{
+		Client: mgr.GetClient(),
+		Scheme: scheme,
+		Store:  egress.NewStore(pool),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up EgressRoute reconciler")
 		return 1
 	}
 
