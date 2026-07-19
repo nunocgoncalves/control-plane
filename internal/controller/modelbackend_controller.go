@@ -222,18 +222,18 @@ func (r *ModelBackendReconciler) ensureService(ctx context.Context, mb *v1alpha1
 	return err
 }
 
-// deploymentHealthy reports the Deployment's Available condition.
+// deploymentHealthy reports whether the vLLM backend is actually serving. It
+// gates on ready replicas, NOT the Deployment's Available condition: with
+// HOR-378's maxUnavailable=1 on a 1-replica Deployment, minAvailable is 0, so
+// the Available condition is True even with zero ready pods (e.g. the pod is
+// still pulling or FailedCreate). ReadyReplicas counts pods that passed the
+// /health readinessProbe, so healthy is true only once vLLM is serving.
 func (r *ModelBackendReconciler) deploymentHealthy(ctx context.Context, mb *v1alpha1.ModelBackend) bool {
 	dep := &appsv1.Deployment{}
 	if err := r.Get(ctx, client.ObjectKey{Name: mb.Name, Namespace: mb.Namespace}, dep); err != nil {
 		return false
 	}
-	for _, c := range dep.Status.Conditions {
-		if c.Type == appsv1.DeploymentAvailable {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+	return dep.Status.ReadyReplicas >= 1
 }
 
 // buildDeploymentSpec renders the vLLM pod spec with the GPU contract from forge
