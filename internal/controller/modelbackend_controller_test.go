@@ -20,6 +20,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
@@ -143,8 +144,9 @@ func TestModelBackendReconcile(t *testing.T) {
 		assert.Equal(t, "vllm-qwen", svc.Spec.Selector["platform.iterabase.com/modelbackend"])
 
 		// The backend is materialized in catalog.backends. healthy stays false:
-		// envtest has no kubelet, so the Deployment never becomes Available.
-		// (Real serving is validated on the GPU VM + forge GPU E2E, HOR-324.)
+		// envtest has no kubelet, so no pod ever becomes Ready (deploymentHealthy
+		// gates on ReadyReplicas, not the Available condition). Real serving is
+		// validated on the GPU VM + forge GPU E2E (HOR-324).
 		b, err := store.GetBackendByKey(ctx, "default/vllm-qwen")
 		require.NoError(t, err)
 		assert.Equal(t, "vLLM", b.Kind)
@@ -351,4 +353,60 @@ func TestValidateExtraArgs(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// TestDeploymentHealthy guards the HOR-378 regression: with maxUnavailable=1 on
+// a 1-replica Deployment, the Deployment's Available condition is True even with
+// zero ready pods (minAvailable = replicas - maxUnavailable = 0). healthy must
+// gate on ReadyReplicas (a pod passed /health), not the Available condition.
+func TestDeploymentHealthy(t *testing.T) {
+	mb := &v1alpha1.ModelBackend{ObjectMeta: metav1.ObjectMeta{Name: "mb", Namespace: "ns"}}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	cases := []struct {
+		name string
+		dep  *appsv1.Deployment
+		want bool
+	}{
+		{
+			name: "Available=True but 0 ready (HOR-378 maxUnavailable=1, pod pulling/FailedCreate) -> false",
+			dep: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "mb", Namespace: "ns"},
+				Status: appsv1.DeploymentStatus{ReadyReplicas: 0, AvailableReplicas: 0, Conditions: []appsv1.DeploymentCondition{
+					{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue, Reason: "MinimumReplicasAvailable"},
+					{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "NewReplicaSetCreated"},
+					{Type: appsv1.DeploymentReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate"},
+				}}},
+			want: false,
+		},
+		{
+			name: "1 ready pod -> true",
+			dep: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "mb", Namespace: "ns"},
+				Status: appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1}},
+			want: true,
+		},
+		{
+			name: "Available=False, 0 ready -> false",
+			dep: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "mb", Namespace: "ns"},
+				Status: appsv1.DeploymentStatus{ReadyReplicas: 0, Conditions: []appsv1.DeploymentCondition{
+					{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable"},
+				}}},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.dep).Build()
+			r := &ModelBackendReconciler{Client: cl, Scheme: scheme}
+			assert.Equal(t, tc.want, r.deploymentHealthy(context.Background(), mb))
+		})
+	}
+
+	t.Run("deployment missing -> false", func(t *testing.T) {
+		cl := fake.NewClientBuilder().WithScheme(scheme).Build() // no Deployment
+		r := &ModelBackendReconciler{Client: cl, Scheme: scheme}
+		assert.False(t, r.deploymentHealthy(context.Background(), mb))
+	})
 }
