@@ -174,6 +174,18 @@ harness-lint: ## Typecheck the harness (tsc --noEmit).
 harness-image: ## Build the harness container image.
 	$(CONTAINER_TOOL) build -t $(HARNESS_IMG) -f harness/Dockerfile harness/
 
+##@ Egress proxy (Go per-sandbox proxy — HOR-244)
+
+PROXY_IMG ?= control-plane-proxy:latest
+
+.PHONY: build-proxy
+build-proxy: ## Build the egress proxy binary (cmd/proxy, HOR-244).
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/proxy ./cmd/proxy
+
+.PHONY: proxy-image
+proxy-image: ## Build the egress proxy container image (HOR-244).
+	$(CONTAINER_TOOL) build -t $(PROXY_IMG) -f Dockerfile.proxy .
+
 ##@ Tooling
 
 .PHONY: install-hooks
