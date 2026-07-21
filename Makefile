@@ -132,9 +132,10 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster in ~/.kube/c
 undeploy: kustomize ## Undeploy controller from the K8s cluster in ~/.kube/config.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
-##@ Harness (Node pi harness — HOR-351)
+##@ Harness (Node pi harness — HOR-351 / HOR-381 warm-worker refactor)
 
 HARNESS_IMG ?= control-plane-harness:latest
+HARNESS_ISOLATION_IMG ?= control-plane-harness-isolation:latest
 BUF ?= buf
 
 .PHONY: proto-tools
@@ -173,6 +174,11 @@ harness-lint: ## Typecheck the harness (tsc --noEmit).
 .PHONY: harness-image
 harness-image: ## Build the harness container image.
 	$(CONTAINER_TOOL) build -t $(HARNESS_IMG) -f harness/Dockerfile harness/
+
+.PHONY: harness-isolation-test
+harness-isolation-test: ## Run the Linux sandbox isolation tests (setpriv launcher + per-session UID isolation) in a container. HOR-381 gate (bullets 1-5).
+	$(CONTAINER_TOOL) build -t $(HARNESS_ISOLATION_IMG) -f harness/isolation/Dockerfile harness/
+	$(CONTAINER_TOOL) run --rm $(HARNESS_ISOLATION_IMG)
 
 ##@ Egress proxy (Go per-sandbox proxy — HOR-244)
 
