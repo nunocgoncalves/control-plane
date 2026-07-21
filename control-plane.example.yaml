@@ -1,13 +1,19 @@
 # control-plane example configuration. Copy to control-plane.yaml and edit.
 # Environment variables (DATABASE_URL, API_ADDR, LOG_LEVEL, LOG_FORMAT,
-# JWT_SIGNING_KEY_PATH, JWT_KEY_ID, IDENTITY_MODE) override these values and are
-# the preferred way to inject secrets in Kubernetes.
+# JWT_SIGNING_KEY_PATH, JWT_KEY_ID, IDENTITY_MODE, TLS_CERT_FILE, TLS_KEY_FILE)
+# override these values and are the preferred way to inject secrets in
+# Kubernetes.
 #
 # The manager binary reads only DATABASE_URL from the environment; it does not
 # load this file.
 
 api:
   addr: ":8080"
+  # TLS is opt-in. Set both to serve HTTPS (cert-manager leaf cert from the
+  # internal CA, mounted by the control-plane chart when tls.enabled=true);
+  # leave both unset for plain HTTP (kind/E2E/dev). Both or neither — not one.
+  tls_cert_file: "${TLS_CERT_FILE}"   # e.g. /etc/control-plane/tls/tls.crt
+  tls_key_file: "${TLS_KEY_FILE}"     # e.g. /etc/control-plane/tls/tls.key
 
 database:
   url: "${DATABASE_URL}"      # required; e.g. postgres://cp:cp@postgres:5432/controlplane?sslmode=disable

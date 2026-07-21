@@ -25,8 +25,14 @@ type Config struct {
 }
 
 // APIConfig configures the HTTP API server (cmd/api).
+//
+// TLS is opt-in: when both TLSCertFile + TLSKeyFile are set the api serves
+// HTTPS (cert-manager leaf, internal issuer); when both are unset it serves
+// plain HTTP (kind/E2E/dev). Exactly one set is rejected by ValidateServe.
 type APIConfig struct {
-	Addr string `yaml:"addr"`
+	Addr        string `yaml:"addr"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 // DatabaseConfig configures the Postgres connection pool.
@@ -120,6 +126,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("API_ADDR"); v != "" {
 		cfg.API.Addr = v
 	}
+	if v := os.Getenv("TLS_CERT_FILE"); v != "" {
+		cfg.API.TLSCertFile = v
+	}
+	if v := os.Getenv("TLS_KEY_FILE"); v != "" {
+		cfg.API.TLSKeyFile = v
+	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Logging.Level = v
 	}
@@ -170,6 +182,11 @@ func ValidateServe(cfg *Config) error {
 	}
 	if cfg.JWT.SigningKeyPath == "" {
 		return fmt.Errorf("jwt.signing_key_path (or JWT_SIGNING_KEY_PATH) is required for serve")
+	}
+	// TLS is opt-in: HTTPS when both cert+key are set, plain HTTP when neither.
+	// Exactly one set is a misconfig — fail loud rather than guess.
+	if (cfg.API.TLSCertFile == "") != (cfg.API.TLSKeyFile == "") {
+		return fmt.Errorf("api.tls_cert_file and api.tls_key_file must both be set (HTTPS) or both unset (HTTP)")
 	}
 	return nil
 }
