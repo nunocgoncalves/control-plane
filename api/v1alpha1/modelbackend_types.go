@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -61,6 +62,16 @@ type ModelBackendSpec struct {
 	// so this is typically empty.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// devShmSize is the size limit of the memory-backed /dev/shm tmpfs the
+	// reconciler mounts for vLLM (and, once implemented, SGLang) workloads.
+	// Multimodal models that opt into --mm-processor-cache-type shm place the
+	// processor cache in /dev/shm; without a sized mount the container inherits
+	// the runtime default ~64 MiB tmpfs and crashes (sem_open ENOSPC) once the
+	// cache exceeds it (HOR-382). Defaults to 2Gi when unset; the sizeLimit
+	// counts against the pod's memory. Ignored for external.
+	// +optional
+	DevShmSize *resource.Quantity `json:"devShmSize,omitempty"`
 
 	// healthProbe overrides the readiness/liveness probe target. Defaults to
 	// GET /health on the serving port.

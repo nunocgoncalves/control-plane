@@ -136,6 +136,34 @@ func TestModelBackendReconcile(t *testing.T) {
 		require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
 		assert.Equal(t, int64(defaultTerminationGracePeriodSeconds), *dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
 
+		// Sized /dev/shm (HOR-382): a memory-backed emptyDir at /dev/shm so
+		// --mm-processor-cache-type shm doesn't exhaust the runtime default
+		// ~64 MiB tmpfs (sem_open ENOSPC, CrashLoopBackOff before binding :8000).
+		// Default sizeLimit is 2Gi.
+		var dshmVol *corev1.Volume
+		for i := range dep.Spec.Template.Spec.Volumes {
+			if dep.Spec.Template.Spec.Volumes[i].Name == devShmVolumeName {
+				dshmVol = &dep.Spec.Template.Spec.Volumes[i]
+				break
+			}
+		}
+		require.NotNil(t, dshmVol, "vLLM pod must mount a dshm volume")
+		require.NotNil(t, dshmVol.EmptyDir, "dshm must be an emptyDir")
+		assert.Equal(t, corev1.StorageMediumMemory, dshmVol.EmptyDir.Medium,
+			"dshm must be memory-backed (tmpfs), not node disk")
+		require.NotNil(t, dshmVol.EmptyDir.SizeLimit)
+		assert.Equal(t, "2Gi", dshmVol.EmptyDir.SizeLimit.String(),
+			"default /dev/shm sizeLimit must be 2Gi")
+		var dshmMount *corev1.VolumeMount
+		for i := range c.VolumeMounts {
+			if c.VolumeMounts[i].Name == devShmVolumeName {
+				dshmMount = &c.VolumeMounts[i]
+				break
+			}
+		}
+		require.NotNil(t, dshmMount, "vLLM container must mount dshm")
+		assert.Equal(t, devShmMountPath, dshmMount.MountPath)
+
 		// The Service exposes the serving port and selects the workload.
 		var svc corev1.Service
 		require.NoError(t, adminClient.Get(ctx, nn, &svc))
@@ -408,5 +436,75 @@ func TestDeploymentHealthy(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(scheme).Build() // no Deployment
 		r := &ModelBackendReconciler{Client: cl, Scheme: scheme}
 		assert.False(t, r.deploymentHealthy(context.Background(), mb))
+	})
+}
+
+// TestBuildDeploymentSpecDevShm guards HOR-382: the vLLM pod must mount a
+// memory-backed /dev/shm so --mm-processor-cache-type shm doesn't exhaust the
+// runtime default ~64 MiB tmpfs (sem_open ENOSPC, CrashLoopBackOff). The default
+// sizeLimit is 2Gi; spec.devShmSize overrides it. Pure (no envtest/Postgres).
+func TestBuildDeploymentSpecDevShm(t *testing.T) {
+	port := int32(defaultServingPort)
+	quantityPtr := func(s string) *resource.Quantity {
+		q := resource.MustParse(s)
+		return &q
+	}
+	findVol := func(spec appsv1.DeploymentSpec, name string) *corev1.Volume {
+		for i := range spec.Template.Spec.Volumes {
+			if spec.Template.Spec.Volumes[i].Name == name {
+				return &spec.Template.Spec.Volumes[i]
+			}
+		}
+		return nil
+	}
+	findMount := func(c corev1.Container, name string) *corev1.VolumeMount {
+		for i := range c.VolumeMounts {
+			if c.VolumeMounts[i].Name == name {
+				return &c.VolumeMounts[i]
+			}
+		}
+		return nil
+	}
+
+	t.Run("defaults to a 2Gi memory-backed /dev/shm", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-shm", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B"},
+		}
+		spec := buildDeploymentSpec(mb, port)
+
+		// The hf-cache hostPath volume must be preserved alongside the new dshm.
+		assert.NotNil(t, findVol(spec, "hf-cache"), "hf-cache volume must be preserved")
+
+		vol := findVol(spec, devShmVolumeName)
+		require.NotNil(t, vol, "vLLM pod must mount a dshm volume")
+		require.NotNil(t, vol.EmptyDir, "dshm must be an emptyDir")
+		assert.Equal(t, corev1.StorageMediumMemory, vol.EmptyDir.Medium,
+			"dshm must be memory-backed (tmpfs), not node disk")
+		require.NotNil(t, vol.EmptyDir.SizeLimit)
+		assert.Equal(t, "2Gi", vol.EmptyDir.SizeLimit.String(),
+			"default /dev/shm sizeLimit must be 2Gi")
+
+		mount := findMount(spec.Template.Spec.Containers[0], devShmVolumeName)
+		require.NotNil(t, mount, "server container must mount dshm")
+		assert.Equal(t, devShmMountPath, mount.MountPath)
+	})
+
+	t.Run("spec.devShmSize overrides the 2Gi default", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-shm-override", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:       "vLLM",
+				Model:      "Qwen/Qwen3-27B",
+				DevShmSize: quantityPtr("8Gi"),
+			},
+		}
+		spec := buildDeploymentSpec(mb, port)
+
+		vol := findVol(spec, devShmVolumeName)
+		require.NotNil(t, vol)
+		require.NotNil(t, vol.EmptyDir.SizeLimit)
+		assert.Equal(t, "8Gi", vol.EmptyDir.SizeLimit.String(),
+			"spec.devShmSize must override the 2Gi default")
 	})
 }

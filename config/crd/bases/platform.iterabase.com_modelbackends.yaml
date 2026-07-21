@@ -51,6 +51,20 @@ spec:
               offering that references it. The reconciler materializes this into the
               Postgres catalog.backends table (Git -> DB bridge).
             properties:
+              devShmSize:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  devShmSize is the size limit of the memory-backed /dev/shm tmpfs the
+                  reconciler mounts for vLLM (and, once implemented, SGLang) workloads.
+                  Multimodal models that opt into --mm-processor-cache-type shm place the
+                  processor cache in /dev/shm; without a sized mount the container inherits
+                  the runtime default ~64 MiB tmpfs and crashes (sem_open ENOSPC) once the
+                  cache exceeds it (HOR-382). Defaults to 2Gi when unset; the sizeLimit
+                  counts against the pod's memory. Ignored for external.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               external:
                 description: |-
                   external configures an external (non-deployed) backend. Required when

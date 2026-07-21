@@ -28,6 +28,8 @@ const (
 	defaultServingPort    = 8000
 	defaultHealthPath     = "/health"
 	defaultModelCachePath = "/data/hf-cache"
+	devShmVolumeName      = "dshm"
+	devShmMountPath       = "/dev/shm"
 	gpuResourceName       = corev1.ResourceName("nvidia.com/gpu")
 	gpuNodeLabel          = "nvidia.com/gpu.present"
 	nvidiaRuntimeClass    = "nvidia"
@@ -36,6 +38,15 @@ const (
 	// SIGTERM before releasing the GPU during a GPU-safe rollout (HOR-378).
 	defaultTerminationGracePeriodSeconds = 180
 )
+
+// defaultDevShmSize is the /dev/shm tmpfs sizeLimit mounted for vLLM pods when
+// spec.devShmSize is unset. Multimodal models that opt into
+// --mm-processor-cache-type shm place the processor cache in /dev/shm; without
+// a sized mount the container inherits the runtime default ~64 MiB tmpfs and
+// crashes (sem_open ENOSPC) once the cache exceeds it (HOR-382). The sizeLimit
+// counts against the pod's memory; GPU nodes have ample RAM, so 2Gi is a cheap
+// default that covers most multimodal processor caches.
+var defaultDevShmSize = resource.MustParse("2Gi")
 
 // ModelBackendReconciler deploys internal serving workloads (vLLM) or records
 // external providers, and materializes ModelBackend CRs into the Postgres
@@ -297,6 +308,16 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 	maxUnavailable := intstr.FromInt(1)
 	terminationGracePeriodSeconds := int64(defaultTerminationGracePeriodSeconds)
 
+	// Sized /dev/shm (HOR-382): vLLM with --mm-processor-cache-type shm places
+	// the multimodal processor cache in /dev/shm and exhausts the runtime
+	// default ~64 MiB tmpfs (sem_open ENOSPC, CrashLoopBackOff before binding
+	// :8000). Mount a memory-backed emptyDir; spec.devShmSize overrides the 2Gi
+	// default. The sizeLimit counts against the pod's memory.
+	shmSize := defaultDevShmSize
+	if mb.Spec.DevShmSize != nil {
+		shmSize = mb.Spec.DevShmSize.DeepCopy()
+	}
+
 	return appsv1.DeploymentSpec{
 		Replicas: &replicas,
 		Selector: &metav1.LabelSelector{MatchLabels: backendLabels(mb)},
@@ -314,25 +335,36 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 				TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
 				NodeSelector:                  nodeSelector,
 				Tolerations:                   mb.Spec.Tolerations,
-				Volumes: []corev1.Volume{{
-					Name: "hf-cache",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
-							Path: defaultModelCachePath,
-							Type: &hostPathType,
+				Volumes: []corev1.Volume{
+					{
+						Name: "hf-cache",
+						VolumeSource: corev1.VolumeSource{
+							HostPath: &corev1.HostPathVolumeSource{
+								Path: defaultModelCachePath,
+								Type: &hostPathType,
+							},
 						},
 					},
-				}},
+					{
+						Name: devShmVolumeName,
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{
+								Medium:    corev1.StorageMediumMemory,
+								SizeLimit: &shmSize,
+							},
+						},
+					},
+				},
 				Containers: []corev1.Container{{
 					Name:  "server",
 					Image: image,
 					Args:  args,
 					Env:   []corev1.EnvVar{{Name: "HF_HOME", Value: defaultModelCachePath}},
 					Ports: []corev1.ContainerPort{{ContainerPort: port, Name: "http"}},
-					VolumeMounts: []corev1.VolumeMount{{
-						Name:      "hf-cache",
-						MountPath: defaultModelCachePath,
-					}},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "hf-cache", MountPath: defaultModelCachePath},
+						{Name: devShmVolumeName, MountPath: devShmMountPath},
+					},
 					Resources:      resources,
 					StartupProbe:   startupProbe,
 					ReadinessProbe: probe,
