@@ -399,6 +399,11 @@ func (in *ModelBackendSpec) DeepCopyInto(out *ModelBackendSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.DevShmSize != nil {
+		in, out := &in.DevShmSize, &out.DevShmSize
+		x := (*in).DeepCopy()
+		*out = &x
+	}
 	if in.HealthProbe != nil {
 		in, out := &in.HealthProbe, &out.HealthProbe
 		*out = new(HealthProbeSpec)
