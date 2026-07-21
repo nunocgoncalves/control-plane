@@ -121,6 +121,16 @@ class AsyncQueue<T> implements AsyncIterable<T> {
         if (this.closed) return Promise.resolve({ value: undefined as never, done: true });
         return new Promise((resolve) => this.waiters.push(resolve));
       },
+      // The bidi client calls throw()/return() to cancel the input stream on
+      // call end/cancel; honor them by closing the queue (idempotent).
+      throw: async (): Promise<IteratorResult<T>> => {
+        this.close();
+        return { value: undefined as never, done: true };
+      },
+      return: async (): Promise<IteratorResult<T>> => {
+        this.close();
+        return { value: undefined as never, done: true };
+      },
     };
   }
 }
