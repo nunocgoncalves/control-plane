@@ -10,139 +10,314 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file iterabase/harness/v1/harness.proto.
  */
 export const file_iterabase_harness_v1_harness: GenFile = /*@__PURE__*/
-  fileDesc("CiJpdGVyYWJhc2UvaGFybmVzcy92MS9oYXJuZXNzLnByb3RvEhRpdGVyYWJhc2UuaGFybmVzcy52MSJNCg1Qcm9tcHRSZXF1ZXN0Eg8KB21lc3NhZ2UYASABKAkSKwoGaW1hZ2VzGAIgAygLMhsuaXRlcmFiYXNlLmhhcm5lc3MudjEuSW1hZ2UiKAoFSW1hZ2USDAoEZGF0YRgBIAEoDBIRCgltaW1lX3R5cGUYAiABKAkiDgoMQWJvcnRSZXF1ZXN0Ig8KDUFib3J0UmVzcG9uc2UiqAIKBUV2ZW50EjkKDHR1cm5fc3RhcnRlZBgBIAEoCzIhLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlR1cm5TdGFydGVkSAASQwoRYXNzaXN0YW50X21lc3NhZ2UYAiABKAsyJi5pdGVyYWJhc2UuaGFybmVzcy52MS5Bc3Npc3RhbnRNZXNzYWdlSAASNwoLdG9vbF9yZXN1bHQYAyABKAsyIC5pdGVyYWJhc2UuaGFybmVzcy52MS5Ub29sUmVzdWx0SAASLAoFZXJyb3IYBCABKAsyGy5pdGVyYWJhc2UuaGFybmVzcy52MS5FcnJvckgAEjAKB3NldHRsZWQYBSABKAsyHS5pdGVyYWJhc2UuaGFybmVzcy52MS5TZXR0bGVkSABCBgoEa2luZCI0CgtUdXJuU3RhcnRlZBINCgVtb2RlbBgBIAEoCRIWCg50aGlua2luZ19sZXZlbBgCIAEoCSKrAQoQQXNzaXN0YW50TWVzc2FnZRIMCgR0ZXh0GAEgASgJEjIKCnRvb2xfY2FsbHMYAiADKAsyHi5pdGVyYWJhc2UuaGFybmVzcy52MS5Ub29sQ2FsbBIqCgV1c2FnZRgDIAEoCzIbLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlVzYWdlEhMKC3N0b3BfcmVhc29uGAQgASgJEhQKDHRpbWVzdGFtcF9tcxgFIAEoAyI8CghUb29sQ2FsbBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDmFyZ3VtZW50c19qc29uGAMgASgJIooBCgpUb29sUmVzdWx0EhQKDHRvb2xfY2FsbF9pZBgBIAEoCRIRCgl0b29sX25hbWUYAiABKAkSFgoOYXJndW1lbnRzX2pzb24YAyABKAkSEwoLcmVzdWx0X3RleHQYBCABKAkSEAoIaXNfZXJyb3IYBSABKAgSFAoMdGltZXN0YW1wX21zGAYgASgDIn0KBVVzYWdlEhQKDGlucHV0X3Rva2VucxgBIAEoAxIVCg1vdXRwdXRfdG9rZW5zGAIgASgDEhkKEWNhY2hlX3JlYWRfdG9rZW5zGAMgASgDEhoKEmNhY2hlX3dyaXRlX3Rva2VucxgEIAEoAxIQCghjb3N0X3VzZBgFIAEoASIoCgVFcnJvchIOCgZzb3VyY2UYASABKAkSDwoHbWVzc2FnZRgCIAEoCSK1AQoHU2V0dGxlZBI0CgZyZWFzb24YASABKA4yJC5pdGVyYWJhc2UuaGFybmVzcy52MS5TZXR0bGVkLlJlYXNvbhIVCg1tZXNzYWdlX2NvdW50GAIgASgFIl0KBlJlYXNvbhIWChJSRUFTT05fVU5TUEVDSUZJRUQQABIUChBSRUFTT05fQ09NUExFVEVEEAESEgoOUkVBU09OX0FCT1JURUQQAhIRCg1SRUFTT05fRkFJTEVEEAMyqQEKB0hhcm5lc3MSTAoGUHJvbXB0EiMuaXRlcmFiYXNlLmhhcm5lc3MudjEuUHJvbXB0UmVxdWVzdBobLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkV2ZW50MAESUAoFQWJvcnQSIi5pdGVyYWJhc2UuaGFybmVzcy52MS5BYm9ydFJlcXVlc3QaIy5pdGVyYWJhc2UuaGFybmVzcy52MS5BYm9ydFJlc3BvbnNlQvYBChhjb20uaXRlcmFiYXNlLmhhcm5lc3MudjFCDEhhcm5lc3NQcm90b1ABWlpnaXRodWIuY29tL251bm9jZ29uY2FsdmVzL2NvbnRyb2wtcGxhbmUvaW50ZXJuYWwvaGFybmVzc3JwYy9pdGVyYWJhc2UvaGFybmVzcy92MTtoYXJuZXNzdjGiAgNJSFiqAhRJdGVyYWJhc2UuSGFybmVzcy5WMcoCFEl0ZXJhYmFzZVxIYXJuZXNzXFYx4gIgSXRlcmFiYXNlXEhhcm5lc3NcVjFcR1BCTWV0YWRhdGHqAhZJdGVyYWJhc2U6Okhhcm5lc3M6OlYxYgZwcm90bzM");
+  fileDesc("CiJpdGVyYWJhc2UvaGFybmVzcy92MS9oYXJuZXNzLnByb3RvEhRpdGVyYWJhc2UuaGFybmVzcy52MSKZAgoNV29ya2VyTWVzc2FnZRIsCgVoZWxsbxgBIAEoCzIbLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkhlbGxvSAASLAoFcmVhZHkYAiABKAsyGy5pdGVyYWJhc2UuaGFybmVzcy52MS5SZWFkeUgAEjQKCWhlYXJ0YmVhdBgDIAEoCzIfLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkhlYXJ0YmVhdEgAEjUKCnR1cm5fZXZlbnQYBCABKAsyHy5pdGVyYWJhc2UuaGFybmVzcy52MS5UdXJuRXZlbnRIABI3Cgt0b2tlbl9kZWx0YRgFIAEoCzIgLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlRva2VuRGVsdGFIAEIGCgRraW5kInIKBUhlbGxvEhEKCXdvcmtlcl9pZBgBIAEoCRIPCgdwb29sX2lkGAIgASgJEhUKDWJ1aWxkX3ZlcnNpb24YAyABKAkSGAoQcHJvdG9jb2xfdmVyc2lvbhgEIAEoCRIUCgxjYXBhYmlsaXRpZXMYBSADKAkiBwoFUmVhZHkirwEKCUhlYXJ0YmVhdBIwCgVzdGF0ZRgBIAEoDjIhLml0ZXJhYmFzZS5oYXJuZXNzLnYxLldvcmtlclN0YXRlEg8KB3R1cm5faWQYAiABKAkSLwoIcGlfcGhhc2UYAyABKA4yHS5pdGVyYWJhc2UuaGFybmVzcy52MS5QaVBoYXNlEhQKDHRvb2xfY2FsbF9pZBgEIAEoCRIYChBoaWdoZXN0X3NlcXVlbmNlGAUgASgEIv8GCglUdXJuRXZlbnQSDwoHdHVybl9pZBgBIAEoCRIQCghzZXF1ZW5jZRgCIAEoBBIUCgx0aW1lc3RhbXBfbXMYAyABKAMSQwoRZXhlY3V0aW9uX3N0YXJ0ZWQYCiABKAsyJi5pdGVyYWJhc2UuaGFybmVzcy52MS5FeGVjdXRpb25TdGFydGVkSAASRAoSbW9kZWxfY2FsbF9zdGFydGVkGAsgASgLMiYuaXRlcmFiYXNlLmhhcm5lc3MudjEuTW9kZWxDYWxsU3RhcnRlZEgAEkMKEWFzc2lzdGFudF9tZXNzYWdlGAwgASgLMiYuaXRlcmFiYXNlLmhhcm5lc3MudjEuQXNzaXN0YW50TWVzc2FnZUgAEkIKEW1vZGVsX2NhbGxfZmFpbGVkGA0gASgLMiUuaXRlcmFiYXNlLmhhcm5lc3MudjEuTW9kZWxDYWxsRmFpbGVkSAASSgoVbW9kZWxfcmV0cnlfc2NoZWR1bGVkGA4gASgLMikuaXRlcmFiYXNlLmhhcm5lc3MudjEuTW9kZWxSZXRyeVNjaGVkdWxlZEgAEkgKFG1vZGVsX3JldHJ5X2ZpbmlzaGVkGA8gASgLMiguaXRlcmFiYXNlLmhhcm5lc3MudjEuTW9kZWxSZXRyeUZpbmlzaGVkSAASQgoRdG9vbF9jYWxsX3N0YXJ0ZWQYECABKAsyJS5pdGVyYWJhc2UuaGFybmVzcy52MS5Ub29sQ2FsbFN0YXJ0ZWRIABI3Cgt0b29sX3Jlc3VsdBgRIAEoCzIgLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlRvb2xSZXN1bHRIABJFChJjb21wYWN0aW9uX3N0YXJ0ZWQYEiABKAsyJy5pdGVyYWJhc2UuaGFybmVzcy52MS5Db21wYWN0aW9uU3RhcnRlZEgAEkcKE2NvbXBhY3Rpb25fZmluaXNoZWQYEyABKAsyKC5pdGVyYWJhc2UuaGFybmVzcy52MS5Db21wYWN0aW9uRmluaXNoZWRIABI7Cg1oYXJuZXNzX2Vycm9yGBQgASgLMiIuaXRlcmFiYXNlLmhhcm5lc3MudjEuSGFybmVzc0Vycm9ySAASPQoOd29ya2VyX291dGNvbWUYFSABKAsyIy5pdGVyYWJhc2UuaGFybmVzcy52MS5Xb3JrZXJPdXRjb21lSABCBgoEa2luZCJZChBFeGVjdXRpb25TdGFydGVkEhIKCnNlc3Npb25faWQYASABKAkSMQoHc2FuZGJveBgCIAEoCzIgLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlNhbmRib3hSZWYiOQoQTW9kZWxDYWxsU3RhcnRlZBINCgVtb2RlbBgBIAEoCRIWCg50aGlua2luZ19sZXZlbBgCIAEoCSKrAQoQQXNzaXN0YW50TWVzc2FnZRIMCgR0ZXh0GAEgASgJEjIKCnRvb2xfY2FsbHMYAiADKAsyHi5pdGVyYWJhc2UuaGFybmVzcy52MS5Ub29sQ2FsbBIqCgV1c2FnZRgDIAEoCzIbLml0ZXJhYmFzZS5oYXJuZXNzLnYxLlVzYWdlEhMKC3N0b3BfcmVhc29uGAQgASgJEhQKDHRpbWVzdGFtcF9tcxgFIAEoAyI8CghUb29sQ2FsbBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDmFyZ3VtZW50c19qc29uGAMgASgJIlIKD1Rvb2xDYWxsU3RhcnRlZBIUCgx0b29sX2NhbGxfaWQYASABKAkSEQoJdG9vbF9uYW1lGAIgASgJEhYKDmFyZ3VtZW50c19qc29uGAMgASgJIooBCgpUb29sUmVzdWx0EhQKDHRvb2xfY2FsbF9pZBgBIAEoCRIRCgl0b29sX25hbWUYAiABKAkSFgoOYXJndW1lbnRzX2pzb24YAyABKAkSEwoLcmVzdWx0X3RleHQYBCABKAkSEAoIaXNfZXJyb3IYBSABKAgSFAoMdGltZXN0YW1wX21zGAYgASgDIn0KBVVzYWdlEhQKDGlucHV0X3Rva2VucxgBIAEoAxIVCg1vdXRwdXRfdG9rZW5zGAIgASgDEhkKEWNhY2hlX3JlYWRfdG9rZW5zGAMgASgDEhoKEmNhY2hlX3dyaXRlX3Rva2VucxgEIAEoAxIQCghjb3N0X3VzZBgFIAEoASJDCg9Nb2RlbENhbGxGYWlsZWQSMAoFZXJyb3IYASABKAsyIS5pdGVyYWJhc2UuaGFybmVzcy52MS5FcnJvckRldGFpbCJlChNNb2RlbFJldHJ5U2NoZWR1bGVkEg8KB2F0dGVtcHQYASABKA0SFAoMbWF4X2F0dGVtcHRzGAIgASgNEhAKCGRlbGF5X21zGAMgASgDEhUKDWVycm9yX21lc3NhZ2UYBCABKAkiSwoSTW9kZWxSZXRyeUZpbmlzaGVkEg8KB3N1Y2Nlc3MYASABKAgSDwoHYXR0ZW1wdBgCIAEoDRITCgtmaW5hbF9lcnJvchgDIAEoCSIjChFDb21wYWN0aW9uU3RhcnRlZBIOCgZyZWFzb24YASABKAkiYAoSQ29tcGFjdGlvbkZpbmlzaGVkEg4KBnJlYXNvbhgBIAEoCRIPCgdhYm9ydGVkGAIgASgIEhIKCndpbGxfcmV0cnkYAyABKAgSFQoNZXJyb3JfbWVzc2FnZRgEIAEoCSJACgxIYXJuZXNzRXJyb3ISMAoFZXJyb3IYASABKAsyIS5pdGVyYWJhc2UuaGFybmVzcy52MS5FcnJvckRldGFpbCJ8CgtFcnJvckRldGFpbBIMCgRjb2RlGAEgASgJEg8KB21lc3NhZ2UYAiABKAkSOAoMcmV0cnlhYmlsaXR5GAMgASgOMiIuaXRlcmFiYXNlLmhhcm5lc3MudjEuUmV0cnlhYmlsaXR5EhQKDGRldGFpbHNfanNvbhgEIAEoCSJQCg1Xb3JrZXJPdXRjb21lEi4KB291dGNvbWUYASABKA4yHS5pdGVyYWJhc2UuaGFybmVzcy52MS5PdXRjb21lEg8KB21lc3NhZ2UYAiABKAkicgoKVG9rZW5EZWx0YRIPCgd0dXJuX2lkGAEgASgJEhUKDWNvbnRlbnRfaW5kZXgYAiABKAUSLQoEdHlwZRgDIAEoDjIfLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkRlbHRhVHlwZRINCgVkZWx0YRgEIAEoCSLvAQoOQ29udHJvbE1lc3NhZ2USMAoHd2VsY29tZRgBIAEoCzIdLml0ZXJhYmFzZS5oYXJuZXNzLnYxLldlbGNvbWVIABI3Cgthc3NpZ25fdHVybhgCIAEoCzIgLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkFzc2lnblR1cm5IABI1CgphYm9ydF90dXJuGAMgASgLMh8uaXRlcmFiYXNlLmhhcm5lc3MudjEuQWJvcnRUdXJuSAASMwoJZXZlbnRfYWNrGAQgASgLMh4uaXRlcmFiYXNlLmhhcm5lc3MudjEuRXZlbnRBY2tIAEIGCgRraW5kIngKB1dlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YAiABKAQSHQoVaGVhcnRiZWF0X2ludGVydmFsX21zGAMgASgFEhgKEGxlYXNlX3RpbWVvdXRfbXMYBCABKAUivgIKCkFzc2lnblR1cm4SDwoHdHVybl9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEjEKB3NhbmRib3gYAyABKAsyIC5pdGVyYWJhc2UuaGFybmVzcy52MS5TYW5kYm94UmVmEg8KB3BlcnNvbmEYBCABKAkSMAoFbW9kZWwYBSABKAsyIS5pdGVyYWJhc2UuaGFybmVzcy52MS5Nb2RlbENvbmZpZxI8Cg90b29sX2FsbG93X2xpc3QYBiABKAsyIy5pdGVyYWJhc2UuaGFybmVzcy52MS5Ub29sQWxsb3dMaXN0EhkKEXNjb3BlX2lkZW50aXR5X2lkGAcgASgJEg8KB21lc3NhZ2UYCCABKAkSKwoGaW1hZ2VzGAkgAygLMhsuaXRlcmFiYXNlLmhhcm5lc3MudjEuSW1hZ2UiTwoKU2FuZGJveFJlZhISCgpzYW5kYm94X2lkGAEgASgJEgsKA3VpZBgCIAEoDRILCgNnaWQYAyABKA0SEwoLd29ya2luZ19kaXIYBCABKAkicQoLTW9kZWxDb25maWcSCgoCaWQYASABKAkSCwoDYXBpGAIgASgJEhYKDmNvbnRleHRfd2luZG93GAMgASgFEhkKEW1heF9vdXRwdXRfdG9rZW5zGAQgASgFEhYKDnRoaW5raW5nX2xldmVsGAUgASgJIisKDVRvb2xBbGxvd0xpc3QSCwoDYWxsGAEgASgIEg0KBXRvb2xzGAIgAygJIigKBUltYWdlEgwKBGRhdGEYASABKAwSEQoJbWltZV90eXBlGAIgASgJImAKCUFib3J0VHVybhIPCgd0dXJuX2lkGAEgASgJEjEKBnJlYXNvbhgCIAEoDjIhLml0ZXJhYmFzZS5oYXJuZXNzLnYxLkFib3J0UmVhc29uEg8KB21lc3NhZ2UYAyABKAkiNQoIRXZlbnRBY2sSDwoHdHVybl9pZBgBIAEoCRIYChB0aHJvdWdoX3NlcXVlbmNlGAIgASgEKsgBCgtXb3JrZXJTdGF0ZRIcChhXT1JLRVJfU1RBVEVfVU5TUEVDSUZJRUQQABIVChFXT1JLRVJfU1RBVEVfSURMRRABEhkKFVdPUktFUl9TVEFURV9TVEFSVElORxACEhgKFFdPUktFUl9TVEFURV9SVU5OSU5HEAMSGQoVV09SS0VSX1NUQVRFX0FCT1JUSU5HEAQSGQoVV09SS0VSX1NUQVRFX0NMRUFOSU5HEAUSGQoVV09SS0VSX1NUQVRFX0RSQUlOSU5HEAYqvAEKB1BpUGhhc2USGAoUUElfUEhBU0VfVU5TUEVDSUZJRUQQABIaChZQSV9QSEFTRV9TRVNTSU9OX1NFVFVQEAESFwoTUElfUEhBU0VfTU9ERUxfQ0FMTBACEhYKElBJX1BIQVNFX1RPT0xfQ0FMTBADEhcKE1BJX1BIQVNFX0NPTVBBQ1RJT04QBBIaChZQSV9QSEFTRV9SRVRSWV9CQUNLT0ZGEAUSFQoRUElfUEhBU0VfU0hVVERPV04QBiqCAQoMUmV0cnlhYmlsaXR5EhwKGFJFVFJZQUJJTElUWV9VTlNQRUNJRklFRBAAEhoKFlJFVFJZQUJJTElUWV9SRVRSWUFCTEUQARIeChpSRVRSWUFCSUxJVFlfTk9OX1JFVFJZQUJMRRACEhgKFFJFVFJZQUJJTElUWV9VTktOT1dOEAMqYgoHT3V0Y29tZRIXChNPVVRDT01FX1VOU1BFQ0lGSUVEEAASFQoRT1VUQ09NRV9DT01QTEVURUQQARITCg9PVVRDT01FX0FCT1JURUQQAhISCg5PVVRDT01FX0ZBSUxFRBADKlUKCURlbHRhVHlwZRIaChZERUxUQV9UWVBFX1VOU1BFQ0lGSUVEEAASEwoPREVMVEFfVFlQRV9URVhUEAESFwoTREVMVEFfVFlQRV9USElOS0lORxACKq4BCgtBYm9ydFJlYXNvbhIcChhBQk9SVF9SRUFTT05fVU5TUEVDSUZJRUQQABIcChhBQk9SVF9SRUFTT05fVVNFUl9DQU5DRUwQARIgChxBQk9SVF9SRUFTT05fV09SS0ZMT1dfQ0FOQ0VMEAISHgoaQUJPUlRfUkVBU09OX0xFQVNFX0VYUElSRUQQAxIhCh1BQk9SVF9SRUFTT05fV09SS0ZMT1dfVElNRU9VVBAEMmAKB0hhcm5lc3MSVQoEV29yaxIjLml0ZXJhYmFzZS5oYXJuZXNzLnYxLldvcmtlck1lc3NhZ2UaJC5pdGVyYWJhc2UuaGFybmVzcy52MS5Db250cm9sTWVzc2FnZSgBMAFC9gEKGGNvbS5pdGVyYWJhc2UuaGFybmVzcy52MUIMSGFybmVzc1Byb3RvUAFaWmdpdGh1Yi5jb20vbnVub2Nnb25jYWx2ZXMvY29udHJvbC1wbGFuZS9pbnRlcm5hbC9oYXJuZXNzcnBjL2l0ZXJhYmFzZS9oYXJuZXNzL3YxO2hhcm5lc3N2MaICA0lIWKoCFEl0ZXJhYmFzZS5IYXJuZXNzLlYxygIUSXRlcmFiYXNlXEhhcm5lc3NcVjHiAiBJdGVyYWJhc2VcSGFybmVzc1xWMVxHUEJNZXRhZGF0YeoCFkl0ZXJhYmFzZTo6SGFybmVzczo6VjFiBnByb3RvMw");
 
 /**
- * @generated from message iterabase.harness.v1.PromptRequest
+ * @generated from message iterabase.harness.v1.WorkerMessage
  */
-export type PromptRequest = Message<"iterabase.harness.v1.PromptRequest"> & {
+export type WorkerMessage = Message<"iterabase.harness.v1.WorkerMessage"> & {
   /**
-   * @generated from field: string message = 1;
-   */
-  message: string;
-
-  /**
-   * optional; the email demo is text-only
-   *
-   * @generated from field: repeated iterabase.harness.v1.Image images = 2;
-   */
-  images: Image[];
-};
-
-/**
- * Describes the message iterabase.harness.v1.PromptRequest.
- * Use `create(PromptRequestSchema)` to create a new message.
- */
-export const PromptRequestSchema: GenMessage<PromptRequest> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 0);
-
-/**
- * @generated from message iterabase.harness.v1.Image
- */
-export type Image = Message<"iterabase.harness.v1.Image"> & {
-  /**
-   * @generated from field: bytes data = 1;
-   */
-  data: Uint8Array;
-
-  /**
-   * @generated from field: string mime_type = 2;
-   */
-  mimeType: string;
-};
-
-/**
- * Describes the message iterabase.harness.v1.Image.
- * Use `create(ImageSchema)` to create a new message.
- */
-export const ImageSchema: GenMessage<Image> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 1);
-
-/**
- * @generated from message iterabase.harness.v1.AbortRequest
- */
-export type AbortRequest = Message<"iterabase.harness.v1.AbortRequest"> & {
-};
-
-/**
- * Describes the message iterabase.harness.v1.AbortRequest.
- * Use `create(AbortRequestSchema)` to create a new message.
- */
-export const AbortRequestSchema: GenMessage<AbortRequest> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 2);
-
-/**
- * @generated from message iterabase.harness.v1.AbortResponse
- */
-export type AbortResponse = Message<"iterabase.harness.v1.AbortResponse"> & {
-};
-
-/**
- * Describes the message iterabase.harness.v1.AbortResponse.
- * Use `create(AbortResponseSchema)` to create a new message.
- */
-export const AbortResponseSchema: GenMessage<AbortResponse> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 3);
-
-/**
- * Event is the streamed pi event, curated to the semantic set the
- * control-plane records. Deferred: message_update deltas (live token
- * streaming), queue_update, compaction/retry detail.
- *
- * @generated from message iterabase.harness.v1.Event
- */
-export type Event = Message<"iterabase.harness.v1.Event"> & {
-  /**
-   * @generated from oneof iterabase.harness.v1.Event.kind
+   * @generated from oneof iterabase.harness.v1.WorkerMessage.kind
    */
   kind: {
     /**
-     * @generated from field: iterabase.harness.v1.TurnStarted turn_started = 1;
+     * @generated from field: iterabase.harness.v1.Hello hello = 1;
      */
-    value: TurnStarted;
-    case: "turnStarted";
+    value: Hello;
+    case: "hello";
   } | {
     /**
-     * @generated from field: iterabase.harness.v1.AssistantMessage assistant_message = 2;
+     * @generated from field: iterabase.harness.v1.Ready ready = 2;
+     */
+    value: Ready;
+    case: "ready";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.Heartbeat heartbeat = 3;
+     */
+    value: Heartbeat;
+    case: "heartbeat";
+  } | {
+    /**
+     * durable, sequenced, cumulatively ACKed
+     *
+     * @generated from field: iterabase.harness.v1.TurnEvent turn_event = 4;
+     */
+    value: TurnEvent;
+    case: "turnEvent";
+  } | {
+    /**
+     * ephemeral, live token streaming
+     *
+     * @generated from field: iterabase.harness.v1.TokenDelta token_delta = 5;
+     */
+    value: TokenDelta;
+    case: "tokenDelta";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message iterabase.harness.v1.WorkerMessage.
+ * Use `create(WorkerMessageSchema)` to create a new message.
+ */
+export const WorkerMessageSchema: GenMessage<WorkerMessage> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 0);
+
+/**
+ * Hello is the first message on every stream. The authenticated client cert is
+ * authoritative: the Go server verifies worker_id/pool_id against a URI SAN
+ * such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-uid>. A
+ * mismatch terminates the stream with PermissionDenied.
+ *
+ * @generated from message iterabase.harness.v1.Hello
+ */
+export type Hello = Message<"iterabase.harness.v1.Hello"> & {
+  /**
+   * Kubernetes Pod UID
+   *
+   * @generated from field: string worker_id = 1;
+   */
+  workerId: string;
+
+  /**
+   * owning pool CR UID
+   *
+   * @generated from field: string pool_id = 2;
+   */
+  poolId: string;
+
+  /**
+   * @generated from field: string build_version = 3;
+   */
+  buildVersion: string;
+
+  /**
+   * @generated from field: string protocol_version = 4;
+   */
+  protocolVersion: string;
+
+  /**
+   * @generated from field: repeated string capabilities = 5;
+   */
+  capabilities: string[];
+};
+
+/**
+ * Describes the message iterabase.harness.v1.Hello.
+ * Use `create(HelloSchema)` to create a new message.
+ */
+export const HelloSchema: GenMessage<Hello> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 1);
+
+/**
+ * Ready advertises one dispatch credit. Legal only after Welcome, after any
+ * audit replay, with no live child, no pending cleanup, and no unacknowledged
+ * final outcome. A second assignment before the next Ready is a protocol
+ * violation (stream closed fail-closed).
+ *
+ * @generated from message iterabase.harness.v1.Ready
+ */
+export type Ready = Message<"iterabase.harness.v1.Ready"> & {
+};
+
+/**
+ * Describes the message iterabase.harness.v1.Ready.
+ * Use `create(ReadySchema)` to create a new message.
+ */
+export const ReadySchema: GenMessage<Ready> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 2);
+
+/**
+ * Heartbeat is ephemeral control data, not a runtime audit event. Any worker
+ * message renews the server-side lease; a heartbeat is needed only after an
+ * otherwise silent interval. While active, it must be backed by an IPC
+ * heartbeat from the child (a stale child heartbeat causes the supervisor to
+ * terminate the child — liveness, not a total-duration limit).
+ *
+ * @generated from message iterabase.harness.v1.Heartbeat
+ */
+export type Heartbeat = Message<"iterabase.harness.v1.Heartbeat"> & {
+  /**
+   * @generated from field: iterabase.harness.v1.WorkerState state = 1;
+   */
+  state: WorkerState;
+
+  /**
+   * when present
+   *
+   * @generated from field: string turn_id = 2;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.PiPhase pi_phase = 3;
+   */
+  piPhase: PiPhase;
+
+  /**
+   * active tool call, when present
+   *
+   * @generated from field: string tool_call_id = 4;
+   */
+  toolCallId: string;
+
+  /**
+   * highest worker event sequence emitted
+   *
+   * @generated from field: uint64 highest_sequence = 5;
+   */
+  highestSequence: bigint;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.Heartbeat.
+ * Use `create(HeartbeatSchema)` to create a new message.
+ */
+export const HeartbeatSchema: GenMessage<Heartbeat> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 3);
+
+/**
+ * TurnEvent is a durable worker observation. The supervisor assigns a strictly
+ * monotonic, one-based `sequence` per turn; the control-plane cumulatively
+ * ACKs through a sequence after committing the events to Postgres. (turn_id,
+ * sequence) provides deduplication on reconnect replay — audit delivery retry,
+ * never execution replay.
+ *
+ * @generated from message iterabase.harness.v1.TurnEvent
+ */
+export type TurnEvent = Message<"iterabase.harness.v1.TurnEvent"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * supervisor-assigned, monotonic per turn
+   *
+   * @generated from field: uint64 sequence = 2;
+   */
+  sequence: bigint;
+
+  /**
+   * worker observation time (CP receipt is authoritative)
+   *
+   * @generated from field: int64 timestamp_ms = 3;
+   */
+  timestampMs: bigint;
+
+  /**
+   * @generated from oneof iterabase.harness.v1.TurnEvent.kind
+   */
+  kind: {
+    /**
+     * @generated from field: iterabase.harness.v1.ExecutionStarted execution_started = 10;
+     */
+    value: ExecutionStarted;
+    case: "executionStarted";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.ModelCallStarted model_call_started = 11;
+     */
+    value: ModelCallStarted;
+    case: "modelCallStarted";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.AssistantMessage assistant_message = 12;
      */
     value: AssistantMessage;
     case: "assistantMessage";
   } | {
     /**
-     * @generated from field: iterabase.harness.v1.ToolResult tool_result = 3;
+     * @generated from field: iterabase.harness.v1.ModelCallFailed model_call_failed = 13;
+     */
+    value: ModelCallFailed;
+    case: "modelCallFailed";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.ModelRetryScheduled model_retry_scheduled = 14;
+     */
+    value: ModelRetryScheduled;
+    case: "modelRetryScheduled";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.ModelRetryFinished model_retry_finished = 15;
+     */
+    value: ModelRetryFinished;
+    case: "modelRetryFinished";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.ToolCallStarted tool_call_started = 16;
+     */
+    value: ToolCallStarted;
+    case: "toolCallStarted";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.ToolResult tool_result = 17;
      */
     value: ToolResult;
     case: "toolResult";
   } | {
     /**
-     * @generated from field: iterabase.harness.v1.Error error = 4;
+     * @generated from field: iterabase.harness.v1.CompactionStarted compaction_started = 18;
      */
-    value: Error;
-    case: "error";
+    value: CompactionStarted;
+    case: "compactionStarted";
   } | {
     /**
-     * terminal; the stream closes after this
-     *
-     * @generated from field: iterabase.harness.v1.Settled settled = 5;
+     * @generated from field: iterabase.harness.v1.CompactionFinished compaction_finished = 19;
      */
-    value: Settled;
-    case: "settled";
+    value: CompactionFinished;
+    case: "compactionFinished";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.HarnessError harness_error = 20;
+     */
+    value: HarnessError;
+    case: "harnessError";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.WorkerOutcome worker_outcome = 21;
+     */
+    value: WorkerOutcome;
+    case: "workerOutcome";
   } | { case: undefined; value?: undefined };
 };
 
 /**
- * Describes the message iterabase.harness.v1.Event.
- * Use `create(EventSchema)` to create a new message.
+ * Describes the message iterabase.harness.v1.TurnEvent.
+ * Use `create(TurnEventSchema)` to create a new message.
  */
-export const EventSchema: GenMessage<Event> = /*@__PURE__*/
+export const TurnEventSchema: GenMessage<TurnEvent> = /*@__PURE__*/
   messageDesc(file_iterabase_harness_v1_harness, 4);
 
 /**
- * @generated from message iterabase.harness.v1.TurnStarted
+ * @generated from message iterabase.harness.v1.ExecutionStarted
  */
-export type TurnStarted = Message<"iterabase.harness.v1.TurnStarted"> & {
+export type ExecutionStarted = Message<"iterabase.harness.v1.ExecutionStarted"> & {
   /**
-   * provider/modelId in use
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.SandboxRef sandbox = 2;
+   */
+  sandbox?: SandboxRef | undefined;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ExecutionStarted.
+ * Use `create(ExecutionStartedSchema)` to create a new message.
+ */
+export const ExecutionStartedSchema: GenMessage<ExecutionStarted> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 5);
+
+/**
+ * @generated from message iterabase.harness.v1.ModelCallStarted
+ */
+export type ModelCallStarted = Message<"iterabase.harness.v1.ModelCallStarted"> & {
+  /**
+   * provider/modelId
    *
    * @generated from field: string model = 1;
    */
@@ -157,15 +332,16 @@ export type TurnStarted = Message<"iterabase.harness.v1.TurnStarted"> & {
 };
 
 /**
- * Describes the message iterabase.harness.v1.TurnStarted.
- * Use `create(TurnStartedSchema)` to create a new message.
+ * Describes the message iterabase.harness.v1.ModelCallStarted.
+ * Use `create(ModelCallStartedSchema)` to create a new message.
  */
-export const TurnStartedSchema: GenMessage<TurnStarted> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 5);
+export const ModelCallStartedSchema: GenMessage<ModelCallStarted> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 6);
 
 /**
- * AssistantMessage carries the turn's assistant output: text + tool calls +
- * usage. Emitted at pi message_end (role=assistant).
+ * AssistantMessage is the durable, complete assistant output for a model turn:
+ * text + tool calls + usage. Emitted at pi message_end (role=assistant). Live
+ * token deltas stream separately as TokenDelta; this carries the full text.
  *
  * @generated from message iterabase.harness.v1.AssistantMessage
  */
@@ -203,7 +379,7 @@ export type AssistantMessage = Message<"iterabase.harness.v1.AssistantMessage"> 
  * Use `create(AssistantMessageSchema)` to create a new message.
  */
 export const AssistantMessageSchema: GenMessage<AssistantMessage> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 6);
+  messageDesc(file_iterabase_harness_v1_harness, 7);
 
 /**
  * @generated from message iterabase.harness.v1.ToolCall
@@ -232,10 +408,43 @@ export type ToolCall = Message<"iterabase.harness.v1.ToolCall"> & {
  * Use `create(ToolCallSchema)` to create a new message.
  */
 export const ToolCallSchema: GenMessage<ToolCall> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 7);
+  messageDesc(file_iterabase_harness_v1_harness, 8);
+
+/**
+ * ToolCallStarted marks the ambiguous side-effect boundary: an AssistantMessage
+ * proposing a call does not prove execution began. If the worker disappears
+ * before ToolResult, this identifies what may have started.
+ *
+ * @generated from message iterabase.harness.v1.ToolCallStarted
+ */
+export type ToolCallStarted = Message<"iterabase.harness.v1.ToolCallStarted"> & {
+  /**
+   * @generated from field: string tool_call_id = 1;
+   */
+  toolCallId: string;
+
+  /**
+   * @generated from field: string tool_name = 2;
+   */
+  toolName: string;
+
+  /**
+   * @generated from field: string arguments_json = 3;
+   */
+  argumentsJson: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ToolCallStarted.
+ * Use `create(ToolCallStartedSchema)` to create a new message.
+ */
+export const ToolCallStartedSchema: GenMessage<ToolCallStarted> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 9);
 
 /**
  * ToolResult is the granular per-call audit record (pi tool_execution_end).
+ * Tool failures are NOT terminal — they return to the model (is_error=true) and
+ * pi continues. There is no harness-level tool retry.
  *
  * @generated from message iterabase.harness.v1.ToolResult
  */
@@ -256,7 +465,7 @@ export type ToolResult = Message<"iterabase.harness.v1.ToolResult"> & {
   argumentsJson: string;
 
   /**
-   * result content (text); large blobs offloaded by control-plane
+   * result content (text); large blobs offloaded by the CP
    *
    * @generated from field: string result_text = 4;
    */
@@ -278,7 +487,7 @@ export type ToolResult = Message<"iterabase.harness.v1.ToolResult"> & {
  * Use `create(ToolResultSchema)` to create a new message.
  */
 export const ToolResultSchema: GenMessage<ToolResult> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 8);
+  messageDesc(file_iterabase_harness_v1_harness, 10);
 
 /**
  * @generated from message iterabase.harness.v1.Usage
@@ -315,125 +524,838 @@ export type Usage = Message<"iterabase.harness.v1.Usage"> & {
  * Use `create(UsageSchema)` to create a new message.
  */
 export const UsageSchema: GenMessage<Usage> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 9);
+  messageDesc(file_iterabase_harness_v1_harness, 11);
 
 /**
- * Error is non-terminal: a tool/extension/retry error mid-turn that the turn
- * may recover from. Terminal failures surface as Settled{failed}.
- *
- * @generated from message iterabase.harness.v1.Error
+ * @generated from message iterabase.harness.v1.ModelCallFailed
  */
-export type Error = Message<"iterabase.harness.v1.Error"> & {
+export type ModelCallFailed = Message<"iterabase.harness.v1.ModelCallFailed"> & {
   /**
-   * extension|retry|internal|tool
-   *
-   * @generated from field: string source = 1;
+   * @generated from field: iterabase.harness.v1.ErrorDetail error = 1;
    */
-  source: string;
+  error?: ErrorDetail | undefined;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ModelCallFailed.
+ * Use `create(ModelCallFailedSchema)` to create a new message.
+ */
+export const ModelCallFailedSchema: GenMessage<ModelCallFailed> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 12);
+
+/**
+ * @generated from message iterabase.harness.v1.ModelRetryScheduled
+ */
+export type ModelRetryScheduled = Message<"iterabase.harness.v1.ModelRetryScheduled"> & {
+  /**
+   * @generated from field: uint32 attempt = 1;
+   */
+  attempt: number;
 
   /**
+   * @generated from field: uint32 max_attempts = 2;
+   */
+  maxAttempts: number;
+
+  /**
+   * @generated from field: int64 delay_ms = 3;
+   */
+  delayMs: bigint;
+
+  /**
+   * @generated from field: string error_message = 4;
+   */
+  errorMessage: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ModelRetryScheduled.
+ * Use `create(ModelRetryScheduledSchema)` to create a new message.
+ */
+export const ModelRetryScheduledSchema: GenMessage<ModelRetryScheduled> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 13);
+
+/**
+ * @generated from message iterabase.harness.v1.ModelRetryFinished
+ */
+export type ModelRetryFinished = Message<"iterabase.harness.v1.ModelRetryFinished"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: uint32 attempt = 2;
+   */
+  attempt: number;
+
+  /**
+   * when !success
+   *
+   * @generated from field: string final_error = 3;
+   */
+  finalError: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ModelRetryFinished.
+ * Use `create(ModelRetryFinishedSchema)` to create a new message.
+ */
+export const ModelRetryFinishedSchema: GenMessage<ModelRetryFinished> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 14);
+
+/**
+ * @generated from message iterabase.harness.v1.CompactionStarted
+ */
+export type CompactionStarted = Message<"iterabase.harness.v1.CompactionStarted"> & {
+  /**
+   * manual|threshold|overflow
+   *
+   * @generated from field: string reason = 1;
+   */
+  reason: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.CompactionStarted.
+ * Use `create(CompactionStartedSchema)` to create a new message.
+ */
+export const CompactionStartedSchema: GenMessage<CompactionStarted> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 15);
+
+/**
+ * @generated from message iterabase.harness.v1.CompactionFinished
+ */
+export type CompactionFinished = Message<"iterabase.harness.v1.CompactionFinished"> & {
+  /**
+   * @generated from field: string reason = 1;
+   */
+  reason: string;
+
+  /**
+   * @generated from field: bool aborted = 2;
+   */
+  aborted: boolean;
+
+  /**
+   * @generated from field: bool will_retry = 3;
+   */
+  willRetry: boolean;
+
+  /**
+   * when failed
+   *
+   * @generated from field: string error_message = 4;
+   */
+  errorMessage: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.CompactionFinished.
+ * Use `create(CompactionFinishedSchema)` to create a new message.
+ */
+export const CompactionFinishedSchema: GenMessage<CompactionFinished> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 16);
+
+/**
+ * HarnessError is reserved for failures that do not naturally belong to a model
+ * call, tool result, or compaction result (setup/protocol/internal). Tool
+ * errors stay in ToolResult; model errors in ModelCallFailed.
+ *
+ * @generated from message iterabase.harness.v1.HarnessError
+ */
+export type HarnessError = Message<"iterabase.harness.v1.HarnessError"> & {
+  /**
+   * @generated from field: iterabase.harness.v1.ErrorDetail error = 1;
+   */
+  error?: ErrorDetail | undefined;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.HarnessError.
+ * Use `create(HarnessErrorSchema)` to create a new message.
+ */
+export const HarnessErrorSchema: GenMessage<HarnessError> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 17);
+
+/**
+ * A stable error envelope without inventing unreliable provider enums.
+ *
+ * @generated from message iterabase.harness.v1.ErrorDetail
+ */
+export type ErrorDetail = Message<"iterabase.harness.v1.ErrorDetail"> & {
+  /**
+   * provider/tool code when available
+   *
+   * @generated from field: string code = 1;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.Retryability retryability = 3;
+   */
+  retryability: Retryability;
+
+  /**
+   * source-specific diagnostics
+   *
+   * @generated from field: string details_json = 4;
+   */
+  detailsJson: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ErrorDetail.
+ * Use `create(ErrorDetailSchema)` to create a new message.
+ */
+export const ErrorDetailSchema: GenMessage<ErrorDetail> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 18);
+
+/**
+ * WorkerOutcome is the terminal event for a turn. COMPLETED only after
+ * agent_settled + flush + session_shutdown + dispose + clean exit + ACK. A
+ * successful assistant message followed by failed cleanup is FAILED. The CP may
+ * independently terminalize (cancellation/worker-loss/lease); the worker's late
+ * outcome is after_terminal audit and cannot overwrite CP terminal state.
+ *
+ * @generated from message iterabase.harness.v1.WorkerOutcome
+ */
+export type WorkerOutcome = Message<"iterabase.harness.v1.WorkerOutcome"> & {
+  /**
+   * @generated from field: iterabase.harness.v1.Outcome outcome = 1;
+   */
+  outcome: Outcome;
+
+  /**
+   * human/audit detail
+   *
    * @generated from field: string message = 2;
    */
   message: string;
 };
 
 /**
- * Describes the message iterabase.harness.v1.Error.
- * Use `create(ErrorSchema)` to create a new message.
+ * Describes the message iterabase.harness.v1.WorkerOutcome.
+ * Use `create(WorkerOutcomeSchema)` to create a new message.
  */
-export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 10);
+export const WorkerOutcomeSchema: GenMessage<WorkerOutcome> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 19);
 
 /**
- * Settled is the terminal event; the stream closes after it.
+ * TokenDelta is an ephemeral live-streaming token chunk (pi message_update ->
+ * AssistantMessageEvent text_delta / thinking_delta). Non-sequenced,
+ * non-ACKed, NOT WAL'd. The durable AssistantMessage carries the full text; a
+ * dropped delta is acceptable (the UI catches up from the final message).
  *
- * @generated from message iterabase.harness.v1.Settled
+ * @generated from message iterabase.harness.v1.TokenDelta
  */
-export type Settled = Message<"iterabase.harness.v1.Settled"> & {
+export type TokenDelta = Message<"iterabase.harness.v1.TokenDelta"> & {
   /**
-   * @generated from field: iterabase.harness.v1.Settled.Reason reason = 1;
+   * @generated from field: string turn_id = 1;
    */
-  reason: Settled_Reason;
+  turnId: string;
 
   /**
-   * session message count after the turn
+   * route the delta to the right content block
    *
-   * @generated from field: int32 message_count = 2;
+   * @generated from field: int32 content_index = 2;
    */
-  messageCount: number;
+  contentIndex: number;
+
+  /**
+   * @generated from field: iterabase.harness.v1.DeltaType type = 3;
+   */
+  type: DeltaType;
+
+  /**
+   * @generated from field: string delta = 4;
+   */
+  delta: string;
 };
 
 /**
- * Describes the message iterabase.harness.v1.Settled.
- * Use `create(SettledSchema)` to create a new message.
+ * Describes the message iterabase.harness.v1.TokenDelta.
+ * Use `create(TokenDeltaSchema)` to create a new message.
  */
-export const SettledSchema: GenMessage<Settled> = /*@__PURE__*/
-  messageDesc(file_iterabase_harness_v1_harness, 11);
+export const TokenDeltaSchema: GenMessage<TokenDelta> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 20);
 
 /**
- * @generated from enum iterabase.harness.v1.Settled.Reason
+ * @generated from message iterabase.harness.v1.ControlMessage
  */
-export enum Settled_Reason {
+export type ControlMessage = Message<"iterabase.harness.v1.ControlMessage"> & {
   /**
-   * @generated from enum value: REASON_UNSPECIFIED = 0;
+   * @generated from oneof iterabase.harness.v1.ControlMessage.kind
+   */
+  kind: {
+    /**
+     * @generated from field: iterabase.harness.v1.Welcome welcome = 1;
+     */
+    value: Welcome;
+    case: "welcome";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.AssignTurn assign_turn = 2;
+     */
+    value: AssignTurn;
+    case: "assignTurn";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.AbortTurn abort_turn = 3;
+     */
+    value: AbortTurn;
+    case: "abortTurn";
+  } | {
+    /**
+     * @generated from field: iterabase.harness.v1.EventAck event_ack = 4;
+     */
+    value: EventAck;
+    case: "eventAck";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ControlMessage.
+ * Use `create(ControlMessageSchema)` to create a new message.
+ */
+export const ControlMessageSchema: GenMessage<ControlMessage> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 21);
+
+/**
+ * Welcome is sent once after Hello auth + registration. A newly accepted
+ * connection for the same worker_id atomically fences + closes the old
+ * generation; any old active assignment is failed as worker loss.
+ *
+ * @generated from message iterabase.harness.v1.Welcome
+ */
+export type Welcome = Message<"iterabase.harness.v1.Welcome"> & {
+  /**
+   * @generated from field: string protocol_version = 1;
+   */
+  protocolVersion: string;
+
+  /**
+   * @generated from field: uint64 fencing_generation = 2;
+   */
+  fencingGeneration: bigint;
+
+  /**
+   * @generated from field: int32 heartbeat_interval_ms = 3;
+   */
+  heartbeatIntervalMs: number;
+
+  /**
+   * @generated from field: int32 lease_timeout_ms = 4;
+   */
+  leaseTimeoutMs: number;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.Welcome.
+ * Use `create(WelcomeSchema)` to create a new message.
+ */
+export const WelcomeSchema: GenMessage<Welcome> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 22);
+
+/**
+ * AssignTurn carries all per-turn business/session config and no boot infra.
+ * The model endpoint stays boot-bound (egress proxy); extension paths stay
+ * pool-bound (read-only). Validate IDs/ranges/sizes/MIME/tool names/relative
+ * paths/sandbox ownership before spawning the child; a structurally invalid
+ * assignment yields typed failure events + a failed outcome.
+ *
+ * @generated from message iterabase.harness.v1.AssignTurn
+ */
+export type AssignTurn = Message<"iterabase.harness.v1.AssignTurn"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.SandboxRef sandbox = 3;
+   */
+  sandbox?: SandboxRef | undefined;
+
+  /**
+   * pi systemPromptOverride
+   *
+   * @generated from field: string persona = 4;
+   */
+  persona: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.ModelConfig model = 5;
+   */
+  model?: ModelConfig | undefined;
+
+  /**
+   * @generated from field: iterabase.harness.v1.ToolAllowList tool_allow_list = 6;
+   */
+  toolAllowList?: ToolAllowList | undefined;
+
+  /**
+   * validation/audit
+   *
+   * @generated from field: string scope_identity_id = 7;
+   */
+  scopeIdentityId: string;
+
+  /**
+   * the user/task message
+   *
+   * @generated from field: string message = 8;
+   */
+  message: string;
+
+  /**
+   * optional; the email demo is text-only
+   *
+   * @generated from field: repeated iterabase.harness.v1.Image images = 9;
+   */
+  images: Image[];
+};
+
+/**
+ * Describes the message iterabase.harness.v1.AssignTurn.
+ * Use `create(AssignTurnSchema)` to create a new message.
+ */
+export const AssignTurnSchema: GenMessage<AssignTurn> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 23);
+
+/**
+ * SandboxRef identifies the session's private filesystem on the shared RWX PVC.
+ * The supervisor validates ownership/mode + the relative working_dir; it never
+ * chowns and (v1) never auto-creates the root.
+ *
+ * @generated from message iterabase.harness.v1.SandboxRef
+ */
+export type SandboxRef = Message<"iterabase.harness.v1.SandboxRef"> & {
+  /**
+   * @generated from field: string sandbox_id = 1;
+   */
+  sandboxId: string;
+
+  /**
+   * stable per-session UID (provisioner chowns the sandbox)
+   *
+   * @generated from field: uint32 uid = 2;
+   */
+  uid: number;
+
+  /**
+   * @generated from field: uint32 gid = 3;
+   */
+  gid: number;
+
+  /**
+   * relative to the sandbox root; never absolute/escaping
+   *
+   * @generated from field: string working_dir = 4;
+   */
+  workingDir: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.SandboxRef.
+ * Use `create(SandboxRefSchema)` to create a new message.
+ */
+export const SandboxRefSchema: GenMessage<SandboxRef> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 24);
+
+/**
+ * @generated from message iterabase.harness.v1.ModelConfig
+ */
+export type ModelConfig = Message<"iterabase.harness.v1.ModelConfig"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * openai-completions (the gateway is OpenAI-compatible)
+   *
+   * @generated from field: string api = 2;
+   */
+  api: string;
+
+  /**
+   * @generated from field: int32 context_window = 3;
+   */
+  contextWindow: number;
+
+  /**
+   * @generated from field: int32 max_output_tokens = 4;
+   */
+  maxOutputTokens: number;
+
+  /**
+   * off|low|medium|high|...
+   *
+   * @generated from field: string thinking_level = 5;
+   */
+  thinkingLevel: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ModelConfig.
+ * Use `create(ModelConfigSchema)` to create a new message.
+ */
+export const ModelConfigSchema: GenMessage<ModelConfig> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 25);
+
+/**
+ * ToolAllowList: all=true => broad-default (built-in coding tools disabled, all
+ * overlay tools exposed); a specific list enables only those names (used for
+ * agentic-coding sessions that need built-in coding tools). Enforcement by
+ * construction — disallowed tools are never exposed to the model.
+ *
+ * @generated from message iterabase.harness.v1.ToolAllowList
+ */
+export type ToolAllowList = Message<"iterabase.harness.v1.ToolAllowList"> & {
+  /**
+   * @generated from field: bool all = 1;
+   */
+  all: boolean;
+
+  /**
+   * specific tool names (ignored when all=true)
+   *
+   * @generated from field: repeated string tools = 2;
+   */
+  tools: string[];
+};
+
+/**
+ * Describes the message iterabase.harness.v1.ToolAllowList.
+ * Use `create(ToolAllowListSchema)` to create a new message.
+ */
+export const ToolAllowListSchema: GenMessage<ToolAllowList> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 26);
+
+/**
+ * @generated from message iterabase.harness.v1.Image
+ */
+export type Image = Message<"iterabase.harness.v1.Image"> & {
+  /**
+   * @generated from field: bytes data = 1;
+   */
+  data: Uint8Array;
+
+  /**
+   * @generated from field: string mime_type = 2;
+   */
+  mimeType: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.Image.
+ * Use `create(ImageSchema)` to create a new message.
+ */
+export const ImageSchema: GenMessage<Image> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 27);
+
+/**
+ * AbortTurn is idempotent for the matching turn; it cannot affect a later
+ * assignment. Applies during sandbox validation, child startup, model/tool
+ * execution, compaction, or shutdown.
+ *
+ * @generated from message iterabase.harness.v1.AbortTurn
+ */
+export type AbortTurn = Message<"iterabase.harness.v1.AbortTurn"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: iterabase.harness.v1.AbortReason reason = 2;
+   */
+  reason: AbortReason;
+
+  /**
+   * human/audit
+   *
+   * @generated from field: string message = 3;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.AbortTurn.
+ * Use `create(AbortTurnSchema)` to create a new message.
+ */
+export const AbortTurnSchema: GenMessage<AbortTurn> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 28);
+
+/**
+ * EventAck is a cumulative acknowledgment after the CP commits events to
+ * Postgres. The supervisor retains a bounded in-memory outbox (+ WAL) until
+ * ack; after a transient stream loss it aborts the execution, reconnects,
+ * replays only unacknowledged audit events, then emits Ready.
+ *
+ * @generated from message iterabase.harness.v1.EventAck
+ */
+export type EventAck = Message<"iterabase.harness.v1.EventAck"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: uint64 through_sequence = 2;
+   */
+  throughSequence: bigint;
+};
+
+/**
+ * Describes the message iterabase.harness.v1.EventAck.
+ * Use `create(EventAckSchema)` to create a new message.
+ */
+export const EventAckSchema: GenMessage<EventAck> = /*@__PURE__*/
+  messageDesc(file_iterabase_harness_v1_harness, 29);
+
+/**
+ * @generated from enum iterabase.harness.v1.WorkerState
+ */
+export enum WorkerState {
+  /**
+   * @generated from enum value: WORKER_STATE_UNSPECIFIED = 0;
    */
   UNSPECIFIED = 0,
 
   /**
-   * normal agent_settled
-   *
-   * @generated from enum value: REASON_COMPLETED = 1;
+   * @generated from enum value: WORKER_STATE_IDLE = 1;
+   */
+  IDLE = 1,
+
+  /**
+   * @generated from enum value: WORKER_STATE_STARTING = 2;
+   */
+  STARTING = 2,
+
+  /**
+   * @generated from enum value: WORKER_STATE_RUNNING = 3;
+   */
+  RUNNING = 3,
+
+  /**
+   * @generated from enum value: WORKER_STATE_ABORTING = 4;
+   */
+  ABORTING = 4,
+
+  /**
+   * @generated from enum value: WORKER_STATE_CLEANING = 5;
+   */
+  CLEANING = 5,
+
+  /**
+   * @generated from enum value: WORKER_STATE_DRAINING = 6;
+   */
+  DRAINING = 6,
+}
+
+/**
+ * Describes the enum iterabase.harness.v1.WorkerState.
+ */
+export const WorkerStateSchema: GenEnum<WorkerState> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 0);
+
+/**
+ * @generated from enum iterabase.harness.v1.PiPhase
+ */
+export enum PiPhase {
+  /**
+   * @generated from enum value: PI_PHASE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PI_PHASE_SESSION_SETUP = 1;
+   */
+  SESSION_SETUP = 1,
+
+  /**
+   * @generated from enum value: PI_PHASE_MODEL_CALL = 2;
+   */
+  MODEL_CALL = 2,
+
+  /**
+   * @generated from enum value: PI_PHASE_TOOL_CALL = 3;
+   */
+  TOOL_CALL = 3,
+
+  /**
+   * @generated from enum value: PI_PHASE_COMPACTION = 4;
+   */
+  COMPACTION = 4,
+
+  /**
+   * @generated from enum value: PI_PHASE_RETRY_BACKOFF = 5;
+   */
+  RETRY_BACKOFF = 5,
+
+  /**
+   * @generated from enum value: PI_PHASE_SHUTDOWN = 6;
+   */
+  SHUTDOWN = 6,
+}
+
+/**
+ * Describes the enum iterabase.harness.v1.PiPhase.
+ */
+export const PiPhaseSchema: GenEnum<PiPhase> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 1);
+
+/**
+ * @generated from enum iterabase.harness.v1.Retryability
+ */
+export enum Retryability {
+  /**
+   * @generated from enum value: RETRYABILITY_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: RETRYABILITY_RETRYABLE = 1;
+   */
+  RETRYABLE = 1,
+
+  /**
+   * @generated from enum value: RETRYABILITY_NON_RETRYABLE = 2;
+   */
+  NON_RETRYABLE = 2,
+
+  /**
+   * @generated from enum value: RETRYABILITY_UNKNOWN = 3;
+   */
+  UNKNOWN = 3,
+}
+
+/**
+ * Describes the enum iterabase.harness.v1.Retryability.
+ */
+export const RetryabilitySchema: GenEnum<Retryability> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 2);
+
+/**
+ * @generated from enum iterabase.harness.v1.Outcome
+ */
+export enum Outcome {
+  /**
+   * @generated from enum value: OUTCOME_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: OUTCOME_COMPLETED = 1;
    */
   COMPLETED = 1,
 
   /**
-   * Abort RPC fired
-   *
-   * @generated from enum value: REASON_ABORTED = 2;
+   * @generated from enum value: OUTCOME_ABORTED = 2;
    */
   ABORTED = 2,
 
   /**
-   * unrecoverable error
-   *
-   * @generated from enum value: REASON_FAILED = 3;
+   * @generated from enum value: OUTCOME_FAILED = 3;
    */
   FAILED = 3,
 }
 
 /**
- * Describes the enum iterabase.harness.v1.Settled.Reason.
+ * Describes the enum iterabase.harness.v1.Outcome.
  */
-export const Settled_ReasonSchema: GenEnum<Settled_Reason> = /*@__PURE__*/
-  enumDesc(file_iterabase_harness_v1_harness, 11, 0);
+export const OutcomeSchema: GenEnum<Outcome> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 3);
+
+/**
+ * @generated from enum iterabase.harness.v1.DeltaType
+ */
+export enum DeltaType {
+  /**
+   * @generated from enum value: DELTA_TYPE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: DELTA_TYPE_TEXT = 1;
+   */
+  TEXT = 1,
+
+  /**
+   * @generated from enum value: DELTA_TYPE_THINKING = 2;
+   */
+  THINKING = 2,
+}
+
+/**
+ * Describes the enum iterabase.harness.v1.DeltaType.
+ */
+export const DeltaTypeSchema: GenEnum<DeltaType> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 4);
+
+/**
+ * @generated from enum iterabase.harness.v1.AbortReason
+ */
+export enum AbortReason {
+  /**
+   * @generated from enum value: ABORT_REASON_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: ABORT_REASON_USER_CANCEL = 1;
+   */
+  USER_CANCEL = 1,
+
+  /**
+   * @generated from enum value: ABORT_REASON_WORKFLOW_CANCEL = 2;
+   */
+  WORKFLOW_CANCEL = 2,
+
+  /**
+   * @generated from enum value: ABORT_REASON_LEASE_EXPIRED = 3;
+   */
+  LEASE_EXPIRED = 3,
+
+  /**
+   * @generated from enum value: ABORT_REASON_WORKFLOW_TIMEOUT = 4;
+   */
+  WORKFLOW_TIMEOUT = 4,
+}
+
+/**
+ * Describes the enum iterabase.harness.v1.AbortReason.
+ */
+export const AbortReasonSchema: GenEnum<AbortReason> = /*@__PURE__*/
+  enumDesc(file_iterabase_harness_v1_harness, 5);
 
 /**
  * @generated from service iterabase.harness.v1.Harness
  */
 export const Harness: GenService<{
   /**
-   * Prompt sends a user message and streams curated agent events until the
-   * turn settles, then the stream closes. The control-plane records events to
-   * the Postgres event/audit log (HOR-249). Per-task instructions ride in
-   * `message`; the persona/system prompt is pod-level config.
+   * Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
+   * Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
+   * Welcome, AssignTurn, AbortTurn, EventAck.
    *
-   * @generated from rpc iterabase.harness.v1.Harness.Prompt
+   * @generated from rpc iterabase.harness.v1.Harness.Work
    */
-  prompt: {
-    methodKind: "server_streaming";
-    input: typeof PromptRequestSchema;
-    output: typeof EventSchema;
-  },
-  /**
-   * Abort cancels the pod's active turn (one pod = one active turn). The
-   * in-flight Prompt stream then emits Settled{aborted} and closes.
-   *
-   * @generated from rpc iterabase.harness.v1.Harness.Abort
-   */
-  abort: {
-    methodKind: "unary";
-    input: typeof AbortRequestSchema;
-    output: typeof AbortResponseSchema;
+  work: {
+    methodKind: "bidi_streaming";
+    input: typeof WorkerMessageSchema;
+    output: typeof ControlMessageSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_iterabase_harness_v1_harness, 0);
