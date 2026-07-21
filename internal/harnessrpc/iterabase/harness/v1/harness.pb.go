@@ -21,266 +21,365 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Settled_Reason int32
+type WorkerState int32
 
 const (
-	Settled_REASON_UNSPECIFIED Settled_Reason = 0
-	Settled_REASON_COMPLETED   Settled_Reason = 1 // normal agent_settled
-	Settled_REASON_ABORTED     Settled_Reason = 2 // Abort RPC fired
-	Settled_REASON_FAILED      Settled_Reason = 3 // unrecoverable error
+	WorkerState_WORKER_STATE_UNSPECIFIED WorkerState = 0
+	WorkerState_WORKER_STATE_IDLE        WorkerState = 1
+	WorkerState_WORKER_STATE_STARTING    WorkerState = 2
+	WorkerState_WORKER_STATE_RUNNING     WorkerState = 3
+	WorkerState_WORKER_STATE_ABORTING    WorkerState = 4
+	WorkerState_WORKER_STATE_CLEANING    WorkerState = 5
+	WorkerState_WORKER_STATE_DRAINING    WorkerState = 6
 )
 
-// Enum value maps for Settled_Reason.
+// Enum value maps for WorkerState.
 var (
-	Settled_Reason_name = map[int32]string{
-		0: "REASON_UNSPECIFIED",
-		1: "REASON_COMPLETED",
-		2: "REASON_ABORTED",
-		3: "REASON_FAILED",
+	WorkerState_name = map[int32]string{
+		0: "WORKER_STATE_UNSPECIFIED",
+		1: "WORKER_STATE_IDLE",
+		2: "WORKER_STATE_STARTING",
+		3: "WORKER_STATE_RUNNING",
+		4: "WORKER_STATE_ABORTING",
+		5: "WORKER_STATE_CLEANING",
+		6: "WORKER_STATE_DRAINING",
 	}
-	Settled_Reason_value = map[string]int32{
-		"REASON_UNSPECIFIED": 0,
-		"REASON_COMPLETED":   1,
-		"REASON_ABORTED":     2,
-		"REASON_FAILED":      3,
+	WorkerState_value = map[string]int32{
+		"WORKER_STATE_UNSPECIFIED": 0,
+		"WORKER_STATE_IDLE":        1,
+		"WORKER_STATE_STARTING":    2,
+		"WORKER_STATE_RUNNING":     3,
+		"WORKER_STATE_ABORTING":    4,
+		"WORKER_STATE_CLEANING":    5,
+		"WORKER_STATE_DRAINING":    6,
 	}
 )
 
-func (x Settled_Reason) Enum() *Settled_Reason {
-	p := new(Settled_Reason)
+func (x WorkerState) Enum() *WorkerState {
+	p := new(WorkerState)
 	*p = x
 	return p
 }
 
-func (x Settled_Reason) String() string {
+func (x WorkerState) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (Settled_Reason) Descriptor() protoreflect.EnumDescriptor {
+func (WorkerState) Descriptor() protoreflect.EnumDescriptor {
 	return file_iterabase_harness_v1_harness_proto_enumTypes[0].Descriptor()
 }
 
-func (Settled_Reason) Type() protoreflect.EnumType {
+func (WorkerState) Type() protoreflect.EnumType {
 	return &file_iterabase_harness_v1_harness_proto_enumTypes[0]
 }
 
-func (x Settled_Reason) Number() protoreflect.EnumNumber {
+func (x WorkerState) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use Settled_Reason.Descriptor instead.
-func (Settled_Reason) EnumDescriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{11, 0}
-}
-
-type PromptRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	Images        []*Image               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"` // optional; the email demo is text-only
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PromptRequest) Reset() {
-	*x = PromptRequest{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PromptRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PromptRequest) ProtoMessage() {}
-
-func (x *PromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PromptRequest.ProtoReflect.Descriptor instead.
-func (*PromptRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use WorkerState.Descriptor instead.
+func (WorkerState) EnumDescriptor() ([]byte, []int) {
 	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PromptRequest) GetMessage() string {
-	if x != nil {
-		return x.Message
+type PiPhase int32
+
+const (
+	PiPhase_PI_PHASE_UNSPECIFIED   PiPhase = 0
+	PiPhase_PI_PHASE_SESSION_SETUP PiPhase = 1
+	PiPhase_PI_PHASE_MODEL_CALL    PiPhase = 2
+	PiPhase_PI_PHASE_TOOL_CALL     PiPhase = 3
+	PiPhase_PI_PHASE_COMPACTION    PiPhase = 4
+	PiPhase_PI_PHASE_RETRY_BACKOFF PiPhase = 5
+	PiPhase_PI_PHASE_SHUTDOWN      PiPhase = 6
+)
+
+// Enum value maps for PiPhase.
+var (
+	PiPhase_name = map[int32]string{
+		0: "PI_PHASE_UNSPECIFIED",
+		1: "PI_PHASE_SESSION_SETUP",
+		2: "PI_PHASE_MODEL_CALL",
+		3: "PI_PHASE_TOOL_CALL",
+		4: "PI_PHASE_COMPACTION",
+		5: "PI_PHASE_RETRY_BACKOFF",
+		6: "PI_PHASE_SHUTDOWN",
 	}
-	return ""
-}
-
-func (x *PromptRequest) GetImages() []*Image {
-	if x != nil {
-		return x.Images
+	PiPhase_value = map[string]int32{
+		"PI_PHASE_UNSPECIFIED":   0,
+		"PI_PHASE_SESSION_SETUP": 1,
+		"PI_PHASE_MODEL_CALL":    2,
+		"PI_PHASE_TOOL_CALL":     3,
+		"PI_PHASE_COMPACTION":    4,
+		"PI_PHASE_RETRY_BACKOFF": 5,
+		"PI_PHASE_SHUTDOWN":      6,
 	}
-	return nil
+)
+
+func (x PiPhase) Enum() *PiPhase {
+	p := new(PiPhase)
+	*p = x
+	return p
 }
 
-type Image struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	MimeType      string                 `protobuf:"bytes,2,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+func (x PiPhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (x *Image) Reset() {
-	*x = Image{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
+func (PiPhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_iterabase_harness_v1_harness_proto_enumTypes[1].Descriptor()
 }
 
-func (x *Image) String() string {
-	return protoimpl.X.MessageStringOf(x)
+func (PiPhase) Type() protoreflect.EnumType {
+	return &file_iterabase_harness_v1_harness_proto_enumTypes[1]
 }
 
-func (*Image) ProtoMessage() {}
-
-func (x *Image) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
+func (x PiPhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use Image.ProtoReflect.Descriptor instead.
-func (*Image) Descriptor() ([]byte, []int) {
+// Deprecated: Use PiPhase.Descriptor instead.
+func (PiPhase) EnumDescriptor() ([]byte, []int) {
 	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Image) GetData() []byte {
-	if x != nil {
-		return x.Data
+type Retryability int32
+
+const (
+	Retryability_RETRYABILITY_UNSPECIFIED   Retryability = 0
+	Retryability_RETRYABILITY_RETRYABLE     Retryability = 1
+	Retryability_RETRYABILITY_NON_RETRYABLE Retryability = 2
+	Retryability_RETRYABILITY_UNKNOWN       Retryability = 3
+)
+
+// Enum value maps for Retryability.
+var (
+	Retryability_name = map[int32]string{
+		0: "RETRYABILITY_UNSPECIFIED",
+		1: "RETRYABILITY_RETRYABLE",
+		2: "RETRYABILITY_NON_RETRYABLE",
+		3: "RETRYABILITY_UNKNOWN",
 	}
-	return nil
-}
-
-func (x *Image) GetMimeType() string {
-	if x != nil {
-		return x.MimeType
+	Retryability_value = map[string]int32{
+		"RETRYABILITY_UNSPECIFIED":   0,
+		"RETRYABILITY_RETRYABLE":     1,
+		"RETRYABILITY_NON_RETRYABLE": 2,
+		"RETRYABILITY_UNKNOWN":       3,
 	}
-	return ""
+)
+
+func (x Retryability) Enum() *Retryability {
+	p := new(Retryability)
+	*p = x
+	return p
 }
 
-type AbortRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+func (x Retryability) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (x *AbortRequest) Reset() {
-	*x = AbortRequest{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
+func (Retryability) Descriptor() protoreflect.EnumDescriptor {
+	return file_iterabase_harness_v1_harness_proto_enumTypes[2].Descriptor()
 }
 
-func (x *AbortRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
+func (Retryability) Type() protoreflect.EnumType {
+	return &file_iterabase_harness_v1_harness_proto_enumTypes[2]
 }
 
-func (*AbortRequest) ProtoMessage() {}
-
-func (x *AbortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
+func (x Retryability) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use AbortRequest.ProtoReflect.Descriptor instead.
-func (*AbortRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use Retryability.Descriptor instead.
+func (Retryability) EnumDescriptor() ([]byte, []int) {
 	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{2}
 }
 
-type AbortResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
+type Outcome int32
 
-func (x *AbortResponse) Reset() {
-	*x = AbortResponse{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
+const (
+	Outcome_OUTCOME_UNSPECIFIED Outcome = 0
+	Outcome_OUTCOME_COMPLETED   Outcome = 1
+	Outcome_OUTCOME_ABORTED     Outcome = 2
+	Outcome_OUTCOME_FAILED      Outcome = 3
+)
 
-func (x *AbortResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AbortResponse) ProtoMessage() {}
-
-func (x *AbortResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
+// Enum value maps for Outcome.
+var (
+	Outcome_name = map[int32]string{
+		0: "OUTCOME_UNSPECIFIED",
+		1: "OUTCOME_COMPLETED",
+		2: "OUTCOME_ABORTED",
+		3: "OUTCOME_FAILED",
 	}
-	return mi.MessageOf(x)
+	Outcome_value = map[string]int32{
+		"OUTCOME_UNSPECIFIED": 0,
+		"OUTCOME_COMPLETED":   1,
+		"OUTCOME_ABORTED":     2,
+		"OUTCOME_FAILED":      3,
+	}
+)
+
+func (x Outcome) Enum() *Outcome {
+	p := new(Outcome)
+	*p = x
+	return p
 }
 
-// Deprecated: Use AbortResponse.ProtoReflect.Descriptor instead.
-func (*AbortResponse) Descriptor() ([]byte, []int) {
+func (x Outcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Outcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_iterabase_harness_v1_harness_proto_enumTypes[3].Descriptor()
+}
+
+func (Outcome) Type() protoreflect.EnumType {
+	return &file_iterabase_harness_v1_harness_proto_enumTypes[3]
+}
+
+func (x Outcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Outcome.Descriptor instead.
+func (Outcome) EnumDescriptor() ([]byte, []int) {
 	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{3}
 }
 
-// Event is the streamed pi event, curated to the semantic set the
-// control-plane records. Deferred: message_update deltas (live token
-// streaming), queue_update, compaction/retry detail.
-type Event struct {
+type DeltaType int32
+
+const (
+	DeltaType_DELTA_TYPE_UNSPECIFIED DeltaType = 0
+	DeltaType_DELTA_TYPE_TEXT        DeltaType = 1
+	DeltaType_DELTA_TYPE_THINKING    DeltaType = 2
+)
+
+// Enum value maps for DeltaType.
+var (
+	DeltaType_name = map[int32]string{
+		0: "DELTA_TYPE_UNSPECIFIED",
+		1: "DELTA_TYPE_TEXT",
+		2: "DELTA_TYPE_THINKING",
+	}
+	DeltaType_value = map[string]int32{
+		"DELTA_TYPE_UNSPECIFIED": 0,
+		"DELTA_TYPE_TEXT":        1,
+		"DELTA_TYPE_THINKING":    2,
+	}
+)
+
+func (x DeltaType) Enum() *DeltaType {
+	p := new(DeltaType)
+	*p = x
+	return p
+}
+
+func (x DeltaType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DeltaType) Descriptor() protoreflect.EnumDescriptor {
+	return file_iterabase_harness_v1_harness_proto_enumTypes[4].Descriptor()
+}
+
+func (DeltaType) Type() protoreflect.EnumType {
+	return &file_iterabase_harness_v1_harness_proto_enumTypes[4]
+}
+
+func (x DeltaType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DeltaType.Descriptor instead.
+func (DeltaType) EnumDescriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{4}
+}
+
+type AbortReason int32
+
+const (
+	AbortReason_ABORT_REASON_UNSPECIFIED      AbortReason = 0
+	AbortReason_ABORT_REASON_USER_CANCEL      AbortReason = 1
+	AbortReason_ABORT_REASON_WORKFLOW_CANCEL  AbortReason = 2
+	AbortReason_ABORT_REASON_LEASE_EXPIRED    AbortReason = 3
+	AbortReason_ABORT_REASON_WORKFLOW_TIMEOUT AbortReason = 4
+)
+
+// Enum value maps for AbortReason.
+var (
+	AbortReason_name = map[int32]string{
+		0: "ABORT_REASON_UNSPECIFIED",
+		1: "ABORT_REASON_USER_CANCEL",
+		2: "ABORT_REASON_WORKFLOW_CANCEL",
+		3: "ABORT_REASON_LEASE_EXPIRED",
+		4: "ABORT_REASON_WORKFLOW_TIMEOUT",
+	}
+	AbortReason_value = map[string]int32{
+		"ABORT_REASON_UNSPECIFIED":      0,
+		"ABORT_REASON_USER_CANCEL":      1,
+		"ABORT_REASON_WORKFLOW_CANCEL":  2,
+		"ABORT_REASON_LEASE_EXPIRED":    3,
+		"ABORT_REASON_WORKFLOW_TIMEOUT": 4,
+	}
+)
+
+func (x AbortReason) Enum() *AbortReason {
+	p := new(AbortReason)
+	*p = x
+	return p
+}
+
+func (x AbortReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AbortReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_iterabase_harness_v1_harness_proto_enumTypes[5].Descriptor()
+}
+
+func (AbortReason) Type() protoreflect.EnumType {
+	return &file_iterabase_harness_v1_harness_proto_enumTypes[5]
+}
+
+func (x AbortReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AbortReason.Descriptor instead.
+func (AbortReason) EnumDescriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{5}
+}
+
+type WorkerMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
 	//
-	//	*Event_TurnStarted
-	//	*Event_AssistantMessage
-	//	*Event_ToolResult
-	//	*Event_Error
-	//	*Event_Settled
-	Kind          isEvent_Kind `protobuf_oneof:"kind"`
+	//	*WorkerMessage_Hello
+	//	*WorkerMessage_Ready
+	//	*WorkerMessage_Heartbeat
+	//	*WorkerMessage_TurnEvent
+	//	*WorkerMessage_TokenDelta
+	Kind          isWorkerMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Event) Reset() {
-	*x = Event{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[4]
+func (x *WorkerMessage) Reset() {
+	*x = WorkerMessage{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Event) String() string {
+func (x *WorkerMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Event) ProtoMessage() {}
+func (*WorkerMessage) ProtoMessage() {}
 
-func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[4]
+func (x *WorkerMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,119 +390,591 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Event.ProtoReflect.Descriptor instead.
-func (*Event) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{4}
+// Deprecated: Use WorkerMessage.ProtoReflect.Descriptor instead.
+func (*WorkerMessage) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Event) GetKind() isEvent_Kind {
+func (x *WorkerMessage) GetKind() isWorkerMessage_Kind {
 	if x != nil {
 		return x.Kind
 	}
 	return nil
 }
 
-func (x *Event) GetTurnStarted() *TurnStarted {
+func (x *WorkerMessage) GetHello() *Hello {
 	if x != nil {
-		if x, ok := x.Kind.(*Event_TurnStarted); ok {
-			return x.TurnStarted
+		if x, ok := x.Kind.(*WorkerMessage_Hello); ok {
+			return x.Hello
 		}
 	}
 	return nil
 }
 
-func (x *Event) GetAssistantMessage() *AssistantMessage {
+func (x *WorkerMessage) GetReady() *Ready {
 	if x != nil {
-		if x, ok := x.Kind.(*Event_AssistantMessage); ok {
+		if x, ok := x.Kind.(*WorkerMessage_Ready); ok {
+			return x.Ready
+		}
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetHeartbeat() *Heartbeat {
+	if x != nil {
+		if x, ok := x.Kind.(*WorkerMessage_Heartbeat); ok {
+			return x.Heartbeat
+		}
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetTurnEvent() *TurnEvent {
+	if x != nil {
+		if x, ok := x.Kind.(*WorkerMessage_TurnEvent); ok {
+			return x.TurnEvent
+		}
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetTokenDelta() *TokenDelta {
+	if x != nil {
+		if x, ok := x.Kind.(*WorkerMessage_TokenDelta); ok {
+			return x.TokenDelta
+		}
+	}
+	return nil
+}
+
+type isWorkerMessage_Kind interface {
+	isWorkerMessage_Kind()
+}
+
+type WorkerMessage_Hello struct {
+	Hello *Hello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"`
+}
+
+type WorkerMessage_Ready struct {
+	Ready *Ready `protobuf:"bytes,2,opt,name=ready,proto3,oneof"`
+}
+
+type WorkerMessage_Heartbeat struct {
+	Heartbeat *Heartbeat `protobuf:"bytes,3,opt,name=heartbeat,proto3,oneof"`
+}
+
+type WorkerMessage_TurnEvent struct {
+	TurnEvent *TurnEvent `protobuf:"bytes,4,opt,name=turn_event,json=turnEvent,proto3,oneof"` // durable, sequenced, cumulatively ACKed
+}
+
+type WorkerMessage_TokenDelta struct {
+	TokenDelta *TokenDelta `protobuf:"bytes,5,opt,name=token_delta,json=tokenDelta,proto3,oneof"` // ephemeral, live token streaming
+}
+
+func (*WorkerMessage_Hello) isWorkerMessage_Kind() {}
+
+func (*WorkerMessage_Ready) isWorkerMessage_Kind() {}
+
+func (*WorkerMessage_Heartbeat) isWorkerMessage_Kind() {}
+
+func (*WorkerMessage_TurnEvent) isWorkerMessage_Kind() {}
+
+func (*WorkerMessage_TokenDelta) isWorkerMessage_Kind() {}
+
+// Hello is the first message on every stream. The authenticated client cert is
+// authoritative: the Go server verifies worker_id/pool_id against a URI SAN
+// such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-uid>. A
+// mismatch terminates the stream with PermissionDenied.
+type Hello struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId        string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"` // Kubernetes Pod UID
+	PoolId          string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`       // owning pool CR UID
+	BuildVersion    string                 `protobuf:"bytes,3,opt,name=build_version,json=buildVersion,proto3" json:"build_version,omitempty"`
+	ProtocolVersion string                 `protobuf:"bytes,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	Capabilities    []string               `protobuf:"bytes,5,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Hello) Reset() {
+	*x = Hello{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Hello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Hello) ProtoMessage() {}
+
+func (x *Hello) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Hello.ProtoReflect.Descriptor instead.
+func (*Hello) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Hello) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+func (x *Hello) GetPoolId() string {
+	if x != nil {
+		return x.PoolId
+	}
+	return ""
+}
+
+func (x *Hello) GetBuildVersion() string {
+	if x != nil {
+		return x.BuildVersion
+	}
+	return ""
+}
+
+func (x *Hello) GetProtocolVersion() string {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return ""
+}
+
+func (x *Hello) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+// Ready advertises one dispatch credit. Legal only after Welcome, after any
+// audit replay, with no live child, no pending cleanup, and no unacknowledged
+// final outcome. A second assignment before the next Ready is a protocol
+// violation (stream closed fail-closed).
+type Ready struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Ready) Reset() {
+	*x = Ready{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Ready) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Ready) ProtoMessage() {}
+
+func (x *Ready) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Ready.ProtoReflect.Descriptor instead.
+func (*Ready) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{2}
+}
+
+// Heartbeat is ephemeral control data, not a runtime audit event. Any worker
+// message renews the server-side lease; a heartbeat is needed only after an
+// otherwise silent interval. While active, it must be backed by an IPC
+// heartbeat from the child (a stale child heartbeat causes the supervisor to
+// terminate the child — liveness, not a total-duration limit).
+type Heartbeat struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	State           WorkerState            `protobuf:"varint,1,opt,name=state,proto3,enum=iterabase.harness.v1.WorkerState" json:"state,omitempty"`
+	TurnId          string                 `protobuf:"bytes,2,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"` // when present
+	PiPhase         PiPhase                `protobuf:"varint,3,opt,name=pi_phase,json=piPhase,proto3,enum=iterabase.harness.v1.PiPhase" json:"pi_phase,omitempty"`
+	ToolCallId      string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`               // active tool call, when present
+	HighestSequence uint64                 `protobuf:"varint,5,opt,name=highest_sequence,json=highestSequence,proto3" json:"highest_sequence,omitempty"` // highest worker event sequence emitted
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Heartbeat) Reset() {
+	*x = Heartbeat{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Heartbeat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Heartbeat) ProtoMessage() {}
+
+func (x *Heartbeat) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
+func (*Heartbeat) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Heartbeat) GetState() WorkerState {
+	if x != nil {
+		return x.State
+	}
+	return WorkerState_WORKER_STATE_UNSPECIFIED
+}
+
+func (x *Heartbeat) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *Heartbeat) GetPiPhase() PiPhase {
+	if x != nil {
+		return x.PiPhase
+	}
+	return PiPhase_PI_PHASE_UNSPECIFIED
+}
+
+func (x *Heartbeat) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *Heartbeat) GetHighestSequence() uint64 {
+	if x != nil {
+		return x.HighestSequence
+	}
+	return 0
+}
+
+// TurnEvent is a durable worker observation. The supervisor assigns a strictly
+// monotonic, one-based `sequence` per turn; the control-plane cumulatively
+// ACKs through a sequence after committing the events to Postgres. (turn_id,
+// sequence) provides deduplication on reconnect replay — audit delivery retry,
+// never execution replay.
+type TurnEvent struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TurnId      string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	Sequence    uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`                          // supervisor-assigned, monotonic per turn
+	TimestampMs int64                  `protobuf:"varint,3,opt,name=timestamp_ms,json=timestampMs,proto3" json:"timestamp_ms,omitempty"` // worker observation time (CP receipt is authoritative)
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*TurnEvent_ExecutionStarted
+	//	*TurnEvent_ModelCallStarted
+	//	*TurnEvent_AssistantMessage
+	//	*TurnEvent_ModelCallFailed
+	//	*TurnEvent_ModelRetryScheduled
+	//	*TurnEvent_ModelRetryFinished
+	//	*TurnEvent_ToolCallStarted
+	//	*TurnEvent_ToolResult
+	//	*TurnEvent_CompactionStarted
+	//	*TurnEvent_CompactionFinished
+	//	*TurnEvent_HarnessError
+	//	*TurnEvent_WorkerOutcome
+	Kind          isTurnEvent_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TurnEvent) Reset() {
+	*x = TurnEvent{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TurnEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TurnEvent) ProtoMessage() {}
+
+func (x *TurnEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TurnEvent.ProtoReflect.Descriptor instead.
+func (*TurnEvent) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TurnEvent) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *TurnEvent) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *TurnEvent) GetTimestampMs() int64 {
+	if x != nil {
+		return x.TimestampMs
+	}
+	return 0
+}
+
+func (x *TurnEvent) GetKind() isTurnEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetExecutionStarted() *ExecutionStarted {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ExecutionStarted); ok {
+			return x.ExecutionStarted
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetModelCallStarted() *ModelCallStarted {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ModelCallStarted); ok {
+			return x.ModelCallStarted
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetAssistantMessage() *AssistantMessage {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_AssistantMessage); ok {
 			return x.AssistantMessage
 		}
 	}
 	return nil
 }
 
-func (x *Event) GetToolResult() *ToolResult {
+func (x *TurnEvent) GetModelCallFailed() *ModelCallFailed {
 	if x != nil {
-		if x, ok := x.Kind.(*Event_ToolResult); ok {
+		if x, ok := x.Kind.(*TurnEvent_ModelCallFailed); ok {
+			return x.ModelCallFailed
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetModelRetryScheduled() *ModelRetryScheduled {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ModelRetryScheduled); ok {
+			return x.ModelRetryScheduled
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetModelRetryFinished() *ModelRetryFinished {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ModelRetryFinished); ok {
+			return x.ModelRetryFinished
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetToolCallStarted() *ToolCallStarted {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ToolCallStarted); ok {
+			return x.ToolCallStarted
+		}
+	}
+	return nil
+}
+
+func (x *TurnEvent) GetToolResult() *ToolResult {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_ToolResult); ok {
 			return x.ToolResult
 		}
 	}
 	return nil
 }
 
-func (x *Event) GetError() *Error {
+func (x *TurnEvent) GetCompactionStarted() *CompactionStarted {
 	if x != nil {
-		if x, ok := x.Kind.(*Event_Error); ok {
-			return x.Error
+		if x, ok := x.Kind.(*TurnEvent_CompactionStarted); ok {
+			return x.CompactionStarted
 		}
 	}
 	return nil
 }
 
-func (x *Event) GetSettled() *Settled {
+func (x *TurnEvent) GetCompactionFinished() *CompactionFinished {
 	if x != nil {
-		if x, ok := x.Kind.(*Event_Settled); ok {
-			return x.Settled
+		if x, ok := x.Kind.(*TurnEvent_CompactionFinished); ok {
+			return x.CompactionFinished
 		}
 	}
 	return nil
 }
 
-type isEvent_Kind interface {
-	isEvent_Kind()
+func (x *TurnEvent) GetHarnessError() *HarnessError {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_HarnessError); ok {
+			return x.HarnessError
+		}
+	}
+	return nil
 }
 
-type Event_TurnStarted struct {
-	TurnStarted *TurnStarted `protobuf:"bytes,1,opt,name=turn_started,json=turnStarted,proto3,oneof"`
+func (x *TurnEvent) GetWorkerOutcome() *WorkerOutcome {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_WorkerOutcome); ok {
+			return x.WorkerOutcome
+		}
+	}
+	return nil
 }
 
-type Event_AssistantMessage struct {
-	AssistantMessage *AssistantMessage `protobuf:"bytes,2,opt,name=assistant_message,json=assistantMessage,proto3,oneof"`
+type isTurnEvent_Kind interface {
+	isTurnEvent_Kind()
 }
 
-type Event_ToolResult struct {
-	ToolResult *ToolResult `protobuf:"bytes,3,opt,name=tool_result,json=toolResult,proto3,oneof"`
+type TurnEvent_ExecutionStarted struct {
+	ExecutionStarted *ExecutionStarted `protobuf:"bytes,10,opt,name=execution_started,json=executionStarted,proto3,oneof"`
 }
 
-type Event_Error struct {
-	Error *Error `protobuf:"bytes,4,opt,name=error,proto3,oneof"`
+type TurnEvent_ModelCallStarted struct {
+	ModelCallStarted *ModelCallStarted `protobuf:"bytes,11,opt,name=model_call_started,json=modelCallStarted,proto3,oneof"`
 }
 
-type Event_Settled struct {
-	Settled *Settled `protobuf:"bytes,5,opt,name=settled,proto3,oneof"` // terminal; the stream closes after this
+type TurnEvent_AssistantMessage struct {
+	AssistantMessage *AssistantMessage `protobuf:"bytes,12,opt,name=assistant_message,json=assistantMessage,proto3,oneof"`
 }
 
-func (*Event_TurnStarted) isEvent_Kind() {}
+type TurnEvent_ModelCallFailed struct {
+	ModelCallFailed *ModelCallFailed `protobuf:"bytes,13,opt,name=model_call_failed,json=modelCallFailed,proto3,oneof"`
+}
 
-func (*Event_AssistantMessage) isEvent_Kind() {}
+type TurnEvent_ModelRetryScheduled struct {
+	ModelRetryScheduled *ModelRetryScheduled `protobuf:"bytes,14,opt,name=model_retry_scheduled,json=modelRetryScheduled,proto3,oneof"`
+}
 
-func (*Event_ToolResult) isEvent_Kind() {}
+type TurnEvent_ModelRetryFinished struct {
+	ModelRetryFinished *ModelRetryFinished `protobuf:"bytes,15,opt,name=model_retry_finished,json=modelRetryFinished,proto3,oneof"`
+}
 
-func (*Event_Error) isEvent_Kind() {}
+type TurnEvent_ToolCallStarted struct {
+	ToolCallStarted *ToolCallStarted `protobuf:"bytes,16,opt,name=tool_call_started,json=toolCallStarted,proto3,oneof"`
+}
 
-func (*Event_Settled) isEvent_Kind() {}
+type TurnEvent_ToolResult struct {
+	ToolResult *ToolResult `protobuf:"bytes,17,opt,name=tool_result,json=toolResult,proto3,oneof"`
+}
 
-type TurnStarted struct {
+type TurnEvent_CompactionStarted struct {
+	CompactionStarted *CompactionStarted `protobuf:"bytes,18,opt,name=compaction_started,json=compactionStarted,proto3,oneof"`
+}
+
+type TurnEvent_CompactionFinished struct {
+	CompactionFinished *CompactionFinished `protobuf:"bytes,19,opt,name=compaction_finished,json=compactionFinished,proto3,oneof"`
+}
+
+type TurnEvent_HarnessError struct {
+	HarnessError *HarnessError `protobuf:"bytes,20,opt,name=harness_error,json=harnessError,proto3,oneof"`
+}
+
+type TurnEvent_WorkerOutcome struct {
+	WorkerOutcome *WorkerOutcome `protobuf:"bytes,21,opt,name=worker_outcome,json=workerOutcome,proto3,oneof"`
+}
+
+func (*TurnEvent_ExecutionStarted) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ModelCallStarted) isTurnEvent_Kind() {}
+
+func (*TurnEvent_AssistantMessage) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ModelCallFailed) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ModelRetryScheduled) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ModelRetryFinished) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ToolCallStarted) isTurnEvent_Kind() {}
+
+func (*TurnEvent_ToolResult) isTurnEvent_Kind() {}
+
+func (*TurnEvent_CompactionStarted) isTurnEvent_Kind() {}
+
+func (*TurnEvent_CompactionFinished) isTurnEvent_Kind() {}
+
+func (*TurnEvent_HarnessError) isTurnEvent_Kind() {}
+
+func (*TurnEvent_WorkerOutcome) isTurnEvent_Kind() {}
+
+type ExecutionStarted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`                                      // provider/modelId in use
-	ThinkingLevel string                 `protobuf:"bytes,2,opt,name=thinking_level,json=thinkingLevel,proto3" json:"thinking_level,omitempty"` // off|low|medium|high|...
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Sandbox       *SandboxRef            `protobuf:"bytes,2,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *TurnStarted) Reset() {
-	*x = TurnStarted{}
+func (x *ExecutionStarted) Reset() {
+	*x = ExecutionStarted{}
 	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TurnStarted) String() string {
+func (x *ExecutionStarted) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TurnStarted) ProtoMessage() {}
+func (*ExecutionStarted) ProtoMessage() {}
 
-func (x *TurnStarted) ProtoReflect() protoreflect.Message {
+func (x *ExecutionStarted) ProtoReflect() protoreflect.Message {
 	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -415,27 +986,80 @@ func (x *TurnStarted) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TurnStarted.ProtoReflect.Descriptor instead.
-func (*TurnStarted) Descriptor() ([]byte, []int) {
+// Deprecated: Use ExecutionStarted.ProtoReflect.Descriptor instead.
+func (*ExecutionStarted) Descriptor() ([]byte, []int) {
 	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *TurnStarted) GetModel() string {
+func (x *ExecutionStarted) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ExecutionStarted) GetSandbox() *SandboxRef {
+	if x != nil {
+		return x.Sandbox
+	}
+	return nil
+}
+
+type ModelCallStarted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`                                      // provider/modelId
+	ThinkingLevel string                 `protobuf:"bytes,2,opt,name=thinking_level,json=thinkingLevel,proto3" json:"thinking_level,omitempty"` // off|low|medium|high|...
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelCallStarted) Reset() {
+	*x = ModelCallStarted{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelCallStarted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelCallStarted) ProtoMessage() {}
+
+func (x *ModelCallStarted) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelCallStarted.ProtoReflect.Descriptor instead.
+func (*ModelCallStarted) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ModelCallStarted) GetModel() string {
 	if x != nil {
 		return x.Model
 	}
 	return ""
 }
 
-func (x *TurnStarted) GetThinkingLevel() string {
+func (x *ModelCallStarted) GetThinkingLevel() string {
 	if x != nil {
 		return x.ThinkingLevel
 	}
 	return ""
 }
 
-// AssistantMessage carries the turn's assistant output: text + tool calls +
-// usage. Emitted at pi message_end (role=assistant).
+// AssistantMessage is the durable, complete assistant output for a model turn:
+// text + tool calls + usage. Emitted at pi message_end (role=assistant). Live
+// token deltas stream separately as TokenDelta; this carries the full text.
 type AssistantMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
@@ -449,7 +1073,7 @@ type AssistantMessage struct {
 
 func (x *AssistantMessage) Reset() {
 	*x = AssistantMessage{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[6]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +1085,7 @@ func (x *AssistantMessage) String() string {
 func (*AssistantMessage) ProtoMessage() {}
 
 func (x *AssistantMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[6]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +1098,7 @@ func (x *AssistantMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantMessage.ProtoReflect.Descriptor instead.
 func (*AssistantMessage) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{6}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AssistantMessage) GetText() string {
@@ -523,7 +1147,7 @@ type ToolCall struct {
 
 func (x *ToolCall) Reset() {
 	*x = ToolCall{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[7]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +1159,7 @@ func (x *ToolCall) String() string {
 func (*ToolCall) ProtoMessage() {}
 
 func (x *ToolCall) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[7]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +1172,7 @@ func (x *ToolCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
 func (*ToolCall) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{7}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ToolCall) GetId() string {
@@ -572,13 +1196,78 @@ func (x *ToolCall) GetArgumentsJson() string {
 	return ""
 }
 
+// ToolCallStarted marks the ambiguous side-effect boundary: an AssistantMessage
+// proposing a call does not prove execution began. If the worker disappears
+// before ToolResult, this identifies what may have started.
+type ToolCallStarted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ArgumentsJson string                 `protobuf:"bytes,3,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolCallStarted) Reset() {
+	*x = ToolCallStarted{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolCallStarted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolCallStarted) ProtoMessage() {}
+
+func (x *ToolCallStarted) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolCallStarted.ProtoReflect.Descriptor instead.
+func (*ToolCallStarted) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ToolCallStarted) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolCallStarted) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolCallStarted) GetArgumentsJson() string {
+	if x != nil {
+		return x.ArgumentsJson
+	}
+	return ""
+}
+
 // ToolResult is the granular per-call audit record (pi tool_execution_end).
+// Tool failures are NOT terminal — they return to the model (is_error=true) and
+// pi continues. There is no harness-level tool retry.
 type ToolResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
 	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	ArgumentsJson string                 `protobuf:"bytes,3,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
-	ResultText    string                 `protobuf:"bytes,4,opt,name=result_text,json=resultText,proto3" json:"result_text,omitempty"` // result content (text); large blobs offloaded by control-plane
+	ResultText    string                 `protobuf:"bytes,4,opt,name=result_text,json=resultText,proto3" json:"result_text,omitempty"` // result content (text); large blobs offloaded by the CP
 	IsError       bool                   `protobuf:"varint,5,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
 	TimestampMs   int64                  `protobuf:"varint,6,opt,name=timestamp_ms,json=timestampMs,proto3" json:"timestamp_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -587,7 +1276,7 @@ type ToolResult struct {
 
 func (x *ToolResult) Reset() {
 	*x = ToolResult{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[8]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +1288,7 @@ func (x *ToolResult) String() string {
 func (*ToolResult) ProtoMessage() {}
 
 func (x *ToolResult) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[8]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +1301,7 @@ func (x *ToolResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolResult.ProtoReflect.Descriptor instead.
 func (*ToolResult) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{8}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ToolResult) GetToolCallId() string {
@@ -670,7 +1359,7 @@ type Usage struct {
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[9]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +1371,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[9]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +1384,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{9}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Usage) GetInputTokens() int64 {
@@ -733,31 +1422,28 @@ func (x *Usage) GetCostUsd() float64 {
 	return 0
 }
 
-// Error is non-terminal: a tool/extension/retry error mid-turn that the turn
-// may recover from. Terminal failures surface as Settled{failed}.
-type Error struct {
+type ModelCallFailed struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"` // extension|retry|internal|tool
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Error         *ErrorDetail           `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Error) Reset() {
-	*x = Error{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[10]
+func (x *ModelCallFailed) Reset() {
+	*x = ModelCallFailed{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Error) String() string {
+func (x *ModelCallFailed) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Error) ProtoMessage() {}
+func (*ModelCallFailed) ProtoMessage() {}
 
-func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[10]
+func (x *ModelCallFailed) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,49 +1454,402 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Error.ProtoReflect.Descriptor instead.
-func (*Error) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{10}
+// Deprecated: Use ModelCallFailed.ProtoReflect.Descriptor instead.
+func (*ModelCallFailed) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *Error) GetSource() string {
+func (x *ModelCallFailed) GetError() *ErrorDetail {
 	if x != nil {
-		return x.Source
+		return x.Error
+	}
+	return nil
+}
+
+type ModelRetryScheduled struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Attempt       uint32                 `protobuf:"varint,1,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	MaxAttempts   uint32                 `protobuf:"varint,2,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	DelayMs       int64                  `protobuf:"varint,3,opt,name=delay_ms,json=delayMs,proto3" json:"delay_ms,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelRetryScheduled) Reset() {
+	*x = ModelRetryScheduled{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelRetryScheduled) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelRetryScheduled) ProtoMessage() {}
+
+func (x *ModelRetryScheduled) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelRetryScheduled.ProtoReflect.Descriptor instead.
+func (*ModelRetryScheduled) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ModelRetryScheduled) GetAttempt() uint32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *ModelRetryScheduled) GetMaxAttempts() uint32 {
+	if x != nil {
+		return x.MaxAttempts
+	}
+	return 0
+}
+
+func (x *ModelRetryScheduled) GetDelayMs() int64 {
+	if x != nil {
+		return x.DelayMs
+	}
+	return 0
+}
+
+func (x *ModelRetryScheduled) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
 	}
 	return ""
 }
 
-func (x *Error) GetMessage() string {
+type ModelRetryFinished struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Attempt       uint32                 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	FinalError    string                 `protobuf:"bytes,3,opt,name=final_error,json=finalError,proto3" json:"final_error,omitempty"` // when !success
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelRetryFinished) Reset() {
+	*x = ModelRetryFinished{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelRetryFinished) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelRetryFinished) ProtoMessage() {}
+
+func (x *ModelRetryFinished) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelRetryFinished.ProtoReflect.Descriptor instead.
+func (*ModelRetryFinished) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ModelRetryFinished) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ModelRetryFinished) GetAttempt() uint32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *ModelRetryFinished) GetFinalError() string {
+	if x != nil {
+		return x.FinalError
+	}
+	return ""
+}
+
+type CompactionStarted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"` // manual|threshold|overflow
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactionStarted) Reset() {
+	*x = CompactionStarted{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactionStarted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactionStarted) ProtoMessage() {}
+
+func (x *CompactionStarted) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactionStarted.ProtoReflect.Descriptor instead.
+func (*CompactionStarted) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CompactionStarted) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type CompactionFinished struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	Aborted       bool                   `protobuf:"varint,2,opt,name=aborted,proto3" json:"aborted,omitempty"`
+	WillRetry     bool                   `protobuf:"varint,3,opt,name=will_retry,json=willRetry,proto3" json:"will_retry,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // when failed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactionFinished) Reset() {
+	*x = CompactionFinished{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactionFinished) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactionFinished) ProtoMessage() {}
+
+func (x *CompactionFinished) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactionFinished.ProtoReflect.Descriptor instead.
+func (*CompactionFinished) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CompactionFinished) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CompactionFinished) GetAborted() bool {
+	if x != nil {
+		return x.Aborted
+	}
+	return false
+}
+
+func (x *CompactionFinished) GetWillRetry() bool {
+	if x != nil {
+		return x.WillRetry
+	}
+	return false
+}
+
+func (x *CompactionFinished) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+// HarnessError is reserved for failures that do not naturally belong to a model
+// call, tool result, or compaction result (setup/protocol/internal). Tool
+// errors stay in ToolResult; model errors in ModelCallFailed.
+type HarnessError struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         *ErrorDetail           `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HarnessError) Reset() {
+	*x = HarnessError{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HarnessError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HarnessError) ProtoMessage() {}
+
+func (x *HarnessError) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HarnessError.ProtoReflect.Descriptor instead.
+func (*HarnessError) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *HarnessError) GetError() *ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+// A stable error envelope without inventing unreliable provider enums.
+type ErrorDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"` // provider/tool code when available
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Retryability  Retryability           `protobuf:"varint,3,opt,name=retryability,proto3,enum=iterabase.harness.v1.Retryability" json:"retryability,omitempty"`
+	DetailsJson   string                 `protobuf:"bytes,4,opt,name=details_json,json=detailsJson,proto3" json:"details_json,omitempty"` // source-specific diagnostics
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ErrorDetail) Reset() {
+	*x = ErrorDetail{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ErrorDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ErrorDetail) ProtoMessage() {}
+
+func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ErrorDetail.ProtoReflect.Descriptor instead.
+func (*ErrorDetail) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ErrorDetail) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *ErrorDetail) GetMessage() string {
 	if x != nil {
 		return x.Message
 	}
 	return ""
 }
 
-// Settled is the terminal event; the stream closes after it.
-type Settled struct {
+func (x *ErrorDetail) GetRetryability() Retryability {
+	if x != nil {
+		return x.Retryability
+	}
+	return Retryability_RETRYABILITY_UNSPECIFIED
+}
+
+func (x *ErrorDetail) GetDetailsJson() string {
+	if x != nil {
+		return x.DetailsJson
+	}
+	return ""
+}
+
+// WorkerOutcome is the terminal event for a turn. COMPLETED only after
+// agent_settled + flush + session_shutdown + dispose + clean exit + ACK. A
+// successful assistant message followed by failed cleanup is FAILED. The CP may
+// independently terminalize (cancellation/worker-loss/lease); the worker's late
+// outcome is after_terminal audit and cannot overwrite CP terminal state.
+type WorkerOutcome struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        Settled_Reason         `protobuf:"varint,1,opt,name=reason,proto3,enum=iterabase.harness.v1.Settled_Reason" json:"reason,omitempty"`
-	MessageCount  int32                  `protobuf:"varint,2,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"` // session message count after the turn
+	Outcome       Outcome                `protobuf:"varint,1,opt,name=outcome,proto3,enum=iterabase.harness.v1.Outcome" json:"outcome,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"` // human/audit detail
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Settled) Reset() {
-	*x = Settled{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[11]
+func (x *WorkerOutcome) Reset() {
+	*x = WorkerOutcome{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Settled) String() string {
+func (x *WorkerOutcome) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Settled) ProtoMessage() {}
+func (*WorkerOutcome) ProtoMessage() {}
 
-func (x *Settled) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[11]
+func (x *WorkerOutcome) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,21 +1860,765 @@ func (x *Settled) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Settled.ProtoReflect.Descriptor instead.
-func (*Settled) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{11}
+// Deprecated: Use WorkerOutcome.ProtoReflect.Descriptor instead.
+func (*WorkerOutcome) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *Settled) GetReason() Settled_Reason {
+func (x *WorkerOutcome) GetOutcome() Outcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return Outcome_OUTCOME_UNSPECIFIED
+}
+
+func (x *WorkerOutcome) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+// TokenDelta is an ephemeral live-streaming token chunk (pi message_update ->
+// AssistantMessageEvent text_delta / thinking_delta). Non-sequenced,
+// non-ACKed, NOT WAL'd. The durable AssistantMessage carries the full text; a
+// dropped delta is acceptable (the UI catches up from the final message).
+type TokenDelta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	ContentIndex  int32                  `protobuf:"varint,2,opt,name=content_index,json=contentIndex,proto3" json:"content_index,omitempty"` // route the delta to the right content block
+	Type          DeltaType              `protobuf:"varint,3,opt,name=type,proto3,enum=iterabase.harness.v1.DeltaType" json:"type,omitempty"`
+	Delta         string                 `protobuf:"bytes,4,opt,name=delta,proto3" json:"delta,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TokenDelta) Reset() {
+	*x = TokenDelta{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TokenDelta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TokenDelta) ProtoMessage() {}
+
+func (x *TokenDelta) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TokenDelta.ProtoReflect.Descriptor instead.
+func (*TokenDelta) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *TokenDelta) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *TokenDelta) GetContentIndex() int32 {
+	if x != nil {
+		return x.ContentIndex
+	}
+	return 0
+}
+
+func (x *TokenDelta) GetType() DeltaType {
+	if x != nil {
+		return x.Type
+	}
+	return DeltaType_DELTA_TYPE_UNSPECIFIED
+}
+
+func (x *TokenDelta) GetDelta() string {
+	if x != nil {
+		return x.Delta
+	}
+	return ""
+}
+
+type ControlMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*ControlMessage_Welcome
+	//	*ControlMessage_AssignTurn
+	//	*ControlMessage_AbortTurn
+	//	*ControlMessage_EventAck
+	Kind          isControlMessage_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ControlMessage) Reset() {
+	*x = ControlMessage{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlMessage) ProtoMessage() {}
+
+func (x *ControlMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlMessage.ProtoReflect.Descriptor instead.
+func (*ControlMessage) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ControlMessage) GetKind() isControlMessage_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetWelcome() *Welcome {
+	if x != nil {
+		if x, ok := x.Kind.(*ControlMessage_Welcome); ok {
+			return x.Welcome
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetAssignTurn() *AssignTurn {
+	if x != nil {
+		if x, ok := x.Kind.(*ControlMessage_AssignTurn); ok {
+			return x.AssignTurn
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetAbortTurn() *AbortTurn {
+	if x != nil {
+		if x, ok := x.Kind.(*ControlMessage_AbortTurn); ok {
+			return x.AbortTurn
+		}
+	}
+	return nil
+}
+
+func (x *ControlMessage) GetEventAck() *EventAck {
+	if x != nil {
+		if x, ok := x.Kind.(*ControlMessage_EventAck); ok {
+			return x.EventAck
+		}
+	}
+	return nil
+}
+
+type isControlMessage_Kind interface {
+	isControlMessage_Kind()
+}
+
+type ControlMessage_Welcome struct {
+	Welcome *Welcome `protobuf:"bytes,1,opt,name=welcome,proto3,oneof"`
+}
+
+type ControlMessage_AssignTurn struct {
+	AssignTurn *AssignTurn `protobuf:"bytes,2,opt,name=assign_turn,json=assignTurn,proto3,oneof"`
+}
+
+type ControlMessage_AbortTurn struct {
+	AbortTurn *AbortTurn `protobuf:"bytes,3,opt,name=abort_turn,json=abortTurn,proto3,oneof"`
+}
+
+type ControlMessage_EventAck struct {
+	EventAck *EventAck `protobuf:"bytes,4,opt,name=event_ack,json=eventAck,proto3,oneof"`
+}
+
+func (*ControlMessage_Welcome) isControlMessage_Kind() {}
+
+func (*ControlMessage_AssignTurn) isControlMessage_Kind() {}
+
+func (*ControlMessage_AbortTurn) isControlMessage_Kind() {}
+
+func (*ControlMessage_EventAck) isControlMessage_Kind() {}
+
+// Welcome is sent once after Hello auth + registration. A newly accepted
+// connection for the same worker_id atomically fences + closes the old
+// generation; any old active assignment is failed as worker loss.
+type Welcome struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion     string                 `protobuf:"bytes,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	FencingGeneration   uint64                 `protobuf:"varint,2,opt,name=fencing_generation,json=fencingGeneration,proto3" json:"fencing_generation,omitempty"`
+	HeartbeatIntervalMs int32                  `protobuf:"varint,3,opt,name=heartbeat_interval_ms,json=heartbeatIntervalMs,proto3" json:"heartbeat_interval_ms,omitempty"`
+	LeaseTimeoutMs      int32                  `protobuf:"varint,4,opt,name=lease_timeout_ms,json=leaseTimeoutMs,proto3" json:"lease_timeout_ms,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *Welcome) Reset() {
+	*x = Welcome{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Welcome) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Welcome) ProtoMessage() {}
+
+func (x *Welcome) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Welcome.ProtoReflect.Descriptor instead.
+func (*Welcome) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *Welcome) GetProtocolVersion() string {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return ""
+}
+
+func (x *Welcome) GetFencingGeneration() uint64 {
+	if x != nil {
+		return x.FencingGeneration
+	}
+	return 0
+}
+
+func (x *Welcome) GetHeartbeatIntervalMs() int32 {
+	if x != nil {
+		return x.HeartbeatIntervalMs
+	}
+	return 0
+}
+
+func (x *Welcome) GetLeaseTimeoutMs() int32 {
+	if x != nil {
+		return x.LeaseTimeoutMs
+	}
+	return 0
+}
+
+// AssignTurn carries all per-turn business/session config and no boot infra.
+// The model endpoint stays boot-bound (egress proxy); extension paths stay
+// pool-bound (read-only). Validate IDs/ranges/sizes/MIME/tool names/relative
+// paths/sandbox ownership before spawning the child; a structurally invalid
+// assignment yields typed failure events + a failed outcome.
+type AssignTurn struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TurnId          string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Sandbox         *SandboxRef            `protobuf:"bytes,3,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
+	Persona         string                 `protobuf:"bytes,4,opt,name=persona,proto3" json:"persona,omitempty"` // pi systemPromptOverride
+	Model           *ModelConfig           `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	ToolAllowList   *ToolAllowList         `protobuf:"bytes,6,opt,name=tool_allow_list,json=toolAllowList,proto3" json:"tool_allow_list,omitempty"`
+	ScopeIdentityId string                 `protobuf:"bytes,7,opt,name=scope_identity_id,json=scopeIdentityId,proto3" json:"scope_identity_id,omitempty"` // validation/audit
+	Message         string                 `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`                                          // the user/task message
+	Images          []*Image               `protobuf:"bytes,9,rep,name=images,proto3" json:"images,omitempty"`                                            // optional; the email demo is text-only
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AssignTurn) Reset() {
+	*x = AssignTurn{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssignTurn) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssignTurn) ProtoMessage() {}
+
+func (x *AssignTurn) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssignTurn.ProtoReflect.Descriptor instead.
+func (*AssignTurn) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AssignTurn) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetSandbox() *SandboxRef {
+	if x != nil {
+		return x.Sandbox
+	}
+	return nil
+}
+
+func (x *AssignTurn) GetPersona() string {
+	if x != nil {
+		return x.Persona
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetModel() *ModelConfig {
+	if x != nil {
+		return x.Model
+	}
+	return nil
+}
+
+func (x *AssignTurn) GetToolAllowList() *ToolAllowList {
+	if x != nil {
+		return x.ToolAllowList
+	}
+	return nil
+}
+
+func (x *AssignTurn) GetScopeIdentityId() string {
+	if x != nil {
+		return x.ScopeIdentityId
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetImages() []*Image {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+// SandboxRef identifies the session's private filesystem on the shared RWX PVC.
+// The supervisor validates ownership/mode + the relative working_dir; it never
+// chowns and (v1) never auto-creates the root.
+type SandboxRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"` // stable per-session UID (provisioner chowns the sandbox)
+	Gid           uint32                 `protobuf:"varint,3,opt,name=gid,proto3" json:"gid,omitempty"`
+	WorkingDir    string                 `protobuf:"bytes,4,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"` // relative to the sandbox root; never absolute/escaping
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SandboxRef) Reset() {
+	*x = SandboxRef{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxRef) ProtoMessage() {}
+
+func (x *SandboxRef) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
+func (*SandboxRef) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *SandboxRef) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *SandboxRef) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SandboxRef) GetGid() uint32 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
+func (x *SandboxRef) GetWorkingDir() string {
+	if x != nil {
+		return x.WorkingDir
+	}
+	return ""
+}
+
+type ModelConfig struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Api             string                 `protobuf:"bytes,2,opt,name=api,proto3" json:"api,omitempty"` // openai-completions (the gateway is OpenAI-compatible)
+	ContextWindow   int32                  `protobuf:"varint,3,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
+	MaxOutputTokens int32                  `protobuf:"varint,4,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
+	ThinkingLevel   string                 `protobuf:"bytes,5,opt,name=thinking_level,json=thinkingLevel,proto3" json:"thinking_level,omitempty"` // off|low|medium|high|...
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ModelConfig) Reset() {
+	*x = ModelConfig{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelConfig) ProtoMessage() {}
+
+func (x *ModelConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelConfig.ProtoReflect.Descriptor instead.
+func (*ModelConfig) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ModelConfig) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ModelConfig) GetApi() string {
+	if x != nil {
+		return x.Api
+	}
+	return ""
+}
+
+func (x *ModelConfig) GetContextWindow() int32 {
+	if x != nil {
+		return x.ContextWindow
+	}
+	return 0
+}
+
+func (x *ModelConfig) GetMaxOutputTokens() int32 {
+	if x != nil {
+		return x.MaxOutputTokens
+	}
+	return 0
+}
+
+func (x *ModelConfig) GetThinkingLevel() string {
+	if x != nil {
+		return x.ThinkingLevel
+	}
+	return ""
+}
+
+// ToolAllowList: all=true => broad-default (built-in coding tools disabled, all
+// overlay tools exposed); a specific list enables only those names (used for
+// agentic-coding sessions that need built-in coding tools). Enforcement by
+// construction — disallowed tools are never exposed to the model.
+type ToolAllowList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	All           bool                   `protobuf:"varint,1,opt,name=all,proto3" json:"all,omitempty"`
+	Tools         []string               `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"` // specific tool names (ignored when all=true)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolAllowList) Reset() {
+	*x = ToolAllowList{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolAllowList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolAllowList) ProtoMessage() {}
+
+func (x *ToolAllowList) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolAllowList.ProtoReflect.Descriptor instead.
+func (*ToolAllowList) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ToolAllowList) GetAll() bool {
+	if x != nil {
+		return x.All
+	}
+	return false
+}
+
+func (x *ToolAllowList) GetTools() []string {
+	if x != nil {
+		return x.Tools
+	}
+	return nil
+}
+
+type Image struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	MimeType      string                 `protobuf:"bytes,2,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Image) Reset() {
+	*x = Image{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Image) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Image) ProtoMessage() {}
+
+func (x *Image) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Image.ProtoReflect.Descriptor instead.
+func (*Image) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *Image) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *Image) GetMimeType() string {
+	if x != nil {
+		return x.MimeType
+	}
+	return ""
+}
+
+// AbortTurn is idempotent for the matching turn; it cannot affect a later
+// assignment. Applies during sandbox validation, child startup, model/tool
+// execution, compaction, or shutdown.
+type AbortTurn struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	Reason        AbortReason            `protobuf:"varint,2,opt,name=reason,proto3,enum=iterabase.harness.v1.AbortReason" json:"reason,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"` // human/audit
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AbortTurn) Reset() {
+	*x = AbortTurn{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AbortTurn) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AbortTurn) ProtoMessage() {}
+
+func (x *AbortTurn) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AbortTurn.ProtoReflect.Descriptor instead.
+func (*AbortTurn) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *AbortTurn) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *AbortTurn) GetReason() AbortReason {
 	if x != nil {
 		return x.Reason
 	}
-	return Settled_REASON_UNSPECIFIED
+	return AbortReason_ABORT_REASON_UNSPECIFIED
 }
 
-func (x *Settled) GetMessageCount() int32 {
+func (x *AbortTurn) GetMessage() string {
 	if x != nil {
-		return x.MessageCount
+		return x.Message
+	}
+	return ""
+}
+
+// EventAck is a cumulative acknowledgment after the CP commits events to
+// Postgres. The supervisor retains a bounded in-memory outbox (+ WAL) until
+// ack; after a transient stream loss it aborts the execution, reconnects,
+// replays only unacknowledged audit events, then emits Ready.
+type EventAck struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TurnId          string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	ThroughSequence uint64                 `protobuf:"varint,2,opt,name=through_sequence,json=throughSequence,proto3" json:"through_sequence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *EventAck) Reset() {
+	*x = EventAck{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventAck) ProtoMessage() {}
+
+func (x *EventAck) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventAck.ProtoReflect.Descriptor instead.
+func (*EventAck) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *EventAck) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *EventAck) GetThroughSequence() uint64 {
+	if x != nil {
+		return x.ThroughSequence
 	}
 	return 0
 }
@@ -844,24 +2627,54 @@ var File_iterabase_harness_v1_harness_proto protoreflect.FileDescriptor
 
 const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\n" +
-	"\"iterabase/harness/v1/harness.proto\x12\x14iterabase.harness.v1\"^\n" +
-	"\rPromptRequest\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\x123\n" +
-	"\x06images\x18\x02 \x03(\v2\x1b.iterabase.harness.v1.ImageR\x06images\"8\n" +
-	"\x05Image\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1b\n" +
-	"\tmime_type\x18\x02 \x01(\tR\bmimeType\"\x0e\n" +
-	"\fAbortRequest\"\x0f\n" +
-	"\rAbortResponse\"\xe3\x02\n" +
-	"\x05Event\x12F\n" +
-	"\fturn_started\x18\x01 \x01(\v2!.iterabase.harness.v1.TurnStartedH\x00R\vturnStarted\x12U\n" +
-	"\x11assistant_message\x18\x02 \x01(\v2&.iterabase.harness.v1.AssistantMessageH\x00R\x10assistantMessage\x12C\n" +
-	"\vtool_result\x18\x03 \x01(\v2 .iterabase.harness.v1.ToolResultH\x00R\n" +
-	"toolResult\x123\n" +
-	"\x05error\x18\x04 \x01(\v2\x1b.iterabase.harness.v1.ErrorH\x00R\x05error\x129\n" +
-	"\asettled\x18\x05 \x01(\v2\x1d.iterabase.harness.v1.SettledH\x00R\asettledB\x06\n" +
-	"\x04kind\"J\n" +
-	"\vTurnStarted\x12\x14\n" +
+	"\"iterabase/harness/v1/harness.proto\x12\x14iterabase.harness.v1\"\xc9\x02\n" +
+	"\rWorkerMessage\x123\n" +
+	"\x05hello\x18\x01 \x01(\v2\x1b.iterabase.harness.v1.HelloH\x00R\x05hello\x123\n" +
+	"\x05ready\x18\x02 \x01(\v2\x1b.iterabase.harness.v1.ReadyH\x00R\x05ready\x12?\n" +
+	"\theartbeat\x18\x03 \x01(\v2\x1f.iterabase.harness.v1.HeartbeatH\x00R\theartbeat\x12@\n" +
+	"\n" +
+	"turn_event\x18\x04 \x01(\v2\x1f.iterabase.harness.v1.TurnEventH\x00R\tturnEvent\x12C\n" +
+	"\vtoken_delta\x18\x05 \x01(\v2 .iterabase.harness.v1.TokenDeltaH\x00R\n" +
+	"tokenDeltaB\x06\n" +
+	"\x04kind\"\xb1\x01\n" +
+	"\x05Hello\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x17\n" +
+	"\apool_id\x18\x02 \x01(\tR\x06poolId\x12#\n" +
+	"\rbuild_version\x18\x03 \x01(\tR\fbuildVersion\x12)\n" +
+	"\x10protocol_version\x18\x04 \x01(\tR\x0fprotocolVersion\x12\"\n" +
+	"\fcapabilities\x18\x05 \x03(\tR\fcapabilities\"\a\n" +
+	"\x05Ready\"\xe4\x01\n" +
+	"\tHeartbeat\x127\n" +
+	"\x05state\x18\x01 \x01(\x0e2!.iterabase.harness.v1.WorkerStateR\x05state\x12\x17\n" +
+	"\aturn_id\x18\x02 \x01(\tR\x06turnId\x128\n" +
+	"\bpi_phase\x18\x03 \x01(\x0e2\x1d.iterabase.harness.v1.PiPhaseR\apiPhase\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12)\n" +
+	"\x10highest_sequence\x18\x05 \x01(\x04R\x0fhighestSequence\"\xef\b\n" +
+	"\tTurnEvent\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1a\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12!\n" +
+	"\ftimestamp_ms\x18\x03 \x01(\x03R\vtimestampMs\x12U\n" +
+	"\x11execution_started\x18\n" +
+	" \x01(\v2&.iterabase.harness.v1.ExecutionStartedH\x00R\x10executionStarted\x12V\n" +
+	"\x12model_call_started\x18\v \x01(\v2&.iterabase.harness.v1.ModelCallStartedH\x00R\x10modelCallStarted\x12U\n" +
+	"\x11assistant_message\x18\f \x01(\v2&.iterabase.harness.v1.AssistantMessageH\x00R\x10assistantMessage\x12S\n" +
+	"\x11model_call_failed\x18\r \x01(\v2%.iterabase.harness.v1.ModelCallFailedH\x00R\x0fmodelCallFailed\x12_\n" +
+	"\x15model_retry_scheduled\x18\x0e \x01(\v2).iterabase.harness.v1.ModelRetryScheduledH\x00R\x13modelRetryScheduled\x12\\\n" +
+	"\x14model_retry_finished\x18\x0f \x01(\v2(.iterabase.harness.v1.ModelRetryFinishedH\x00R\x12modelRetryFinished\x12S\n" +
+	"\x11tool_call_started\x18\x10 \x01(\v2%.iterabase.harness.v1.ToolCallStartedH\x00R\x0ftoolCallStarted\x12C\n" +
+	"\vtool_result\x18\x11 \x01(\v2 .iterabase.harness.v1.ToolResultH\x00R\n" +
+	"toolResult\x12X\n" +
+	"\x12compaction_started\x18\x12 \x01(\v2'.iterabase.harness.v1.CompactionStartedH\x00R\x11compactionStarted\x12[\n" +
+	"\x13compaction_finished\x18\x13 \x01(\v2(.iterabase.harness.v1.CompactionFinishedH\x00R\x12compactionFinished\x12I\n" +
+	"\rharness_error\x18\x14 \x01(\v2\".iterabase.harness.v1.HarnessErrorH\x00R\fharnessError\x12L\n" +
+	"\x0eworker_outcome\x18\x15 \x01(\v2#.iterabase.harness.v1.WorkerOutcomeH\x00R\rworkerOutcomeB\x06\n" +
+	"\x04kind\"m\n" +
+	"\x10ExecutionStarted\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12:\n" +
+	"\asandbox\x18\x02 \x01(\v2 .iterabase.harness.v1.SandboxRefR\asandbox\"O\n" +
+	"\x10ModelCallStarted\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12%\n" +
 	"\x0ethinking_level\x18\x02 \x01(\tR\rthinkingLevel\"\xdc\x01\n" +
 	"\x10AssistantMessage\x12\x12\n" +
@@ -875,6 +2688,11 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\bToolCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
+	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\"w\n" +
+	"\x0fToolCallStarted\x12 \n" +
+	"\ftool_call_id\x18\x01 \x01(\tR\n" +
+	"toolCallId\x12\x1b\n" +
+	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12%\n" +
 	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\"\xd1\x01\n" +
 	"\n" +
 	"ToolResult\x12 \n" +
@@ -891,21 +2709,133 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\routput_tokens\x18\x02 \x01(\x03R\foutputTokens\x12*\n" +
 	"\x11cache_read_tokens\x18\x03 \x01(\x03R\x0fcacheReadTokens\x12,\n" +
 	"\x12cache_write_tokens\x18\x04 \x01(\x03R\x10cacheWriteTokens\x12\x19\n" +
-	"\bcost_usd\x18\x05 \x01(\x01R\acostUsd\"9\n" +
-	"\x05Error\x12\x16\n" +
-	"\x06source\x18\x01 \x01(\tR\x06source\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xcb\x01\n" +
-	"\aSettled\x12<\n" +
-	"\x06reason\x18\x01 \x01(\x0e2$.iterabase.harness.v1.Settled.ReasonR\x06reason\x12#\n" +
-	"\rmessage_count\x18\x02 \x01(\x05R\fmessageCount\"]\n" +
-	"\x06Reason\x12\x16\n" +
-	"\x12REASON_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10REASON_COMPLETED\x10\x01\x12\x12\n" +
-	"\x0eREASON_ABORTED\x10\x02\x12\x11\n" +
-	"\rREASON_FAILED\x10\x032\xa9\x01\n" +
-	"\aHarness\x12L\n" +
-	"\x06Prompt\x12#.iterabase.harness.v1.PromptRequest\x1a\x1b.iterabase.harness.v1.Event0\x01\x12P\n" +
-	"\x05Abort\x12\".iterabase.harness.v1.AbortRequest\x1a#.iterabase.harness.v1.AbortResponseB\xf6\x01\n" +
+	"\bcost_usd\x18\x05 \x01(\x01R\acostUsd\"J\n" +
+	"\x0fModelCallFailed\x127\n" +
+	"\x05error\x18\x01 \x01(\v2!.iterabase.harness.v1.ErrorDetailR\x05error\"\x92\x01\n" +
+	"\x13ModelRetryScheduled\x12\x18\n" +
+	"\aattempt\x18\x01 \x01(\rR\aattempt\x12!\n" +
+	"\fmax_attempts\x18\x02 \x01(\rR\vmaxAttempts\x12\x19\n" +
+	"\bdelay_ms\x18\x03 \x01(\x03R\adelayMs\x12#\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"i\n" +
+	"\x12ModelRetryFinished\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\aattempt\x18\x02 \x01(\rR\aattempt\x12\x1f\n" +
+	"\vfinal_error\x18\x03 \x01(\tR\n" +
+	"finalError\"+\n" +
+	"\x11CompactionStarted\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x8a\x01\n" +
+	"\x12CompactionFinished\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
+	"\aaborted\x18\x02 \x01(\bR\aaborted\x12\x1d\n" +
+	"\n" +
+	"will_retry\x18\x03 \x01(\bR\twillRetry\x12#\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"G\n" +
+	"\fHarnessError\x127\n" +
+	"\x05error\x18\x01 \x01(\v2!.iterabase.harness.v1.ErrorDetailR\x05error\"\xa6\x01\n" +
+	"\vErrorDetail\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12F\n" +
+	"\fretryability\x18\x03 \x01(\x0e2\".iterabase.harness.v1.RetryabilityR\fretryability\x12!\n" +
+	"\fdetails_json\x18\x04 \x01(\tR\vdetailsJson\"b\n" +
+	"\rWorkerOutcome\x127\n" +
+	"\aoutcome\x18\x01 \x01(\x0e2\x1d.iterabase.harness.v1.OutcomeR\aoutcome\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x95\x01\n" +
+	"\n" +
+	"TokenDelta\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12#\n" +
+	"\rcontent_index\x18\x02 \x01(\x05R\fcontentIndex\x123\n" +
+	"\x04type\x18\x03 \x01(\x0e2\x1f.iterabase.harness.v1.DeltaTypeR\x04type\x12\x14\n" +
+	"\x05delta\x18\x04 \x01(\tR\x05delta\"\x99\x02\n" +
+	"\x0eControlMessage\x129\n" +
+	"\awelcome\x18\x01 \x01(\v2\x1d.iterabase.harness.v1.WelcomeH\x00R\awelcome\x12C\n" +
+	"\vassign_turn\x18\x02 \x01(\v2 .iterabase.harness.v1.AssignTurnH\x00R\n" +
+	"assignTurn\x12@\n" +
+	"\n" +
+	"abort_turn\x18\x03 \x01(\v2\x1f.iterabase.harness.v1.AbortTurnH\x00R\tabortTurn\x12=\n" +
+	"\tevent_ack\x18\x04 \x01(\v2\x1e.iterabase.harness.v1.EventAckH\x00R\beventAckB\x06\n" +
+	"\x04kind\"\xc1\x01\n" +
+	"\aWelcome\x12)\n" +
+	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
+	"\x12fencing_generation\x18\x02 \x01(\x04R\x11fencingGeneration\x122\n" +
+	"\x15heartbeat_interval_ms\x18\x03 \x01(\x05R\x13heartbeatIntervalMs\x12(\n" +
+	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\x9b\x03\n" +
+	"\n" +
+	"AssignTurn\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12:\n" +
+	"\asandbox\x18\x03 \x01(\v2 .iterabase.harness.v1.SandboxRefR\asandbox\x12\x18\n" +
+	"\apersona\x18\x04 \x01(\tR\apersona\x127\n" +
+	"\x05model\x18\x05 \x01(\v2!.iterabase.harness.v1.ModelConfigR\x05model\x12K\n" +
+	"\x0ftool_allow_list\x18\x06 \x01(\v2#.iterabase.harness.v1.ToolAllowListR\rtoolAllowList\x12*\n" +
+	"\x11scope_identity_id\x18\a \x01(\tR\x0fscopeIdentityId\x12\x18\n" +
+	"\amessage\x18\b \x01(\tR\amessage\x123\n" +
+	"\x06images\x18\t \x03(\v2\x1b.iterabase.harness.v1.ImageR\x06images\"p\n" +
+	"\n" +
+	"SandboxRef\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x10\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x10\n" +
+	"\x03gid\x18\x03 \x01(\rR\x03gid\x12\x1f\n" +
+	"\vworking_dir\x18\x04 \x01(\tR\n" +
+	"workingDir\"\xa9\x01\n" +
+	"\vModelConfig\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
+	"\x03api\x18\x02 \x01(\tR\x03api\x12%\n" +
+	"\x0econtext_window\x18\x03 \x01(\x05R\rcontextWindow\x12*\n" +
+	"\x11max_output_tokens\x18\x04 \x01(\x05R\x0fmaxOutputTokens\x12%\n" +
+	"\x0ethinking_level\x18\x05 \x01(\tR\rthinkingLevel\"7\n" +
+	"\rToolAllowList\x12\x10\n" +
+	"\x03all\x18\x01 \x01(\bR\x03all\x12\x14\n" +
+	"\x05tools\x18\x02 \x03(\tR\x05tools\"8\n" +
+	"\x05Image\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1b\n" +
+	"\tmime_type\x18\x02 \x01(\tR\bmimeType\"y\n" +
+	"\tAbortTurn\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x129\n" +
+	"\x06reason\x18\x02 \x01(\x0e2!.iterabase.harness.v1.AbortReasonR\x06reason\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"N\n" +
+	"\bEventAck\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12)\n" +
+	"\x10through_sequence\x18\x02 \x01(\x04R\x0fthroughSequence*\xc8\x01\n" +
+	"\vWorkerState\x12\x1c\n" +
+	"\x18WORKER_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11WORKER_STATE_IDLE\x10\x01\x12\x19\n" +
+	"\x15WORKER_STATE_STARTING\x10\x02\x12\x18\n" +
+	"\x14WORKER_STATE_RUNNING\x10\x03\x12\x19\n" +
+	"\x15WORKER_STATE_ABORTING\x10\x04\x12\x19\n" +
+	"\x15WORKER_STATE_CLEANING\x10\x05\x12\x19\n" +
+	"\x15WORKER_STATE_DRAINING\x10\x06*\xbc\x01\n" +
+	"\aPiPhase\x12\x18\n" +
+	"\x14PI_PHASE_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16PI_PHASE_SESSION_SETUP\x10\x01\x12\x17\n" +
+	"\x13PI_PHASE_MODEL_CALL\x10\x02\x12\x16\n" +
+	"\x12PI_PHASE_TOOL_CALL\x10\x03\x12\x17\n" +
+	"\x13PI_PHASE_COMPACTION\x10\x04\x12\x1a\n" +
+	"\x16PI_PHASE_RETRY_BACKOFF\x10\x05\x12\x15\n" +
+	"\x11PI_PHASE_SHUTDOWN\x10\x06*\x82\x01\n" +
+	"\fRetryability\x12\x1c\n" +
+	"\x18RETRYABILITY_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16RETRYABILITY_RETRYABLE\x10\x01\x12\x1e\n" +
+	"\x1aRETRYABILITY_NON_RETRYABLE\x10\x02\x12\x18\n" +
+	"\x14RETRYABILITY_UNKNOWN\x10\x03*b\n" +
+	"\aOutcome\x12\x17\n" +
+	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11OUTCOME_COMPLETED\x10\x01\x12\x13\n" +
+	"\x0fOUTCOME_ABORTED\x10\x02\x12\x12\n" +
+	"\x0eOUTCOME_FAILED\x10\x03*U\n" +
+	"\tDeltaType\x12\x1a\n" +
+	"\x16DELTA_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fDELTA_TYPE_TEXT\x10\x01\x12\x17\n" +
+	"\x13DELTA_TYPE_THINKING\x10\x02*\xae\x01\n" +
+	"\vAbortReason\x12\x1c\n" +
+	"\x18ABORT_REASON_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18ABORT_REASON_USER_CANCEL\x10\x01\x12 \n" +
+	"\x1cABORT_REASON_WORKFLOW_CANCEL\x10\x02\x12\x1e\n" +
+	"\x1aABORT_REASON_LEASE_EXPIRED\x10\x03\x12!\n" +
+	"\x1dABORT_REASON_WORKFLOW_TIMEOUT\x10\x042`\n" +
+	"\aHarness\x12U\n" +
+	"\x04Work\x12#.iterabase.harness.v1.WorkerMessage\x1a$.iterabase.harness.v1.ControlMessage(\x010\x01B\xf6\x01\n" +
 	"\x18com.iterabase.harness.v1B\fHarnessProtoP\x01ZZgithub.com/nunocgoncalves/control-plane/internal/harnessrpc/iterabase/harness/v1;harnessv1\xa2\x02\x03IHX\xaa\x02\x14Iterabase.Harness.V1\xca\x02\x14Iterabase\\Harness\\V1\xe2\x02 Iterabase\\Harness\\V1\\GPBMetadata\xea\x02\x16Iterabase::Harness::V1b\x06proto3"
 
 var (
@@ -920,42 +2850,90 @@ func file_iterabase_harness_v1_harness_proto_rawDescGZIP() []byte {
 	return file_iterabase_harness_v1_harness_proto_rawDescData
 }
 
-var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_iterabase_harness_v1_harness_proto_goTypes = []any{
-	(Settled_Reason)(0),      // 0: iterabase.harness.v1.Settled.Reason
-	(*PromptRequest)(nil),    // 1: iterabase.harness.v1.PromptRequest
-	(*Image)(nil),            // 2: iterabase.harness.v1.Image
-	(*AbortRequest)(nil),     // 3: iterabase.harness.v1.AbortRequest
-	(*AbortResponse)(nil),    // 4: iterabase.harness.v1.AbortResponse
-	(*Event)(nil),            // 5: iterabase.harness.v1.Event
-	(*TurnStarted)(nil),      // 6: iterabase.harness.v1.TurnStarted
-	(*AssistantMessage)(nil), // 7: iterabase.harness.v1.AssistantMessage
-	(*ToolCall)(nil),         // 8: iterabase.harness.v1.ToolCall
-	(*ToolResult)(nil),       // 9: iterabase.harness.v1.ToolResult
-	(*Usage)(nil),            // 10: iterabase.harness.v1.Usage
-	(*Error)(nil),            // 11: iterabase.harness.v1.Error
-	(*Settled)(nil),          // 12: iterabase.harness.v1.Settled
+	(WorkerState)(0),            // 0: iterabase.harness.v1.WorkerState
+	(PiPhase)(0),                // 1: iterabase.harness.v1.PiPhase
+	(Retryability)(0),           // 2: iterabase.harness.v1.Retryability
+	(Outcome)(0),                // 3: iterabase.harness.v1.Outcome
+	(DeltaType)(0),              // 4: iterabase.harness.v1.DeltaType
+	(AbortReason)(0),            // 5: iterabase.harness.v1.AbortReason
+	(*WorkerMessage)(nil),       // 6: iterabase.harness.v1.WorkerMessage
+	(*Hello)(nil),               // 7: iterabase.harness.v1.Hello
+	(*Ready)(nil),               // 8: iterabase.harness.v1.Ready
+	(*Heartbeat)(nil),           // 9: iterabase.harness.v1.Heartbeat
+	(*TurnEvent)(nil),           // 10: iterabase.harness.v1.TurnEvent
+	(*ExecutionStarted)(nil),    // 11: iterabase.harness.v1.ExecutionStarted
+	(*ModelCallStarted)(nil),    // 12: iterabase.harness.v1.ModelCallStarted
+	(*AssistantMessage)(nil),    // 13: iterabase.harness.v1.AssistantMessage
+	(*ToolCall)(nil),            // 14: iterabase.harness.v1.ToolCall
+	(*ToolCallStarted)(nil),     // 15: iterabase.harness.v1.ToolCallStarted
+	(*ToolResult)(nil),          // 16: iterabase.harness.v1.ToolResult
+	(*Usage)(nil),               // 17: iterabase.harness.v1.Usage
+	(*ModelCallFailed)(nil),     // 18: iterabase.harness.v1.ModelCallFailed
+	(*ModelRetryScheduled)(nil), // 19: iterabase.harness.v1.ModelRetryScheduled
+	(*ModelRetryFinished)(nil),  // 20: iterabase.harness.v1.ModelRetryFinished
+	(*CompactionStarted)(nil),   // 21: iterabase.harness.v1.CompactionStarted
+	(*CompactionFinished)(nil),  // 22: iterabase.harness.v1.CompactionFinished
+	(*HarnessError)(nil),        // 23: iterabase.harness.v1.HarnessError
+	(*ErrorDetail)(nil),         // 24: iterabase.harness.v1.ErrorDetail
+	(*WorkerOutcome)(nil),       // 25: iterabase.harness.v1.WorkerOutcome
+	(*TokenDelta)(nil),          // 26: iterabase.harness.v1.TokenDelta
+	(*ControlMessage)(nil),      // 27: iterabase.harness.v1.ControlMessage
+	(*Welcome)(nil),             // 28: iterabase.harness.v1.Welcome
+	(*AssignTurn)(nil),          // 29: iterabase.harness.v1.AssignTurn
+	(*SandboxRef)(nil),          // 30: iterabase.harness.v1.SandboxRef
+	(*ModelConfig)(nil),         // 31: iterabase.harness.v1.ModelConfig
+	(*ToolAllowList)(nil),       // 32: iterabase.harness.v1.ToolAllowList
+	(*Image)(nil),               // 33: iterabase.harness.v1.Image
+	(*AbortTurn)(nil),           // 34: iterabase.harness.v1.AbortTurn
+	(*EventAck)(nil),            // 35: iterabase.harness.v1.EventAck
 }
 var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
-	2,  // 0: iterabase.harness.v1.PromptRequest.images:type_name -> iterabase.harness.v1.Image
-	6,  // 1: iterabase.harness.v1.Event.turn_started:type_name -> iterabase.harness.v1.TurnStarted
-	7,  // 2: iterabase.harness.v1.Event.assistant_message:type_name -> iterabase.harness.v1.AssistantMessage
-	9,  // 3: iterabase.harness.v1.Event.tool_result:type_name -> iterabase.harness.v1.ToolResult
-	11, // 4: iterabase.harness.v1.Event.error:type_name -> iterabase.harness.v1.Error
-	12, // 5: iterabase.harness.v1.Event.settled:type_name -> iterabase.harness.v1.Settled
-	8,  // 6: iterabase.harness.v1.AssistantMessage.tool_calls:type_name -> iterabase.harness.v1.ToolCall
-	10, // 7: iterabase.harness.v1.AssistantMessage.usage:type_name -> iterabase.harness.v1.Usage
-	0,  // 8: iterabase.harness.v1.Settled.reason:type_name -> iterabase.harness.v1.Settled.Reason
-	1,  // 9: iterabase.harness.v1.Harness.Prompt:input_type -> iterabase.harness.v1.PromptRequest
-	3,  // 10: iterabase.harness.v1.Harness.Abort:input_type -> iterabase.harness.v1.AbortRequest
-	5,  // 11: iterabase.harness.v1.Harness.Prompt:output_type -> iterabase.harness.v1.Event
-	4,  // 12: iterabase.harness.v1.Harness.Abort:output_type -> iterabase.harness.v1.AbortResponse
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	7,  // 0: iterabase.harness.v1.WorkerMessage.hello:type_name -> iterabase.harness.v1.Hello
+	8,  // 1: iterabase.harness.v1.WorkerMessage.ready:type_name -> iterabase.harness.v1.Ready
+	9,  // 2: iterabase.harness.v1.WorkerMessage.heartbeat:type_name -> iterabase.harness.v1.Heartbeat
+	10, // 3: iterabase.harness.v1.WorkerMessage.turn_event:type_name -> iterabase.harness.v1.TurnEvent
+	26, // 4: iterabase.harness.v1.WorkerMessage.token_delta:type_name -> iterabase.harness.v1.TokenDelta
+	0,  // 5: iterabase.harness.v1.Heartbeat.state:type_name -> iterabase.harness.v1.WorkerState
+	1,  // 6: iterabase.harness.v1.Heartbeat.pi_phase:type_name -> iterabase.harness.v1.PiPhase
+	11, // 7: iterabase.harness.v1.TurnEvent.execution_started:type_name -> iterabase.harness.v1.ExecutionStarted
+	12, // 8: iterabase.harness.v1.TurnEvent.model_call_started:type_name -> iterabase.harness.v1.ModelCallStarted
+	13, // 9: iterabase.harness.v1.TurnEvent.assistant_message:type_name -> iterabase.harness.v1.AssistantMessage
+	18, // 10: iterabase.harness.v1.TurnEvent.model_call_failed:type_name -> iterabase.harness.v1.ModelCallFailed
+	19, // 11: iterabase.harness.v1.TurnEvent.model_retry_scheduled:type_name -> iterabase.harness.v1.ModelRetryScheduled
+	20, // 12: iterabase.harness.v1.TurnEvent.model_retry_finished:type_name -> iterabase.harness.v1.ModelRetryFinished
+	15, // 13: iterabase.harness.v1.TurnEvent.tool_call_started:type_name -> iterabase.harness.v1.ToolCallStarted
+	16, // 14: iterabase.harness.v1.TurnEvent.tool_result:type_name -> iterabase.harness.v1.ToolResult
+	21, // 15: iterabase.harness.v1.TurnEvent.compaction_started:type_name -> iterabase.harness.v1.CompactionStarted
+	22, // 16: iterabase.harness.v1.TurnEvent.compaction_finished:type_name -> iterabase.harness.v1.CompactionFinished
+	23, // 17: iterabase.harness.v1.TurnEvent.harness_error:type_name -> iterabase.harness.v1.HarnessError
+	25, // 18: iterabase.harness.v1.TurnEvent.worker_outcome:type_name -> iterabase.harness.v1.WorkerOutcome
+	30, // 19: iterabase.harness.v1.ExecutionStarted.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	14, // 20: iterabase.harness.v1.AssistantMessage.tool_calls:type_name -> iterabase.harness.v1.ToolCall
+	17, // 21: iterabase.harness.v1.AssistantMessage.usage:type_name -> iterabase.harness.v1.Usage
+	24, // 22: iterabase.harness.v1.ModelCallFailed.error:type_name -> iterabase.harness.v1.ErrorDetail
+	24, // 23: iterabase.harness.v1.HarnessError.error:type_name -> iterabase.harness.v1.ErrorDetail
+	2,  // 24: iterabase.harness.v1.ErrorDetail.retryability:type_name -> iterabase.harness.v1.Retryability
+	3,  // 25: iterabase.harness.v1.WorkerOutcome.outcome:type_name -> iterabase.harness.v1.Outcome
+	4,  // 26: iterabase.harness.v1.TokenDelta.type:type_name -> iterabase.harness.v1.DeltaType
+	28, // 27: iterabase.harness.v1.ControlMessage.welcome:type_name -> iterabase.harness.v1.Welcome
+	29, // 28: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
+	34, // 29: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
+	35, // 30: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
+	30, // 31: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	31, // 32: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
+	32, // 33: iterabase.harness.v1.AssignTurn.tool_allow_list:type_name -> iterabase.harness.v1.ToolAllowList
+	33, // 34: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
+	5,  // 35: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
+	6,  // 36: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
+	27, // 37: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
+	37, // [37:38] is the sub-list for method output_type
+	36, // [36:37] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_harness_v1_harness_proto_init() }
@@ -963,20 +2941,40 @@ func file_iterabase_harness_v1_harness_proto_init() {
 	if File_iterabase_harness_v1_harness_proto != nil {
 		return
 	}
+	file_iterabase_harness_v1_harness_proto_msgTypes[0].OneofWrappers = []any{
+		(*WorkerMessage_Hello)(nil),
+		(*WorkerMessage_Ready)(nil),
+		(*WorkerMessage_Heartbeat)(nil),
+		(*WorkerMessage_TurnEvent)(nil),
+		(*WorkerMessage_TokenDelta)(nil),
+	}
 	file_iterabase_harness_v1_harness_proto_msgTypes[4].OneofWrappers = []any{
-		(*Event_TurnStarted)(nil),
-		(*Event_AssistantMessage)(nil),
-		(*Event_ToolResult)(nil),
-		(*Event_Error)(nil),
-		(*Event_Settled)(nil),
+		(*TurnEvent_ExecutionStarted)(nil),
+		(*TurnEvent_ModelCallStarted)(nil),
+		(*TurnEvent_AssistantMessage)(nil),
+		(*TurnEvent_ModelCallFailed)(nil),
+		(*TurnEvent_ModelRetryScheduled)(nil),
+		(*TurnEvent_ModelRetryFinished)(nil),
+		(*TurnEvent_ToolCallStarted)(nil),
+		(*TurnEvent_ToolResult)(nil),
+		(*TurnEvent_CompactionStarted)(nil),
+		(*TurnEvent_CompactionFinished)(nil),
+		(*TurnEvent_HarnessError)(nil),
+		(*TurnEvent_WorkerOutcome)(nil),
+	}
+	file_iterabase_harness_v1_harness_proto_msgTypes[21].OneofWrappers = []any{
+		(*ControlMessage_Welcome)(nil),
+		(*ControlMessage_AssignTurn)(nil),
+		(*ControlMessage_AbortTurn)(nil),
+		(*ControlMessage_EventAck)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_harness_v1_harness_proto_rawDesc), len(file_iterabase_harness_v1_harness_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   12,
+			NumEnums:      6,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

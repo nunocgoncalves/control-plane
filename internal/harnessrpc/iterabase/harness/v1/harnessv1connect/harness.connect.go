@@ -33,22 +33,16 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// HarnessPromptProcedure is the fully-qualified name of the Harness's Prompt RPC.
-	HarnessPromptProcedure = "/iterabase.harness.v1.Harness/Prompt"
-	// HarnessAbortProcedure is the fully-qualified name of the Harness's Abort RPC.
-	HarnessAbortProcedure = "/iterabase.harness.v1.Harness/Abort"
+	// HarnessWorkProcedure is the fully-qualified name of the Harness's Work RPC.
+	HarnessWorkProcedure = "/iterabase.harness.v1.Harness/Work"
 )
 
 // HarnessClient is a client for the iterabase.harness.v1.Harness service.
 type HarnessClient interface {
-	// Prompt sends a user message and streams curated agent events until the
-	// turn settles, then the stream closes. The control-plane records events to
-	// the Postgres event/audit log (HOR-249). Per-task instructions ride in
-	// `message`; the persona/system prompt is pod-level config.
-	Prompt(context.Context, *connect.Request[v1.PromptRequest]) (*connect.ServerStreamForClient[v1.Event], error)
-	// Abort cancels the pod's active turn (one pod = one active turn). The
-	// in-flight Prompt stream then emits Settled{aborted} and closes.
-	Abort(context.Context, *connect.Request[v1.AbortRequest]) (*connect.Response[v1.AbortResponse], error)
+	// Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
+	// Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
+	// Welcome, AssignTurn, AbortTurn, EventAck.
+	Work(context.Context) *connect.BidiStreamForClient[v1.WorkerMessage, v1.ControlMessage]
 }
 
 // NewHarnessClient constructs a client for the iterabase.harness.v1.Harness service. By default, it
@@ -62,16 +56,10 @@ func NewHarnessClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 	baseURL = strings.TrimRight(baseURL, "/")
 	harnessMethods := v1.File_iterabase_harness_v1_harness_proto.Services().ByName("Harness").Methods()
 	return &harnessClient{
-		prompt: connect.NewClient[v1.PromptRequest, v1.Event](
+		work: connect.NewClient[v1.WorkerMessage, v1.ControlMessage](
 			httpClient,
-			baseURL+HarnessPromptProcedure,
-			connect.WithSchema(harnessMethods.ByName("Prompt")),
-			connect.WithClientOptions(opts...),
-		),
-		abort: connect.NewClient[v1.AbortRequest, v1.AbortResponse](
-			httpClient,
-			baseURL+HarnessAbortProcedure,
-			connect.WithSchema(harnessMethods.ByName("Abort")),
+			baseURL+HarnessWorkProcedure,
+			connect.WithSchema(harnessMethods.ByName("Work")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -79,30 +67,20 @@ func NewHarnessClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 
 // harnessClient implements HarnessClient.
 type harnessClient struct {
-	prompt *connect.Client[v1.PromptRequest, v1.Event]
-	abort  *connect.Client[v1.AbortRequest, v1.AbortResponse]
+	work *connect.Client[v1.WorkerMessage, v1.ControlMessage]
 }
 
-// Prompt calls iterabase.harness.v1.Harness.Prompt.
-func (c *harnessClient) Prompt(ctx context.Context, req *connect.Request[v1.PromptRequest]) (*connect.ServerStreamForClient[v1.Event], error) {
-	return c.prompt.CallServerStream(ctx, req)
-}
-
-// Abort calls iterabase.harness.v1.Harness.Abort.
-func (c *harnessClient) Abort(ctx context.Context, req *connect.Request[v1.AbortRequest]) (*connect.Response[v1.AbortResponse], error) {
-	return c.abort.CallUnary(ctx, req)
+// Work calls iterabase.harness.v1.Harness.Work.
+func (c *harnessClient) Work(ctx context.Context) *connect.BidiStreamForClient[v1.WorkerMessage, v1.ControlMessage] {
+	return c.work.CallBidiStream(ctx)
 }
 
 // HarnessHandler is an implementation of the iterabase.harness.v1.Harness service.
 type HarnessHandler interface {
-	// Prompt sends a user message and streams curated agent events until the
-	// turn settles, then the stream closes. The control-plane records events to
-	// the Postgres event/audit log (HOR-249). Per-task instructions ride in
-	// `message`; the persona/system prompt is pod-level config.
-	Prompt(context.Context, *connect.Request[v1.PromptRequest], *connect.ServerStream[v1.Event]) error
-	// Abort cancels the pod's active turn (one pod = one active turn). The
-	// in-flight Prompt stream then emits Settled{aborted} and closes.
-	Abort(context.Context, *connect.Request[v1.AbortRequest]) (*connect.Response[v1.AbortResponse], error)
+	// Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
+	// Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
+	// Welcome, AssignTurn, AbortTurn, EventAck.
+	Work(context.Context, *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error
 }
 
 // NewHarnessHandler builds an HTTP handler from the service implementation. It returns the path on
@@ -112,24 +90,16 @@ type HarnessHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewHarnessHandler(svc HarnessHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	harnessMethods := v1.File_iterabase_harness_v1_harness_proto.Services().ByName("Harness").Methods()
-	harnessPromptHandler := connect.NewServerStreamHandler(
-		HarnessPromptProcedure,
-		svc.Prompt,
-		connect.WithSchema(harnessMethods.ByName("Prompt")),
-		connect.WithHandlerOptions(opts...),
-	)
-	harnessAbortHandler := connect.NewUnaryHandler(
-		HarnessAbortProcedure,
-		svc.Abort,
-		connect.WithSchema(harnessMethods.ByName("Abort")),
+	harnessWorkHandler := connect.NewBidiStreamHandler(
+		HarnessWorkProcedure,
+		svc.Work,
+		connect.WithSchema(harnessMethods.ByName("Work")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/iterabase.harness.v1.Harness/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case HarnessPromptProcedure:
-			harnessPromptHandler.ServeHTTP(w, r)
-		case HarnessAbortProcedure:
-			harnessAbortHandler.ServeHTTP(w, r)
+		case HarnessWorkProcedure:
+			harnessWorkHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -139,10 +109,6 @@ func NewHarnessHandler(svc HarnessHandler, opts ...connect.HandlerOption) (strin
 // UnimplementedHarnessHandler returns CodeUnimplemented from all methods.
 type UnimplementedHarnessHandler struct{}
 
-func (UnimplementedHarnessHandler) Prompt(context.Context, *connect.Request[v1.PromptRequest], *connect.ServerStream[v1.Event]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.harness.v1.Harness.Prompt is not implemented"))
-}
-
-func (UnimplementedHarnessHandler) Abort(context.Context, *connect.Request[v1.AbortRequest]) (*connect.Response[v1.AbortResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.harness.v1.Harness.Abort is not implemented"))
+func (UnimplementedHarnessHandler) Work(context.Context, *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.harness.v1.Harness.Work is not implemented"))
 }

@@ -1,4 +1,4 @@
-# buf module for the harness RPC contract (HOR-351).
+# buf module for the harness RPC contract (HOR-351 / HOR-381 warm-worker).
 # Run `make proto` from the repo root (it cd's here and runs buf generate).
 version: v2
 modules:
@@ -7,7 +7,10 @@ lint:
   use:
     - STANDARD
   except:
-    - RPC_RESPONSE_STANDARD_NAME # Event is a streamed event, not a FooResponse wrapper
+    - RPC_REQUEST_STANDARD_NAME  # Work is a bidi stream: WorkerMessage/ControlMessage are
+                                 # bidirectional messages, not a Request/Response pair.
+    - RPC_RESPONSE_STANDARD_NAME # (same — ControlMessage is a streamed control message,
+                                 # not a FooResponse wrapper)
     - SERVICE_SUFFIX              # Connect appends "Service" to the descriptor (Harness -> HarnessService)
 breaking:
   use:
