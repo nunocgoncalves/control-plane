@@ -1,151 +1,144 @@
 # harness
 
-The Node pi harness that runs in the AgentSandbox — **the agent** (HOR-351).
-The harness embeds pi via the SDK (`createAgentSession`) in-process and exposes
-a Connect RPC server (mTLS) that the Go control-plane (HOR-249) drives to feed
-messages and receive streamed agent events. Per-customer, fully isolated,
-self-hosted. See the Platform Direction doc (Obsidian: *Horizonshift Platform
-Direction*) §4/§7 for the architecture; this directory is the source of truth
-for the harness implementation intent.
+The Node pi harness worker that runs in the AgentSandbox — **the agent**
+(HOR-381). A **warm trusted supervisor** process maintains one long-lived mTLS
+gRPC `Work` bidi-stream to the control-plane (HOR-249) and, per turn, spawns a
+**disposable pi child** under a per-session UID/GID (via a `setpriv` launcher)
+that runs one turn, streams durable lifecycle events, and exits. Per-customer,
+fully isolated, self-hosted. See the Platform Direction doc (Obsidian:
+*Horizonshift Platform Direction*) §4/§7/§9 + the HOR-381 plan note for the
+architecture; this directory is the source of truth for the harness
+implementation intent.
 
-## Status
+Supersedes the HOR-351 "boot-bound-to-one-session Connect server" (Prompt/Abort)
+— the worker is now the mTLS gRPC **client** (no inbound RPC); per-turn
+stateless (the process is warm; only the per-turn child + its in-memory session
+are per-turn).
 
-**Scaffold (HOR-351).** The `.proto` contract, buf config, project skeleton,
-and config loader are in place. Wiring (Connect server, event mapping, model
-provider registration, probes, SIGTERM) lands as the ticket progresses.
-Prerequisite for HOR-245 (the pod needs the image) and HOR-249 (orchestration
-drives the RPC). Part of the 3-day demo.
+## Architecture
+
+```
+worker pod
+├── supervisor (long-lived, trusted; dist/main.js)         UID 65532 + CAP_SETUID/SETGID (HOR-245)
+│   ├── mTLS Work bidi-stream client (worker=client, CP=server)
+│   ├── protocol state machine (single-credit invariant) + heartbeat
+│   ├── event outbox + WAL (durable audit; no tail loss on crash)
+│   ├── probes (/healthz, /readyz) + SIGTERM drain
+│   └── child-process.ts: spawn the child via the setpriv launcher + IPC
+└── pi child (one assignment; dist/child.js)               session UID/GID, no caps, no_new_privs
+    ├── fresh AgentSessionRuntime (resume-or-create from the PVC)
+    └── pi AgentSessionEvent -> durable TurnEvent payloads (stdout IPC)
+```
+
+The supervisor never imports pi/extensions/tools — it talks to the `Child`
+abstraction. The child is the only place model-directed code runs, under the
+session UID with kernel-enforced filesystem isolation.
 
 ## Contract (`proto/iterabase/harness/v1/harness.proto`)
 
-Connect + protobuf; the harness is the server (Node `@connectrpc/connect-node`),
-the control-plane is the client (Go `connect-go`). **mTLS from day one** — no
-shared token; certs provisioned by HOR-245.
+Native gRPC over HTTP/2 + mTLS (SPIFFE URI SAN binds Pod/pool identity). One
+bidi method: `rpc Work(stream WorkerMessage) returns (stream ControlMessage)`.
 
-| RPC | Type | Purpose |
-|---|---|---|
-| `Prompt` | server-streaming | send a message; stream `Event`s until `Settled`, then close |
-| `Abort` | unary | cancel the active turn; the open `Prompt` stream emits `Settled{aborted}` |
+- **Worker→CP:** `Hello` (cert-SAN-bound), `Ready` (one dispatch credit),
+  `Heartbeat`, `TurnEvent` (durable, sequenced, cumulatively ACKed),
+  `TokenDelta` (ephemeral, non-sequenced — live token streaming).
+- **CP→worker:** `Welcome` (fencing generation + lease intervals),
+  `AssignTurn` (per-turn session/persona/model/tool-allowlist/sandbox/message),
+  `AbortTurn` (idempotent), `EventAck` (cumulative, post-Postgres-commit).
 
-`Event` is a curated oneof: `TurnStarted` / `AssistantMessage` / `ToolResult` /
-`Error` / `Settled(reason)` (terminal). Plus plain-HTTP `GET /readyz` +
-`/healthz` for the kubelet (not RPC, loopback only).
+12 durable `TurnEvent` payloads (`ExecutionStarted`, `ModelCallStarted`,
+`AssistantMessage`, `ModelCallFailed`, `ModelRetryScheduled/Finished`,
+`ToolCallStarted`, `ToolResult`, `CompactionStarted/Finished`, `HarnessError`,
+`WorkerOutcome{COMPLETED|ABORTED|FAILED}`). `Steer`/`FollowUp` + CP-side
+token-delta UI forwarding are deferred (interactive surfaces).
 
-**Not in v1:** no session-management RPC, no `Health`/`GetState` RPC (the
-control-plane owns the `session.id`). `Steer`/`FollowUp` + live token streaming
-(`message_update` deltas) + `queue_update` are deferred — the "interactive
-surfaces" extension required by Teams (HOR-248) and Slack (HOR-261/262);
-non-breaking oneof/RPC additions.
+## Sandbox
 
-## Session model
-
-One pod = one pi session = one workflow-run/thread. The **control-plane owns
-the workflow/chat → `session.id` mapping** (Postgres, HOR-249) and generates the
-id. The harness **never auto-detects "most recent"** — it loads the specific
-session directed by `config.session.id` (scoped to a per-id dir under
-`config.session.dir`): resume (`SessionManager.open`) if it exists, create
-(`SessionManager.create`) if new. On crash, the control-plane restarts the pod
-with the same `session.id` and continues from its own recorded state.
+`/data/sandboxes/<sandbox-id>/{home,tmp,session,workspace}`, root `0700` owned
+by a stable CP-assigned session UID/GID; mount-root `0711` (traversable, not
+listable). The **provisioner (HOR-245) creates+chowns** sandboxes (+ repo CoW
+checkouts for agentic coding); the **supervisor validates-only** (never chowns,
+no v1 auto-create — missing/mismatched → typed `FAILED`). The child runs under
+the session UID with `no_new_privs` + all caps dropped (kernel `EACCES` for
+sibling session roots). Extension code is pool-bound read-only; the per-turn
+`toolAllowList` picks exposed tools.
 
 ## Config (`/etc/harness/config.yaml`, ConfigMap-mounted by HOR-245)
 
-```yaml
-persona: |              # v1 inline (systemPromptOverride); future = Persona CRD (HOR-363)
-  You are an email-triage agent…
-model: { id, endpoint, api: openai-completions, contextWindow }  # placeholder key; proxy injects real
-toolAllowList: "*"      # broad-default v1; HOR-243 resolves per caller, narrows via HOR-283
-session: { id, dir: /data/sessions }   # id is control-plane-generated; harness scopes by id
-piDirs: [/pi/product, /pi/client]      # client overrides product (last-wins)
-egressProxyUrl: https://localhost:<port>   # sidecar; routes model + tool traffic
-tls: { cert, key, ca }                 # mTLS; provisioned by HOR-245
-server: { port: 8443, healthPort: 8081 }
-```
+**Infra-only at boot** — no persona/model/session/tools (those are per-turn via
+`AssignTurn`): control-plane gRPC URL + expected server name, worker Pod UID +
+pool UID, optional pool scope identity, mTLS cert/key/CA paths, sandbox mount
+root, read-only `piDirs`, egress-proxy URL, WAL spool dir (emptyDir), probe
+port, + HTTP/2 ping / reconnect / child-liveness / abort-grace / outbox-bound /
+model-retry / token-delta-buffer tunables. Certs are re-read each reconnect
+(rotation). The harness holds zero real credentials — the per-sandbox egress
+proxy (HOR-244) injects them.
 
-**The harness holds zero real credentials.** Caller identity + real
-gateway/tool credentials live in the per-sandbox egress proxy (HOR-244); this
-config carries only a placeholder model endpoint + the resolved tool allow-list.
-Model traffic routes through the proxy (forwards to the internal inference-
-gateway now, external providers later, injecting the real key).
+## Failure semantics
+
+- **Durable audit, no tail loss on crash:** durable `TurnEvent`s are fsync'd to
+  a local WAL before send; a supervisor *crash* loses no audit tail (on restart
+  the WAL is replayed as `after_terminal` — the CP already terminalized the turn
+  as worker-loss via fencing). Pod-death/per-worker-PVC survival is deferred.
+- **Stream loss (supervisor survives):** fail-closed — abort the child, never
+  resume; the unacked tail is replayed as `after_terminal` on reconnect.
+- **Non-idempotent turns:** no auto-retry; a failed turn is a workflow decision
+  (HOR-246/HOR-249). Tool calls carry `turn_id + tool_call_id` as audit/correlation.
+- **Cancellation:** CP `RUNNING→CANCELED` CAS fences immediately; `AbortTurn` is
+  best-effort; the worker's late outcome is `after_terminal` (first-terminal-writer).
+- **Outcomes:** `COMPLETED` only after `agent_settled` + flush + `session_shutdown`
+  + dispose + clean exit + ACK; a successful message + failed cleanup = `FAILED`.
 
 ## Internals (`src/`)
 
-- `config.ts` — load + validate `config.yaml` (self-contained; the config schema made concrete).
-- `session.ts` — `createAgentSession` wiring: persona via `systemPromptOverride`, `SessionManager` scoped by `session.id` (resume-or-create), built-in coding tools off (`tools: []`), tools/skills from `piDirs` (product then client), model via an inline `pi.registerProvider` at the proxy endpoint with a placeholder key.
-- `enforcement.ts` — load-time tool allow-list filtering (in-process; broad-default `*` passes all; runtime `tool_call` interception deferred to HOR-283).
-- `events.ts` — pi `AgentSessionEvent` → the 5-kind `Event` oneof.
-- `server.ts` — the mTLS Connect server (`Prompt`/`Abort`) + plain-HTTP `/readyz`/`/healthz` + SIGTERM handler.
-
-## Tools & skills
-
-Loaded from the mounted overlay `pi/` tree (HOR-341): `/pi/product` then
-`/pi/client` (client overrides product by same-name `registerTool`, last-wins —
-the §5/§7 "supersede, not edit" precedence). Built-in coding tools
-(`read`/`bash`/`edit`/`write`) are **off** for v1; the agent's capabilities are
-the overlay tools (Graph email/Excel). Skills (SKILL.md, e.g. the client
-classification Skill) are discovered the same way and invoked by the
-control-plane's prompt (`/skill:…`).
+- `main.ts` — entry point: boot config + probes + supervisor + SIGTERM/SIGINT drain.
+- `work-client.ts` — mTLS gRPC HTTP/2 transport + bidi `Work` stream + `Hello`/`Welcome`.
+- `worker-state.ts` — protocol state machine + single-credit invariant.
+- `supervisor.ts` — connect/turn loop, reconnect+backoff, heartbeat, outbox/replay.
+- `event-outbox.ts` — per-turn outbox + WAL (fsync per event/ack; crash recovery).
+- `child-process.ts` — spawn the child via the launcher + IPC + exit classification.
+- `child.ts` — the pi child: `AgentSession` + pi-event → `TurnEvent` mapping.
+- `launcher.ts` — the `setpriv` privilege-dropping launcher (full cap-drop + `no_new_privs`).
+- `sandbox.ts` — canonical paths + ownership/mode/cwd validation.
+- `config.ts` — infra-only boot config loader/validator.
+- `probes.ts` — `/healthz` + `/readyz`.
 
 ## Image (`Dockerfile`)
 
-`node:24-bookworm-slim`, multi-stage (`tsc` build → runtime `dist/`), non-root
-(`65532`). **Bakes** pi + the harness server + the Connect runtime. **Mounts at
-runtime** (never baked): `/etc/harness/config.yaml`, `/pi` (overlay tree),
-`/data/sessions` (PVC), TLS certs. One generic, agnostic image serves any
-bot/persona/tools. Second GHCR image: `ghcr.io/nunocgoncalves/control-plane-harness`.
+`node:24-bookworm-slim`, multi-stage (`tsc` → `dist/`), non-root (`65532`).
+Bakes pi + the supervisor + the child entry + the SDK runtime. `setpriv`
+(util-linux) is present. Mounts at runtime (HOR-245): config, `/pi` overlay,
+`/data/sandboxes` (PVC), TLS certs, the WAL emptyDir. No inbound RPC port — the
+worker dials the control-plane. `CAP_SETUID`/`CAP_SETGID` are granted to the
+supervisor by the pod security context (HOR-245), not the image.
 
-## Layout
-
-```
-proto/iterabase/harness/v1/harness.proto   the contract (Prompt/Abort/Event)
-proto/buf.{yaml,gen.yaml}        buf module + codegen (Go -> internal/harnessrpc, TS -> src/gen)
-harness/package.json             pi + connect + buf/protobuf; vitest; typescript
-harness/tsconfig.json            ESM, NodeNext, strict
-harness/Dockerfile              the harness image
-harness/src/config.ts           config schema + loader (self-contained)
-harness/src/session.ts          pi createAgentSession wiring (skeleton)
-harness/src/enforcement.ts      load-time allow-list filtering
-harness/src/events.ts           pi event -> proto Event mapping (skeleton)
-harness/src/server.ts           mTLS Connect server + probes + SIGTERM (skeleton)
-harness/src/gen/                generated TS (committed; `make proto`)
-internal/harnessrpc/            generated Go (committed; HOR-249 consumes; `make proto`)
-```
-
-## Develop
+## Develop + test
 
 ```bash
-make proto-tools        # install buf + protoc plugins (brew install buf works too)
-make proto              # generate Go + TS stubs (buf lint + generate)
-cd harness && npm install   # install Node deps (first time; commit package-lock.json)
-make harness-build      # tsc -> dist
-make harness-test       # vitest
-make harness-lint       # tsc --noEmit
-make harness-image      # build the harness container image
+make proto-tools          # buf + protoc plugins
+make proto                # generate Go (internal/harnessrpc) + TS (src/gen)
+make harness-build        # tsc -> dist
+make harness-test         # vitest (unit + router-transport integration)
+make harness-lint         # tsc --noEmit
+make harness-image        # build the worker image
+make harness-isolation-test   # Linux container: setpriv launcher + per-UID isolation (bullets 1-5)
 ```
 
-The generated `src/gen/` and `internal/harnessrpc/` are **committed**; `make
-proto-check` (CI) guards that they're fresh. Go consumers (HOR-249) import
-`internal/harnessrpc` directly — they do not need Node or buf installed.
-
-## Testing
-
-- **Unit (vitest):** config loading/validation, event mapping, allow-list
-  filtering, session resume-or-create logic, model provider registration.
-- **Contract/integration (vitest):** the real harness server (mTLS) + a Connect
-  client + a **mock model** (OpenAI-compatible stub) — `Prompt`→`Settled{completed}`,
-  `Abort`→`Settled{aborted}`, `/readyz`. Hermetic; no real LLM, no egress proxy, no pod.
-- **Cross-component e2e:** `forge/test/e2e/` `TestAgentFlowContract` (HOR-365,
-  after HOR-249) — Kind + umbrella chart, drives a real turn end-to-end.
-- **Demo rehearsal:** HOR-353 (real Graph + real LLM email-workflow).
+Generated `src/gen/` + `internal/harnessrpc/` are committed; `make proto-check`
+(CI) guards freshness. Tests: TS unit + router-transport integration (mock CP)
+for the protocol/supervisor/outbox/child-process; the Linux-container isolation
+gate (setpriv + per-session UID `EACCES`). The Go mTLS test server (real
+TS-client ↔ Go-server wire) + the sequential pi-extension-state isolation test
+land as follow-ups. E2E (real turn) is HOR-249/HOR-245 integration.
 
 ## Sequencing
 
-HOR-351 (Wave 1) is the prerequisite for HOR-245 (needs the image) and HOR-249
-(drives the RPC). Documented follow-ups: HOR-363 (Persona CRD), HOR-283
-(fine-grained per-action permissions), HOR-365 (forge e2e), and the
-`Steer`/`FollowUp` + live-streaming "interactive surfaces" extension (Teams
-HOR-248 / Slack HOR-261/262).
+HOR-381 is the prerequisite for HOR-245 (pool/operator/pod assembly + sandbox
+provisioning + security context) and HOR-249 (dispatch + the `Work` server).
+Both consume the `Work` contract this ticket defines. See the HOR-381 plan note
+(Obsidian) + Linear HOR-381/245/249.
 
 ## Git workflow
 
-Branches/commits/PRs carry the Linear ticket ID (e.g. `HOR-351`). See
+Branches/commits/PRs carry the Linear ticket ID (e.g. `HOR-381`). See
 `AGENTS.md`. Only the user approves/merges to `master`.
