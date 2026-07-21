@@ -158,6 +158,63 @@ func TestValidateServe_OK(t *testing.T) {
 	assert.NoError(t, config.ValidateServe(cfg))
 }
 
+// TestLoad_TLSEnvOverrides confirms the TLS cert/key env vars populate
+// APIConfig (HTTPS opt-in for the api serve path).
+func TestLoad_TLSEnvOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/cp")
+	t.Setenv("TLS_CERT_FILE", "/etc/cp/tls/tls.crt")
+	t.Setenv("TLS_KEY_FILE", "/etc/cp/tls/tls.key")
+
+	cfg, err := config.Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "/etc/cp/tls/tls.crt", cfg.API.TLSCertFile)
+	assert.Equal(t, "/etc/cp/tls/tls.key", cfg.API.TLSKeyFile)
+}
+
+// TestValidateServe_TLSBothOrNeither enforces the opt-in contract: both set
+// (HTTPS) or both unset (HTTP); exactly one is a misconfig.
+func TestValidateServe_TLSBothOrNeither(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/cp")
+	t.Setenv("JWT_SIGNING_KEY_PATH", "/etc/jwt/key.pem")
+	t.Setenv("API_ADDR", ":8080")
+
+	t.Run("both set -> HTTPS ok", func(t *testing.T) {
+		t.Setenv("TLS_CERT_FILE", "/tls/tls.crt")
+		t.Setenv("TLS_KEY_FILE", "/tls/tls.key")
+		cfg, err := config.Load("")
+		require.NoError(t, err)
+		assert.NoError(t, config.ValidateServe(cfg))
+	})
+
+	t.Run("neither set -> HTTP ok", func(t *testing.T) {
+		t.Setenv("TLS_CERT_FILE", "")
+		t.Setenv("TLS_KEY_FILE", "")
+		cfg, err := config.Load("")
+		require.NoError(t, err)
+		assert.NoError(t, config.ValidateServe(cfg))
+	})
+
+	t.Run("cert only -> error", func(t *testing.T) {
+		t.Setenv("TLS_CERT_FILE", "/tls/tls.crt")
+		t.Setenv("TLS_KEY_FILE", "")
+		cfg, err := config.Load("")
+		require.NoError(t, err)
+		err = config.ValidateServe(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tls_cert_file")
+	})
+
+	t.Run("key only -> error", func(t *testing.T) {
+		t.Setenv("TLS_CERT_FILE", "")
+		t.Setenv("TLS_KEY_FILE", "/tls/tls.key")
+		cfg, err := config.Load("")
+		require.NoError(t, err)
+		err = config.ValidateServe(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tls_key_file")
+	})
+}
+
 func TestDatabaseFromEnv(t *testing.T) {
 	t.Run("requires url", func(t *testing.T) {
 		t.Setenv("DATABASE_URL", "")

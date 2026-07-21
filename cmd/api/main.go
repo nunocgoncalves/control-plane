@@ -56,7 +56,7 @@ func main() {
 
 	switch args[0] {
 	case "serve":
-		if err := runServe(cfg, logger); err != nil {
+		if err := runServeCmd(cfg, logger); err != nil {
 			logger.Error("api serve failed", "error", err)
 			os.Exit(1)
 		}
@@ -77,10 +77,20 @@ func main() {
 	}
 }
 
-func runServe(cfg *config.Config, logger *slog.Logger) error {
+// runServeCmd wires the SIGINT/SIGTERM signal context to runServe and returns
+// its error. The signal context's stop() is deferred here (not in main) so it
+// always runs on return — main os.Exit's on error, which would skip a defer.
+func runServeCmd(cfg *config.Config, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	return runServe(ctx, cfg, logger)
+}
 
+// runServe runs the HTTP API until ctx is canceled (SIGINT/SIGTERM in main,
+// a test context in tests). It serves HTTPS when cfg.API.TLSCertFile +
+// TLSKeyFile are both set (cert-manager leaf, internal issuer), else plain
+// HTTP — mirroring the egress proxy's tls opt-in pattern.
+func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	pool, err := database.Connect(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connecting database: %w", err)
@@ -108,9 +118,16 @@ func runServe(cfg *config.Config, logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	tlsEnabled := cfg.API.TLSCertFile != "" && cfg.API.TLSKeyFile != ""
 	errCh := make(chan error, 1)
-	go func() { errCh <- httpSrv.ListenAndServe() }()
-	logger.Info("listening", "addr", cfg.API.Addr)
+	go func() {
+		if tlsEnabled {
+			errCh <- httpSrv.ListenAndServeTLS(cfg.API.TLSCertFile, cfg.API.TLSKeyFile)
+		} else {
+			errCh <- httpSrv.ListenAndServe()
+		}
+	}()
+	logger.Info("listening", "addr", cfg.API.Addr, "tls", tlsEnabled)
 
 	select {
 	case <-ctx.Done():
