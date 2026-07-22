@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AssistantMessageSchema } from "./gen/iterabase/harness/v1/harness_pb.js";
-import { EventOutbox, OutboxOverflow } from "./event-outbox.js";
+import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
 import type { TurnEventPayload } from "./supervisor.js";
 
 function assistantPayload(text: string): TurnEventPayload {
@@ -51,11 +51,13 @@ describe("EventOutbox append + ack", () => {
     expect(existsSync(join(dir, "turn-1.wal"))).toBe(false); // WAL deleted
   });
 
-  it("rejects a regressing ack (no-op)", () => {
+  it("rejects a regressing ack as a protocol error", () => {
     const ob = new EventOutbox(dir, "turn-1", 100);
     ob.append(assistantPayload("a"));
     ob.ack(1);
-    expect(ob.ack(0)).toBe(false); // regress — no-op
+    expect(() => ob.ack(0)).toThrow(AckError); // regress — protocol violation
+    expect(() => ob.ack(99)).toThrow(AckError); // out-of-range — protocol violation
+    expect(ob.ack(1)).toBe(false); // duplicate at cursor — idempotent no-op
     ob.close();
   });
 

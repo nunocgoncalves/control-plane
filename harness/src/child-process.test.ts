@@ -20,9 +20,13 @@ import type { HarnessConfig } from "./config.js";
 const UID = process.getuid();
 const GID = process.getgid();
 
-// A stub child: writes one AssistantMessage event + a COMPLETED result, then exits.
-const STUB_CHILD = `process.stdout.write(JSON.stringify({type:"event",event:{turnId:"t",sequence:"0",timestampMs:"0",assistantMessage:{text:"hi"}}})+"\\n");
-process.stdout.write(JSON.stringify({type:"result",outcome:1})+"\\n");
+// A stub child: writes one AssistantMessage event + a COMPLETED result over
+// the framed fd-3 IPC channel (4-byte BE length + JSON), then exits.
+const STUB_CHILD = `const fs = require('fs');
+function frame(obj){const j=Buffer.from(JSON.stringify(obj));const h=Buffer.alloc(4);h.writeUInt32BE(j.length,0);fs.writeSync(3,Buffer.concat([h,j]));}
+frame({type:'heartbeat'});
+frame({type:'event',event:{turnId:'t',sequence:'0',timestampMs:'0',assistantMessage:{text:'hi'}}});
+frame({type:'result',outcome:1});
 `;
 
 let dir: string;

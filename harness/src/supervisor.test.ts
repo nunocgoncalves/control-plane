@@ -160,6 +160,7 @@ describe("Supervisor turn loop", () => {
         fakeChild(
           [
             {
+              kind: "event",
               payload: {
                 case: "assistantMessage",
                 value: create(AssistantMessageSchema, { text: "classified: pricing" }),
@@ -290,7 +291,19 @@ describe("Supervisor crash recovery", () => {
           });
           for await (const m of req) {
             received.push(m);
-            if (m.kind.case === "turnEvent") replayDone();
+            if (m.kind.case === "turnEvent") {
+              replayDone();
+              // ACK the replayed audit tail through its sequence so the WAL is deleted.
+              yield create(ControlMessageSchema, {
+                kind: {
+                  case: "eventAck",
+                  value: create(EventAckSchema, {
+                    turnId: m.kind.value.turnId,
+                    throughSequence: m.kind.value.sequence,
+                  }),
+                },
+              });
+            }
           }
         },
       });
