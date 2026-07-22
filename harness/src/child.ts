@@ -18,13 +18,17 @@ import { fileURLToPath } from "node:url";
 import { toJson, create } from "@bufbuild/protobuf";
 import {
   AuthStorage,
-  DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
   SettingsManager,
-  createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
+  createAgentSessionRuntime,
+  AgentSessionRuntime,
   type AgentSession,
   type AgentSessionEvent,
+  type AgentSessionServices,
+  type CreateAgentSessionRuntimeResult,
   type ExtensionFactory,
   type ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
@@ -119,7 +123,7 @@ async function main(): Promise<void> {
   let aborted = false;
   const onAbortFrame = () => {
     aborted = true;
-    void currentSession?.abort().catch(() => {});
+    void currentRuntime?.session.abort().catch(() => {});
   };
   const abortReader = new FrameReader((raw) => {
     const f = parseSupervisorFrame(raw);
@@ -127,9 +131,9 @@ async function main(): Promise<void> {
   });
   process.stdin.on("data", (chunk: Buffer) => abortReader.feed(chunk));
 
-  let currentSession: AgentSession | undefined;
+  let currentRuntime: AgentSessionRuntime | undefined;
   try {
-    currentSession = await createSession(assignment, sessionDir, cwd, egressProxyUrl, piDirs, maxAttempts);
+    currentRuntime = await createSession(assignment, sessionDir, cwd, egressProxyUrl, piDirs, maxAttempts);
   } catch (err) {
     clearInterval(hb);
     emit({
@@ -149,7 +153,8 @@ async function main(): Promise<void> {
   // Track the last assistant stopReason so an exhausted/non-retryable model
   // failure (stopReason "error") is classified FAILED, not COMPLETED.
   let lastAssistantStopReason: string | undefined;
-  const unsub = currentSession.subscribe((ev: AgentSessionEvent) => {
+  const session = currentRuntime.session;
+  const unsub = session.subscribe((ev: AgentSessionEvent) => {
     // Forward live token deltas (ephemeral, non-sequenced, non-ACKed).
     if (ev.type === "message_update") {
       const d = ev.assistantMessageEvent;
@@ -160,23 +165,42 @@ async function main(): Promise<void> {
     if (ev.type === "message_end" && ev.message.role === "assistant") {
       lastAssistantStopReason = ev.message.stopReason;
     }
-    const payload = mapEvent(ev, currentSession!);
+    const payload = mapEvent(ev, session);
     if (payload) emit(payload);
   });
 
   // SIGTERM -> abort pi (the supervisor's bounded-escalation abort path).
   const onTerm = () => {
     aborted = true;
-    void currentSession?.abort().catch(() => {});
+    void currentRuntime?.session.abort().catch(() => {});
   };
   process.on("SIGTERM", onTerm);
   process.on("SIGINT", onTerm);
 
   try {
     const images = buildImages(assignment);
-    await currentSession.prompt(assignment.message, images ? { images } : undefined);
-    // agent_settled fires during prompt; flush + dispose before reporting.
-    await currentSession.dispose();
+    await session.prompt(assignment.message, images ? { images } : undefined);
+    // agent_settled fires during prompt; flush + run the async shutdown
+    // lifecycle (extension `session_shutdown` handlers) before reporting.
+    // AgentSessionRuntime.dispose() awaits those handlers; a teardown
+    // failure must turn the outcome into FAILED, not COMPLETED.
+    try {
+      await currentRuntime.dispose();
+    } catch (disposeErr) {
+      unsub();
+      clearInterval(hb);
+      emit({
+        case: "harnessError",
+        value: create(HarnessErrorSchema, {
+          error: create(ErrorDetailSchema, {
+            message: `session shutdown failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
+            retryability: Retryability.NON_RETRYABLE,
+          }),
+        }),
+      });
+      emitResult(Outcome.FAILED);
+      return;
+    }
     unsub();
     clearInterval(hb);
     emitHeartbeat();
@@ -188,6 +212,9 @@ async function main(): Promise<void> {
   } catch (err) {
     unsub();
     clearInterval(hb);
+    // Best-effort shutdown even on the failure path; ignore teardown errors
+    // here since we are already reporting FAILED.
+    await currentRuntime.dispose().catch(() => {});
     emit({
       case: "harnessError",
       value: create(HarnessErrorSchema, {
@@ -282,7 +309,11 @@ function buildImages(a: Assignment): { type: "image"; data: string; mimeType: st
   return out;
 }
 
-/** Create the pi session: resume-or-create by the EXACT session.id; pi cwd = validated working dir. */
+/**
+ * Create the pi session: resume-or-create by the EXACT session.id; pi cwd =
+ * validated working dir. Returns an owned `AgentSessionRuntime` so the caller
+ * can run the async `session_shutdown` lifecycle via `dispose()` before exit.
+ */
 async function createSession(
   a: Assignment,
   sessionDir: string,
@@ -290,7 +321,7 @@ async function createSession(
   egressProxyUrl: string,
   piDirs: string[],
   maxAttempts: number,
-): Promise<AgentSession> {
+): Promise<AgentSessionRuntime> {
   if (!SESSION_ID_RE.test(a.sessionId)) throw new Error(`invalid session id: ${JSON.stringify(a.sessionId)}`);
 
   const authStorage = AuthStorage.create(join(sessionDir, "auth.json"));
@@ -322,33 +353,52 @@ async function createSession(
     retry: { enabled: true, maxRetries: maxAttempts, baseDelayMs: 1000, provider: { maxRetries: 0 } },
   });
 
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir: sessionDir, // scope discovery to the session (no global ~/.pi)
-    settingsManager,
-    additionalExtensionPaths: piDirs,
-    extensionFactories: [providerFactory],
-    systemPromptOverride: () => a.persona,
-  });
-  await resourceLoader.reload();
+  const toolOpts = a.toolAllowList.all ? { noTools: "builtin" as const } : { tools: a.toolAllowList.tools };
+
+  // The runtime factory closes over the assignment-specific inputs (provider,
+  // settings, tools, persona) and creates cwd-bound services + session. It is
+  // stored on the AgentSessionRuntime and reused for /new,/resume,/fork — which
+  // we never invoke here (single turn), but the factory is required for
+  // initial construction. `session_shutdown` runs through `runtime.dispose()`.
+  const createRuntime = async ({
+    cwd: rtCwd,
+    sessionManager,
+  }: {
+    cwd: string;
+    agentDir: string;
+    sessionManager: SessionManager;
+  }): Promise<CreateAgentSessionRuntimeResult> => {
+    const services: AgentSessionServices = await createAgentSessionServices({
+      cwd: rtCwd,
+      agentDir: sessionDir, // scope discovery to the session (no global ~/.pi)
+      authStorage,
+      settingsManager,
+      modelRegistry,
+      resourceLoaderOptions: {
+        additionalExtensionPaths: piDirs,
+        extensionFactories: [providerFactory],
+        systemPromptOverride: () => a.persona,
+      },
+    });
+
+    const model = services.modelRegistry.find(PROVIDER, a.model.id);
+    if (!model) throw new Error(`model not found after provider registration: ${a.model.id}`);
+
+    const result = await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      model,
+      ...toolOpts,
+    });
+    return {
+      ...result,
+      services,
+      diagnostics: services.diagnostics,
+    };
+  };
 
   const sessionManager = resolveSessionManager(a.sessionId, sessionDir, cwd);
-
-  const toolOpts = a.toolAllowList.all ? { noTools: "builtin" as const } : { tools: a.toolAllowList.tools };
-  const { session } = await createAgentSession({
-    cwd,
-    authStorage,
-    modelRegistry,
-    resourceLoader,
-    settingsManager,
-    sessionManager,
-    ...toolOpts,
-  });
-
-  const model = modelRegistry.find(PROVIDER, a.model.id);
-  if (!model) throw new Error(`model not found after provider registration: ${a.model.id}`);
-  await session.setModel(model);
-  return session;
+  return createAgentSessionRuntime(createRuntime, { cwd, agentDir: sessionDir, sessionManager });
 }
 
 /** Resume-or-create by the EXACT session.id: open `<ts>_<sessionId>.jsonl` if present, else create with that id. */
