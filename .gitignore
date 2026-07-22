@@ -28,3 +28,6 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Stray Go build output (go build ./harness/testserver/ without -o)
+/testserver
