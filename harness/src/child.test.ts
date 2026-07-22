@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFrame, parseSupervisorFrame, type ChildFrame } from "./ipc.js";
-import { parseAssignment } from "./child.js";
+import { parseAssignment, captureShutdownErrors, type ExtensionErrorEmitter } from "./child.js";
 
 const HARNESS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_BIN = join(HARNESS_ROOT, "dist", "child.js");
@@ -167,6 +167,59 @@ describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () 
     const result = frames.find((f) => f.type === "result");
     expect(result).toBeDefined();
     expect(result!.type === "result" && result!.message).toContain("no valid assignment");
+  });
+});
+
+describe("captureShutdownErrors", () => {
+  /** A minimal fake of pi's ExtensionRunner error surface. */
+  function fakeEmitter(): { emitter: ExtensionErrorEmitter; emit: (e: { event: string; extensionPath: string; error: string }) => void; state: { unsubbed: boolean } } {
+    let listener: ((e: { event: string; extensionPath: string; error: string }) => void) | undefined;
+    const state = { unsubbed: false };
+    const emitter: ExtensionErrorEmitter = {
+      onError(l) {
+        listener = l;
+        return () => {
+          state.unsubbed = true;
+          listener = undefined;
+        };
+      },
+    };
+    return { emitter, emit: (e) => listener?.(e), state };
+  }
+
+  it("captures session_shutdown handler failures (the pi swallowing path)", () => {
+    const { emitter, emit } = fakeEmitter();
+    const shutdown = captureShutdownErrors(emitter);
+    // pi's ExtensionRunner.emit() catches a throwing session_shutdown handler
+    // and routes it here instead of rethrowing to dispose().
+    emit({ event: "session_shutdown", extensionPath: "ext-a", error: "flush failed" });
+    expect(shutdown.errors).toEqual(["ext-a: flush failed"]);
+  });
+
+  it("ignores non-shutdown extension errors", () => {
+    const { emitter, emit } = fakeEmitter();
+    const shutdown = captureShutdownErrors(emitter);
+    emit({ event: "message_end", extensionPath: "ext-a", error: "unrelated" });
+    emit({ event: "tool_result", extensionPath: "ext-b", error: "x" });
+    expect(shutdown.errors).toEqual([]);
+  });
+
+  it("unsubscribes so a failed cleanup can be classified without double-counting", () => {
+    const { emitter, emit, state } = fakeEmitter();
+    const shutdown = captureShutdownErrors(emitter);
+    shutdown.unsubscribe();
+    expect(state.unsubbed).toBe(true);
+    emit({ event: "session_shutdown", extensionPath: "ext-a", error: "late" });
+    expect(shutdown.errors).toEqual([]);
+  });
+
+  it("a successful prompt with a shutdown error is non-empty → caller classifies FAILED", () => {
+    const { emitter, emit } = fakeEmitter();
+    const shutdown = captureShutdownErrors(emitter);
+    emit({ event: "session_shutdown", extensionPath: "ext-a", error: "boom" });
+    // Caller also records any dispose() rejection into the same list.
+    shutdown.errors.push("dispose: timed out");
+    expect(shutdown.errors.length).toBe(2);
   });
 });
 

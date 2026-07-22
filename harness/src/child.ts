@@ -98,6 +98,40 @@ function emitResult(outcome: Outcome, message?: string): void {
   writeFrame({ type: "result", outcome, message });
 }
 
+/**
+ * Minimal view of a pi `ExtensionRunner` for shutdown-error capture: anything
+ * with an `onError(listener)` unsubscribe pattern.
+ */
+export interface ExtensionErrorEmitter {
+  onError(listener: (error: { event: string; extensionPath: string; error: string }) => void): () => void;
+}
+
+/**
+ * Register an error listener that records `session_shutdown` handler failures.
+ *
+ * pi's `ExtensionRunner.emit()` catches `session_shutdown` handler exceptions
+ * and routes them to error listeners instead of rethrowing, so
+ * `AgentSessionRuntime.dispose()` resolves cleanly even when a shutdown
+ * handler failed. Without this capture, teardown failures are silently
+ * swallowed and a successful prompt still produces `COMPLETED`, contrary to
+ * HOR-381 ("successful assistant message + failed cleanup = FAILED"). The
+ * caller appends any `dispose()` rejection to `errors` and, if non-empty,
+ * classifies the outcome FAILED.
+ *
+ * @returns `{ unsubscribe, errors }` — `errors` is the live mutable list so
+ * the caller can also record a dispose() rejection.
+ */
+export function captureShutdownErrors(runner: ExtensionErrorEmitter): {
+  unsubscribe: () => void;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const unsubscribe = runner.onError((e) => {
+    if (e.event === "session_shutdown") errors.push(`${e.extensionPath}: ${e.error}`);
+  });
+  return { unsubscribe, errors };
+}
+
 async function main(): Promise<void> {
   const assignment = await readAssignment();
   if (!assignment) {
@@ -154,6 +188,15 @@ async function main(): Promise<void> {
   // failure (stopReason "error") is classified FAILED, not COMPLETED.
   let lastAssistantStopReason: string | undefined;
   const session = currentRuntime.session;
+
+  // pi's `ExtensionRunner.emit()` catches `session_shutdown` handler exceptions
+  // and routes them to an error listener instead of rethrowing, so
+  // `AgentSessionRuntime.dispose()` resolves cleanly even when a shutdown
+  // handler failed. Capture those errors so a failed cleanup turns the outcome
+  // into FAILED per HOR-381 ("successful assistant message + failed cleanup =
+  // FAILED"), rather than being silently swallowed into COMPLETED.
+  const shutdown = captureShutdownErrors(session.extensionRunner);
+
   const unsub = session.subscribe((ev: AgentSessionEvent) => {
     // Forward live token deltas (ephemeral, non-sequenced, non-ACKed).
     if (ev.type === "message_update") {
@@ -182,18 +225,25 @@ async function main(): Promise<void> {
     await session.prompt(assignment.message, images ? { images } : undefined);
     // agent_settled fires during prompt; flush + run the async shutdown
     // lifecycle (extension `session_shutdown` handlers) before reporting.
-    // AgentSessionRuntime.dispose() awaits those handlers; a teardown
-    // failure must turn the outcome into FAILED, not COMPLETED.
+    // AgentSessionRuntime.dispose() awaits those handlers. Handler failures
+    // are captured by the error listener above (pi swallows them inside
+    // emit()); a dispose() rejection or any captured shutdown error must turn
+    // the outcome into FAILED, not COMPLETED.
     try {
       await currentRuntime.dispose();
     } catch (disposeErr) {
+      shutdown.errors.push(`dispose: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+    } finally {
+      shutdown.unsubscribe();
+    }
+    if (shutdown.errors.length > 0) {
       unsub();
       clearInterval(hb);
       emit({
         case: "harnessError",
         value: create(HarnessErrorSchema, {
           error: create(ErrorDetailSchema, {
-            message: `session shutdown failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
+            message: `session shutdown failed: ${shutdown.errors.join("; ")}`,
             retryability: Retryability.NON_RETRYABLE,
           }),
         }),
@@ -212,6 +262,7 @@ async function main(): Promise<void> {
   } catch (err) {
     unsub();
     clearInterval(hb);
+    shutdown.unsubscribe();
     // Best-effort shutdown even on the failure path; ignore teardown errors
     // here since we are already reporting FAILED.
     await currentRuntime.dispose().catch(() => {});
