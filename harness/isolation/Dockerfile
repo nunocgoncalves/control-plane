@@ -19,7 +19,7 @@ RUN npm run build
 FROM node:24-bookworm-slim
 WORKDIR /app
 COPY --from=builder /src/dist ./dist
-COPY isolation/probe.mjs isolation/run.mjs ./
+COPY isolation/probe.mjs isolation/probe-state.mjs isolation/run.mjs ./
 # Runs as root (default): the runner chowns sandboxes + setpriv-spawns as
 # per-session UIDs. No node_modules needed — launcher + probe use only Node
 # built-ins.

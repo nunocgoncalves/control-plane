@@ -9,6 +9,11 @@
 // other session's files. (The pi-extension-state bleed variant lands when the
 // pi child is wired; this proves the process/UID boundary.)
 //
+// Then the state-bleed regression (probe-state.mjs): runA mutates
+// module/global/timer/descriptor state + persists a PVC marker; runB (fresh
+// process) proves zero bleed; resumeA (fresh process) proves only PVC state
+// restores, not in-memory state.
+//
 // Runs as ROOT in a Linux container: the runner needs CAP_SETUID/CAP_SETGID to
 // setpriv-spawn children as per-session UIDs + chown the sandboxes. Production
 // grants those caps via the K8s security context (HOR-245), NOT by running the
@@ -91,4 +96,57 @@ const b = await runProbe("probe B (sandbox=B, sibling=A) — fresh process, diff
 
 const pass = a && b;
 console.log(`\n=== HOR-381 isolation gate (bullets 1-5): ${pass ? "PASS" : "FAIL"} ===`);
-process.exit(pass ? 0 : 1);
+if (!pass) process.exit(1);
+
+// ---- Sequential state-bleed regression (run A -> run B -> resume A) ----
+console.log("\n=== HOR-381 sequential state-bleed regression ===");
+const runState = (label, sandbox, uid, gid, mode) => {
+  const child = launchChild({
+    script: "/app/probe-state.mjs",
+    uid,
+    gid,
+    sandboxRoot: sandbox,
+    workingDir: "home",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { SANDBOX_ROOT: sandbox, MODE: mode, HOME: `${sandbox}/home` },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  return new Promise((resolve) => {
+    child.on("close", (code) => {
+      console.log(`\n--- ${label} (mode=${mode}, uid=${uid}) exit=${code} ---`);
+      process.stdout.write(stdout);
+      if (stderr) process.stderr.write(stderr);
+      const state = {};
+      for (const line of stdout.split("\n")) {
+        const m = line.match(/^STATE (\w+)=(.*)$/);
+        if (m) state[m[1]] = m[2];
+      }
+      resolve({ code, state });
+    });
+  });
+};
+
+// A fresh sandbox dir for the state probe (own session subdir).
+sh(`mkdir -p ${A}/session ${B}/session`);
+sh(`chown -R ${UID_A}:${GID_A} ${A} && chmod 0700 ${A}`);
+sh(`chown -R ${UID_B}:${GID_B} ${B} && chmod 0700 ${B}`);
+
+const aRun = await runState("runA", A, UID_A, GID_A, "runA");
+const bRun = await runState("runB", B, UID_B, GID_B, "runB");
+const aResume = await runState("resumeA", A, UID_A, GID_A, "resumeA");
+
+const bleedPass =
+  aRun.code === 0 &&
+  bRun.code === 0 &&
+  aResume.code === 0 &&
+  aRun.state.mark === "A-mutated" && // A mutated in-memory state
+  bRun.state.bleed === "no" && // B (fresh process) saw zero bleed
+  aResume.state.pvcRestored === "yes" && // PVC marker survived
+  aResume.state.memory === "initial" && // in-memory NOT restored
+  aResume.state.memoryRestored === "no"; // only PVC state restores
+
+console.log(`\n=== HOR-381 sequential state-bleed regression: ${bleedPass ? "PASS" : "FAIL"} ===`);
+process.exit(bleedPass ? 0 : 1);
