@@ -164,8 +164,12 @@ harness-build: ## Build the harness (tsc -> dist).
 	cd harness && npm run build
 
 .PHONY: harness-test
-harness-test: ## Run harness unit + integration tests (vitest).
+harness-test: ## Run harness unit + integration tests (vitest). Includes the native gRPC+mTLS Go testserver integration suite (harness/testserver) which requires `go` in PATH; skipped automatically when go is absent.
 	cd harness && npm test
+
+.PHONY: harness-integration-test
+harness-integration-test: ## Build + run only the HOR-381 native gRPC+mTLS transport integration test (Go connect-go testserver + real TS client).
+	cd harness && npx vitest --run src/testserver.test.ts
 
 .PHONY: harness-lint
 harness-lint: ## Typecheck the harness (tsc --noEmit).
