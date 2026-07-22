@@ -11,10 +11,10 @@
 // = 0) so there is exactly one observable retry layer — pi's own bounded
 // auto-retry (retry.maxRetries = HARNESS_MODEL_MAX_ATTEMPTS).
 
-import { createInterface } from "node:readline";
 import { writeSync } from "node:fs";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { toJson, create } from "@bufbuild/protobuf";
 import {
   AuthStorage,
@@ -97,7 +97,7 @@ function emitResult(outcome: Outcome, message?: string): void {
 async function main(): Promise<void> {
   const assignment = await readAssignment();
   if (!assignment) {
-    emitResult(Outcome.FAILED, "no assignment on stdin");
+    emitResult(Outcome.FAILED, "no valid assignment on stdin");
     return;
   }
 
@@ -146,6 +146,9 @@ async function main(): Promise<void> {
   }
 
   // Map pi events → durable TurnEvent payloads + ephemeral token deltas.
+  // Track the last assistant stopReason so an exhausted/non-retryable model
+  // failure (stopReason "error") is classified FAILED, not COMPLETED.
+  let lastAssistantStopReason: string | undefined;
   const unsub = currentSession.subscribe((ev: AgentSessionEvent) => {
     // Forward live token deltas (ephemeral, non-sequenced, non-ACKed).
     if (ev.type === "message_update") {
@@ -153,6 +156,9 @@ async function main(): Promise<void> {
       if (d.type === "text_delta") emitTokenDelta(d.contentIndex, "TEXT", d.delta);
       else if (d.type === "thinking_delta") emitTokenDelta(d.contentIndex, "THINKING", d.delta);
       return;
+    }
+    if (ev.type === "message_end" && ev.message.role === "assistant") {
+      lastAssistantStopReason = ev.message.stopReason;
     }
     const payload = mapEvent(ev, currentSession!);
     if (payload) emit(payload);
@@ -174,7 +180,11 @@ async function main(): Promise<void> {
     unsub();
     clearInterval(hb);
     emitHeartbeat();
-    emitResult(aborted ? Outcome.ABORTED : Outcome.COMPLETED);
+    // Outcome classification: abort wins; else a terminal model failure
+    // (last assistant stopReason "error") is FAILED; otherwise COMPLETED.
+    if (aborted) emitResult(Outcome.ABORTED);
+    else if (lastAssistantStopReason === "error") emitResult(Outcome.FAILED, "model call failed");
+    else emitResult(Outcome.COMPLETED);
   } catch (err) {
     unsub();
     clearInterval(hb);
@@ -191,24 +201,71 @@ async function main(): Promise<void> {
   }
 }
 
-/** Read the first framed `assignment` from fd 0 (one-shot). */
+/**
+ * Read the first framed `assignment` from fd 0 (one-shot). The supervisor's
+ * `AssignmentFrame` is `{type:"assignment", assignment:<Assignment json>}`, so
+ * `parseSupervisorFrame(raw).assignment` IS the assignment object — it is NOT
+ * nested again. The reader is detached once the assignment is decoded (or stdin
+ * ends) so it cannot keep the event loop alive.
+ */
 function readAssignment(): Promise<Assignment | undefined> {
   return new Promise((resolve) => {
+    let resolved = false;
+    const stdin = process.stdin;
+    const finish = (v: Assignment | undefined): void => {
+      if (resolved) return;
+      resolved = true;
+      stdin.removeListener("data", onData);
+      stdin.removeListener("end", onEnd);
+      resolve(v);
+    };
     const reader = new FrameReader((raw) => {
       const f = parseSupervisorFrame(raw);
-      if (f?.type === "assignment") {
-        resolve((f.assignment as { assignment: Assignment }).assignment);
-      }
+      if (f?.type === "assignment") finish(parseAssignment(f.assignment));
     });
-    const stdin = process.stdin;
-    const onData = (chunk: Buffer) => reader.feed(chunk);
+    const onData = (chunk: Buffer): void => reader.feed(chunk);
+    const onEnd = (): void => finish(undefined);
     stdin.on("data", onData);
-    stdin.on("end", () => resolve(undefined));
-    // readline keeps the event loop alive; close it once we have the assignment.
-    const rl = createInterface({ input: stdin, crlfDelay: Infinity });
-    rl.on("line", () => {}); // ensure stdin flows
-    setTimeout(() => {}, 0); // noop
+    stdin.on("end", onEnd);
   });
+}
+
+/**
+ * Runtime-validate a decoded assignment object (the IPC trust boundary). A
+ * malformed frame must not reach pi/session setup. Returns the typed
+ * assignment, or undefined if the shape is invalid.
+ */
+export function parseAssignment(raw: unknown): Assignment | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.turnId !== "string" || typeof r.sessionId !== "string" || typeof r.persona !== "string" || typeof r.message !== "string") return undefined;
+  if (!r.model || typeof r.model !== "object") return undefined;
+  const m = r.model as Record<string, unknown>;
+  if (typeof m.id !== "string" || typeof m.api !== "string" || typeof m.contextWindow !== "number") return undefined;
+  if (!r.toolAllowList || typeof r.toolAllowList !== "object") return undefined;
+  const t = r.toolAllowList as Record<string, unknown>;
+  if (typeof t.all !== "boolean" || !Array.isArray(t.tools) || t.tools.some((x) => typeof x !== "string")) return undefined;
+  const a: Assignment = {
+    turnId: r.turnId,
+    sessionId: r.sessionId,
+    persona: r.persona,
+    model: { id: m.id, api: m.api, contextWindow: m.contextWindow },
+    toolAllowList: { all: t.all, tools: t.tools as string[] },
+    message: r.message,
+  };
+  if (typeof m.maxOutputTokens === "number") a.model.maxOutputTokens = m.maxOutputTokens;
+  if (typeof m.thinkingLevel === "string") a.model.thinkingLevel = m.thinkingLevel;
+  if (Array.isArray(r.images)) {
+    const imgs: AssignmentImage[] = [];
+    for (const img of r.images) {
+      if (!img || typeof img !== "object") return undefined;
+      const im = img as Record<string, unknown>;
+      if (typeof im.data !== "string" || typeof im.mimeType !== "string") return undefined;
+      imgs.push({ data: im.data, mimeType: im.mimeType });
+    }
+    a.images = imgs;
+  }
+  return a;
 }
 
 /** Validate + build pi image content from the assignment images (MIME + size checked). */
@@ -414,8 +471,11 @@ function mapEvent(ev: AgentSessionEvent, s: AgentSession): TurnEvent["kind"] | u
   }
 }
 
-main().catch((err) => {
-  console.error(`child fatal: ${err instanceof Error ? err.message : err}`);
-  emitResult(Outcome.FAILED);
-  process.exit(1);
-});
+// Run only when this module is the entry point (not when imported by tests).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((err) => {
+    console.error(`child fatal: ${err instanceof Error ? err.message : err}`);
+    emitResult(Outcome.FAILED);
+    process.exit(1);
+  });
+}
