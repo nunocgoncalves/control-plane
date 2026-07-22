@@ -18,6 +18,7 @@ import {
   type WorkerMessage,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
 import type { HarnessConfig } from "./config.js";
+import { AsyncQueue } from "./async-queue.js";
 
 export class WorkClientError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -96,41 +97,6 @@ export async function openWorkStream(hello: WorkerMessage, transport: Transport)
   };
 }
 
-// Minimal async queue: push yields to the consumer; close() ends the stream.
-// The promise-client bidi consumes this as the input AsyncIterable<WorkerMessage>.
-class AsyncQueue<T> implements AsyncIterable<T> {
-  private readonly buf: T[] = [];
-  private closed = false;
-  private readonly waiters: Array<(r: IteratorResult<T>) => void> = [];
-
-  push(v: T): void {
-    if (this.closed) return;
-    const w = this.waiters.shift();
-    if (w) w({ value: v, done: false });
-    else this.buf.push(v);
-  }
-  close(): void {
-    this.closed = true;
-    for (const w of this.waiters) w({ value: undefined as never, done: true });
-    this.waiters.length = 0;
-  }
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return {
-      next: (): Promise<IteratorResult<T>> => {
-        if (this.buf.length) return Promise.resolve({ value: this.buf.shift() as T, done: false });
-        if (this.closed) return Promise.resolve({ value: undefined as never, done: true });
-        return new Promise((resolve) => this.waiters.push(resolve));
-      },
-      // The bidi client calls throw()/return() to cancel the input stream on
-      // call end/cancel; honor them by closing the queue (idempotent).
-      throw: async (): Promise<IteratorResult<T>> => {
-        this.close();
-        return { value: undefined as never, done: true };
-      },
-      return: async (): Promise<IteratorResult<T>> => {
-        this.close();
-        return { value: undefined as never, done: true };
-      },
-    };
-  }
-}
+// The bidi client consumes the shared AsyncQueue (async-queue.ts) as the
+// input AsyncIterable<WorkerMessage>; throw()/return() from call cancel close
+// it so cancellation semantics live in one place.

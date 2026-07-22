@@ -24,6 +24,20 @@ export class OutboxOverflow extends Error {
   }
 }
 
+/** Raised when an EventAck is out-of-range or regressing (a protocol violation). */
+export class AckError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AckError";
+  }
+}
+
+/** Validate a turn id before it is interpolated into a supervisor-owned path. */
+const TURN_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+export function validateTurnId(turnId: string): void {
+  if (!TURN_ID_RE.test(turnId)) throw new Error(`invalid turn id: ${JSON.stringify(turnId)}`);
+}
+
 export interface RecoveredTurn {
   turnId: string;
   events: TurnEvent[]; // unACKed durable events (replay as after_terminal audit)
@@ -40,20 +54,33 @@ export class EventOutbox {
   private ackedSeq = 0;
   private finalSequence: number | null = null;
   private readonly buffer: TurnEvent[] = [];
+  private readonly walPathValue: string;
   private readonly fd: number;
-  private readonly walPath: string;
 
   constructor(
     private readonly walDir: string,
     private readonly turnId: string,
     private readonly bound: number,
   ) {
-    this.walPath = join(walDir, `${turnId}.wal`);
-    this.fd = openSync(this.walPath, "a"); // append; supervisor-UID-owned dir
+    validateTurnId(turnId); // refuse path-traversal in the WAL filename
+    this.walPathValue = join(walDir, `${turnId}.wal`);
+    this.fd = openSync(this.walPathValue, "a"); // append; supervisor-UID-owned dir
   }
 
-  /** Append a durable event: assign sequence + timestamp, fsync to WAL, buffer. Returns the TurnEvent to send. */
+  /**
+   * Append a durable event: assign sequence + timestamp, fsync to WAL, buffer.
+   * Throws OutboxOverflow at capacity (the event is NOT appended). Terminal
+   * events (the overflow HarnessError + WorkerOutcome) use appendTerminal(),
+   * which cannot re-enter this bound check — so overflow always leaves a path
+   * to emit a FAILED outcome instead of hanging the turn.
+   */
   append(payload: TurnEventPayload): TurnEvent {
+    if (this.buffer.length >= this.bound) throw new OutboxOverflow(`outbox bound (${this.bound}) exceeded for turn ${this.turnId}`);
+    return this.appendTerminal(payload);
+  }
+
+  /** Append a terminal event bypassing the bound (overflow HarnessError + WorkerOutcome). */
+  appendTerminal(payload: TurnEventPayload): TurnEvent {
     this.sequence += 1;
     const ev = create(TurnEventSchema, {
       turnId: this.turnId,
@@ -64,7 +91,6 @@ export class EventOutbox {
     const bytes = toBinary(TurnEventSchema, ev);
     this.write(`E\t${this.sequence}\t${Buffer.from(bytes).toString("base64")}\n`);
     this.buffer.push(ev);
-    if (this.buffer.length > this.bound) throw new OutboxOverflow(`outbox bound (${this.bound}) exceeded for turn ${this.turnId}`);
     return ev;
   }
 
@@ -77,8 +103,17 @@ export class EventOutbox {
    * Advance the cumulative ACK cursor. Drops ACKed events from the buffer.
    * Returns true if the final outcome is ACKed (caller deletes the WAL / re-credits).
    */
+  /**
+   * Advance the cumulative ACK cursor. Rejects out-of-range (beyond the highest
+   * emitted sequence) and regressing (below the current cursor) ACKs as protocol
+   * errors; a duplicate at the current cursor is an idempotent no-op. Drops
+   * ACKed events from the buffer. Returns true if the final outcome is ACKed
+   * (caller deletes the WAL / re-credits).
+   */
   ack(throughSequence: number): boolean {
-    if (throughSequence <= this.ackedSeq) return false;
+    if (throughSequence > this.sequence) throw new AckError(`ack through ${throughSequence} > highest sequence ${this.sequence}`);
+    if (throughSequence < this.ackedSeq) throw new AckError(`regressing ack ${throughSequence} < ${this.ackedSeq}`);
+    if (throughSequence === this.ackedSeq) return false;
     this.ackedSeq = throughSequence;
     this.write(`A\t${throughSequence}\n`);
     while (this.buffer.length > 0 && Number(this.buffer[0]!.sequence) <= throughSequence) this.buffer.shift();
@@ -98,6 +133,9 @@ export class EventOutbox {
     return this.sequence;
   }
 
+  get walPath(): string {
+    return this.walPathValue;
+  }
   /** Close the WAL fd without deleting (e.g., on drain). */
   close(): void {
     try {

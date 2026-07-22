@@ -1,33 +1,39 @@
 // The per-turn pi child entry (HOR-381). Run via the setpriv launcher under the
-// session UID/GID. Reads the assignment from stdin (one JSON line), creates a
-// fresh pi AgentSession (resume-or-create by session.id from the PVC), runs one
-// turn, maps pi lifecycle events -> durable TurnEvent payloads on stdout (JSON
-// lines), and writes a final result. SIGTERM aborts pi. The supervisor
-// sequences + WAL's the payloads; this process holds no state between turns.
+// session UID/GID. Reads a framed `assignment` from fd 0, creates a fresh pi
+// AgentSession (resume-or-create by the EXACT assignment session.id from the
+// PVC session dir — never auto-detect), runs one turn, maps pi lifecycle
+// events → durable TurnEvent payloads + ephemeral TokenDeltas over the framed
+// fd-3 channel, emits a heartbeat for liveness, and writes a final `result`.
+// A framed `abort` on fd 0 aborts pi. The supervisor sequences + WAL's the
+// durable payloads; this process holds no state between turns.
 //
-// Token deltas (pi message_update) are deferred — they need a separate ephemeral
-// IPC channel; this maps the durable event set first.
+// Provider-SDK retries are disabled (settingsManager retry.provider.maxRetries
+// = 0) so there is exactly one observable retry layer — pi's own bounded
+// auto-retry (retry.maxRetries = HARNESS_MODEL_MAX_ATTEMPTS).
 
 import { createInterface } from "node:readline";
+import { writeSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { toJson, create } from "@bufbuild/protobuf";
 import {
   AuthStorage,
   DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
+  SettingsManager,
   createAgentSession,
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionFactory,
   type ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
-import { existsSync, readdirSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import {
   AssistantMessageSchema,
   CompactionFinishedSchema,
   CompactionStartedSchema,
   HarnessErrorSchema,
+  ModelCallFailedSchema,
   ModelCallStartedSchema,
   ModelRetryFinishedSchema,
   ModelRetryScheduledSchema,
@@ -41,9 +47,17 @@ import {
   Outcome,
   type TurnEvent,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
+import { FrameReader, encodeFrame, parseSupervisorFrame } from "./ipc.js";
 
 const PROVIDER = "iterabase-inference";
+const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const ALLOWED_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
+interface AssignmentImage {
+  data: string; // base64
+  mimeType: string;
+}
 interface Assignment {
   turnId: string;
   sessionId: string;
@@ -51,43 +65,73 @@ interface Assignment {
   model: { id: string; api: string; contextWindow: number; maxOutputTokens?: number; thinkingLevel?: string };
   toolAllowList: { all: boolean; tools: string[] };
   message: string;
+  images?: AssignmentImage[];
+}
+
+/** Write a framed ChildFrame to fd 3 (the child→supervisor IPC channel). */
+function writeFrame(frame: unknown): void {
+  try {
+    writeSync(3, encodeFrame(frame));
+  } catch {
+    /* fd closed (supervisor gone) — exit promptly via the main loop */
+  }
 }
 
 function emit(payload: TurnEvent["kind"]): void {
   const te = create(TurnEventSchema, { turnId: "", sequence: 0n, timestampMs: 0n, kind: payload });
-  process.stdout.write(`${JSON.stringify({ type: "event", event: toJson(TurnEventSchema, te) })}\n`);
+  writeFrame({ type: "event", event: toJson(TurnEventSchema, te) });
+}
+
+function emitTokenDelta(contentIndex: number, deltaType: "TEXT" | "THINKING", delta: string): void {
+  writeFrame({ type: "tokenDelta", contentIndex, deltaType, delta });
+}
+
+function emitHeartbeat(): void {
+  writeFrame({ type: "heartbeat" });
 }
 
 function emitResult(outcome: Outcome, message?: string): void {
-  process.stdout.write(`${JSON.stringify({ type: "result", outcome, message })}\n`);
+  writeFrame({ type: "result", outcome, message });
 }
 
 async function main(): Promise<void> {
-  const rl = createInterface({ input: process.stdin });
-  const assignment: Assignment | undefined = await new Promise((resolve) => {
-    rl.once("line", (line) => {
-      try {
-        resolve((JSON.parse(line) as { assignment: Assignment }).assignment);
-      } catch {
-        resolve(undefined);
-      }
-      rl.close();
-    });
-  });
+  const assignment = await readAssignment();
   if (!assignment) {
     emitResult(Outcome.FAILED, "no assignment on stdin");
     return;
   }
 
   const sessionDir = process.env.HARNESS_SESSION_DIR ?? "/data/session";
+  const cwd = process.env.HARNESS_WORKING_DIR ?? sessionDir;
   const egressProxyUrl = process.env.HARNESS_EGRESS_PROXY_URL ?? "";
   const piDirs = (process.env.HARNESS_PI_DIRS ?? "").split(":").filter(Boolean);
+  const maxAttempts = Number(process.env.HARNESS_MODEL_MAX_ATTEMPTS ?? "3") || 3;
+  const livenessMs = Number(process.env.HARNESS_LIVENESS_INTERVAL_MS ?? "5000") || 5000;
   mkdirSync(sessionDir, { recursive: true });
 
-  let session: AgentSession | undefined;
+  // Emit an immediate heartbeat so the supervisor's watchdog sees liveness
+  // without waiting one interval, then keep it warm for the turn.
+  emitHeartbeat();
+  const hb = setInterval(emitHeartbeat, Math.max(50, Math.floor(livenessMs / 2)));
+  hb.unref?.();
+
+  // Listen for a framed `abort` from the supervisor (fd 0).
+  let aborted = false;
+  const onAbortFrame = () => {
+    aborted = true;
+    void currentSession?.abort().catch(() => {});
+  };
+  const abortReader = new FrameReader((raw) => {
+    const f = parseSupervisorFrame(raw);
+    if (f?.type === "abort") onAbortFrame();
+  });
+  process.stdin.on("data", (chunk: Buffer) => abortReader.feed(chunk));
+
+  let currentSession: AgentSession | undefined;
   try {
-    session = await createSession(assignment, sessionDir, egressProxyUrl, piDirs);
+    currentSession = await createSession(assignment, sessionDir, cwd, egressProxyUrl, piDirs, maxAttempts);
   } catch (err) {
+    clearInterval(hb);
     emit({
       case: "harnessError",
       value: create(HarnessErrorSchema, {
@@ -101,30 +145,39 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Map pi events -> durable TurnEvent payloads.
-  let settled = false;
-  const unsub = session.subscribe((ev: AgentSessionEvent) => {
-    const payload = mapEvent(ev, session!);
+  // Map pi events → durable TurnEvent payloads + ephemeral token deltas.
+  const unsub = currentSession.subscribe((ev: AgentSessionEvent) => {
+    // Forward live token deltas (ephemeral, non-sequenced, non-ACKed).
+    if (ev.type === "message_update") {
+      const d = ev.assistantMessageEvent;
+      if (d.type === "text_delta") emitTokenDelta(d.contentIndex, "TEXT", d.delta);
+      else if (d.type === "thinking_delta") emitTokenDelta(d.contentIndex, "THINKING", d.delta);
+      return;
+    }
+    const payload = mapEvent(ev, currentSession!);
     if (payload) emit(payload);
-    if (ev.type === "agent_settled") settled = true;
   });
 
-  // SIGTERM -> abort pi (the supervisor's abort path).
-  let aborted = false;
+  // SIGTERM -> abort pi (the supervisor's bounded-escalation abort path).
   const onTerm = () => {
     aborted = true;
-    void session?.abort().catch(() => {});
+    void currentSession?.abort().catch(() => {});
   };
   process.on("SIGTERM", onTerm);
   process.on("SIGINT", onTerm);
 
   try {
-    await session.prompt(assignment.message);
+    const images = buildImages(assignment);
+    await currentSession.prompt(assignment.message, images ? { images } : undefined);
     // agent_settled fires during prompt; flush + dispose before reporting.
-    await session.dispose();
+    await currentSession.dispose();
     unsub();
+    clearInterval(hb);
+    emitHeartbeat();
     emitResult(aborted ? Outcome.ABORTED : Outcome.COMPLETED);
   } catch (err) {
+    unsub();
+    clearInterval(hb);
     emit({
       case: "harnessError",
       value: create(HarnessErrorSchema, {
@@ -138,13 +191,51 @@ async function main(): Promise<void> {
   }
 }
 
-/** Create the pi session: resume-or-create by session.id, model via the egress proxy, persona override, tool allowlist. */
+/** Read the first framed `assignment` from fd 0 (one-shot). */
+function readAssignment(): Promise<Assignment | undefined> {
+  return new Promise((resolve) => {
+    const reader = new FrameReader((raw) => {
+      const f = parseSupervisorFrame(raw);
+      if (f?.type === "assignment") {
+        resolve((f.assignment as { assignment: Assignment }).assignment);
+      }
+    });
+    const stdin = process.stdin;
+    const onData = (chunk: Buffer) => reader.feed(chunk);
+    stdin.on("data", onData);
+    stdin.on("end", () => resolve(undefined));
+    // readline keeps the event loop alive; close it once we have the assignment.
+    const rl = createInterface({ input: stdin, crlfDelay: Infinity });
+    rl.on("line", () => {}); // ensure stdin flows
+    setTimeout(() => {}, 0); // noop
+  });
+}
+
+/** Validate + build pi image content from the assignment images (MIME + size checked). */
+function buildImages(a: Assignment): { type: "image"; data: string; mimeType: string }[] | undefined {
+  if (!a.images || a.images.length === 0) return undefined;
+  const out: { type: "image"; data: string; mimeType: string }[] = [];
+  for (const img of a.images) {
+    if (!ALLOWED_IMAGE_MIME.has(img.mimeType)) throw new Error(`unsupported image mime: ${img.mimeType}`);
+    // base64 decoded byte length (account for padding).
+    const decodedLen = Math.floor((img.data.replace(/[^A-Za-z0-9+/=]/g, "").length * 3) / 4);
+    if (decodedLen > MAX_IMAGE_BYTES) throw new Error(`image too large (${decodedLen} bytes)`);
+    out.push({ type: "image", data: img.data, mimeType: img.mimeType });
+  }
+  return out;
+}
+
+/** Create the pi session: resume-or-create by the EXACT session.id; pi cwd = validated working dir. */
 async function createSession(
   a: Assignment,
   sessionDir: string,
+  cwd: string,
   egressProxyUrl: string,
   piDirs: string[],
+  maxAttempts: number,
 ): Promise<AgentSession> {
+  if (!SESSION_ID_RE.test(a.sessionId)) throw new Error(`invalid session id: ${JSON.stringify(a.sessionId)}`);
+
   const authStorage = AuthStorage.create(join(sessionDir, "auth.json"));
   const modelRegistry = ModelRegistry.create(authStorage);
 
@@ -168,26 +259,31 @@ async function createSession(
     pi.registerProvider(PROVIDER, provider);
   };
 
+  // Deterministic runtime settings: provider-SDK retries disabled (one retry
+  // layer — pi's own bounded auto-retry at maxAttempts).
+  const settingsManager = SettingsManager.inMemory({
+    retry: { enabled: true, maxRetries: maxAttempts, baseDelayMs: 1000, provider: { maxRetries: 0 } },
+  });
+
   const resourceLoader = new DefaultResourceLoader({
-    cwd: sessionDir,
+    cwd,
     agentDir: sessionDir, // scope discovery to the session (no global ~/.pi)
+    settingsManager,
     additionalExtensionPaths: piDirs,
     extensionFactories: [providerFactory],
     systemPromptOverride: () => a.persona,
   });
   await resourceLoader.reload();
 
-  const existing = findSessionFile(sessionDir);
-  const sessionManager = existing
-    ? SessionManager.open(existing, sessionDir, sessionDir)
-    : SessionManager.create(sessionDir, sessionDir);
+  const sessionManager = resolveSessionManager(a.sessionId, sessionDir, cwd);
 
   const toolOpts = a.toolAllowList.all ? { noTools: "builtin" as const } : { tools: a.toolAllowList.tools };
   const { session } = await createAgentSession({
-    cwd: sessionDir,
+    cwd,
     authStorage,
     modelRegistry,
     resourceLoader,
+    settingsManager,
     sessionManager,
     ...toolOpts,
   });
@@ -198,11 +294,21 @@ async function createSession(
   return session;
 }
 
-function findSessionFile(sessionDir: string): string | undefined {
+/** Resume-or-create by the EXACT session.id: open `<ts>_<sessionId>.jsonl` if present, else create with that id. */
+function resolveSessionManager(sessionId: string, sessionDir: string, cwd: string): SessionManager {
+  const existing = findSessionFile(sessionDir, sessionId);
+  if (existing) return SessionManager.open(existing, sessionDir, cwd);
+  return SessionManager.create(cwd, sessionDir, { id: sessionId });
+}
+
+/** Find the most recent session file ending in `_<sessionId>.jsonl` (exact id match). */
+function findSessionFile(sessionDir: string, sessionId: string): string | undefined {
   if (!existsSync(sessionDir)) return undefined;
-  const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
+  const suffix = `_${sessionId}.jsonl`;
+  const files = readdirSync(sessionDir).filter((f) => f.endsWith(suffix));
   if (files.length === 0) return undefined;
-  return join(sessionDir, files.sort().at(-1)!);
+  files.sort(); // timestamp-prefixed names sort chronologically
+  return join(sessionDir, files.at(-1)!);
 }
 
 /** Map a pi AgentSessionEvent -> a durable TurnEvent payload (or undefined to skip). */
@@ -216,6 +322,19 @@ function mapEvent(ev: AgentSessionEvent, s: AgentSession): TurnEvent["kind"] | u
     case "message_end": {
       const m = ev.message;
       if (m.role !== "assistant") return undefined;
+      // Model failure: stopReason "error" (or "aborted" without an abort) must
+      // NOT be misclassified as a completed assistant message.
+      if (m.stopReason === "error") {
+        return {
+          case: "modelCallFailed",
+          value: create(ModelCallFailedSchema, {
+            error: create(ErrorDetailSchema, {
+              message: m.errorMessage ?? "model call failed",
+              retryability: Retryability.UNKNOWN,
+            }),
+          }),
+        };
+      }
       const blocks = m.content as Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }>;
       const text = blocks.filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
       const toolCalls = blocks
