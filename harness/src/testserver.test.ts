@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,7 +98,7 @@ describe("HOR-381 gRPC+mTLS transport integration (Go testserver)", { timeout: 6
       modelRetry: { maxAttempts: 3 },
       tokenDelta: { sendBufferBytes: 1048576 },
     } as HarnessConfig;
-  });
+  }, 60_000);
 
   afterAll(async () => {
     try {

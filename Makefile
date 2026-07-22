@@ -163,13 +163,17 @@ harness-deps: ## Install harness Node deps (npm install).
 harness-build: ## Build the harness (tsc -> dist).
 	cd harness && npm run build
 
+HARNESS_TESTSERVER_BIN ?= bin/harness-testserver
+
 .PHONY: harness-test
-harness-test: ## Run harness unit + integration tests (vitest). Includes the native gRPC+mTLS Go testserver integration suite (harness/testserver) which requires `go` in PATH; skipped automatically when go is absent.
-	cd harness && npm test
+harness-test: ## Run harness unit + integration tests (vitest). Includes the native gRPC+mTLS Go testserver integration suite (harness/testserver); the Go binary is pre-built here so the test doesn't time out building/downloading modules. Skipped automatically when go is absent.
+	go build -o $(HARNESS_TESTSERVER_BIN) ./harness/testserver
+	cd harness && HARNESS_TESTSERVER_BIN=../$(HARNESS_TESTSERVER_BIN) npm test
 
 .PHONY: harness-integration-test
 harness-integration-test: ## Build + run only the HOR-381 native gRPC+mTLS transport integration test (Go connect-go testserver + real TS client).
-	cd harness && npx vitest --run src/testserver.test.ts
+	go build -o $(HARNESS_TESTSERVER_BIN) ./harness/testserver
+	cd harness && HARNESS_TESTSERVER_BIN=../$(HARNESS_TESTSERVER_BIN) npx vitest --run src/testserver.test.ts
 
 .PHONY: harness-lint
 harness-lint: ## Typecheck the harness (tsc --noEmit).

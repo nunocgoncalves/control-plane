@@ -61,9 +61,8 @@ type report struct {
 type server struct {
 	mu       sync.Mutex
 	rep      report
-	conns    int64
+	conns    uint64
 	clientCN string
-	done     bool
 }
 
 func main() {
@@ -112,11 +111,9 @@ func run() error {
 		s.mu.Lock()
 		if r.Proto != "HTTP/2.0" {
 			s.rep.HTTP2Only = false
-		} else {
+		} else if !s.rep.HTTP2Only && len(s.rep.FencingGenerations) == 0 {
 			// first observation defaults to true; any non-h2 flips it false.
-			if !s.rep.HTTP2Only && len(s.rep.FencingGenerations) == 0 {
-				s.rep.HTTP2Only = true
-			}
+			s.rep.HTTP2Only = true
 		}
 		if len(r.TLS.PeerCertificates) > 0 {
 			s.clientCN = r.TLS.PeerCertificates[0].Subject.CommonName
@@ -133,7 +130,11 @@ func run() error {
 		MinVersion:   tls.VersionTLS12,
 		NextProtos:   []string{"h2"}, // HTTP/2 only — no HTTP/1.1 fallback
 	}
-	srv := &http.Server{Handler: mux, TLSConfig: tlsCfg}
+	srv := &http.Server{
+		Handler:           mux,
+		TLSConfig:         tlsCfg,
+		ReadHeaderTimeout: 10 * time.Second, // mitigate Slowloris (gosec G112)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -184,8 +185,7 @@ func (s *server) finish()                   { finishOnce.Do(func() { close(finis
 
 // Work implements harnessv1connect.HarnessHandler.
 func (s *server) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error {
-	conn := atomic.AddInt64(&s.conns, 1)
-	gen := uint64(conn) // a new connection fences the prior generation
+	gen := atomic.AddUint64(&s.conns, 1) // a new connection fences the prior generation
 
 	hello, err := st.Receive()
 	if err != nil {
@@ -205,68 +205,77 @@ func (s *server) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMessa
 		return s.failErr("welcome send: " + err.Error())
 	}
 
-	if conn == 1 {
+	if gen == 1 {
 		return s.scenario1(st)
 	}
 	return s.scenario2(st)
 }
 
+// recv reads one worker message and validates it with check; on failure it
+// records a failErr and returns it. Keeps the scenario funcs well below the
+// gocyclo bound by collapsing the receive+validate+fail pattern.
+func (s *server) recv(
+	st *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage],
+	desc string, check func(*v1.WorkerMessage) bool,
+) (*v1.WorkerMessage, error) {
+	msg, err := st.Receive()
+	if err != nil {
+		return nil, s.failErr("no " + desc + ": " + err.Error())
+	}
+	if !check(msg) {
+		return nil, s.failErr("expected " + desc)
+	}
+	return msg, nil
+}
+
 // scenario1: Ready -> AssignTurn -> assistantMessage(seq1) -> ACK -> TokenDelta
 // -> Heartbeat -> workerOutcome(seq2) -> ACK + AbortTurn -> close (stream loss).
 func (s *server) scenario1(st *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error {
-	// Ready
-	if _, err := st.Receive(); err != nil {
-		return s.failErr("no ready: " + err.Error())
+	if _, err := s.recv(st, "ready", func(m *v1.WorkerMessage) bool { return m.GetReady() != nil }); err != nil {
+		return err
 	}
 	if err := st.Send(assignTurn()); err != nil {
 		return s.failErr("assign send: " + err.Error())
 	}
 	s.set(func(r *report) { r.AssignTurnSent = true })
 
-	// assistantMessage (seq 1) -> ACK through 1
-	msg, err := st.Receive()
+	// assistantMessage (seq 1) -> ACK through 1.
+	am, err := s.recv(st, "assistantMessage seq 1", func(m *v1.WorkerMessage) bool {
+		te := m.GetTurnEvent()
+		return te != nil && te.GetAssistantMessage() != nil && te.GetSequence() == 1
+	})
 	if err != nil {
-		return s.failErr("no assistant event: " + err.Error())
+		return err
 	}
-	te := msg.GetTurnEvent()
-	if te == nil || te.GetAssistantMessage() == nil || te.GetSequence() != 1 {
-		return s.failErr("expected assistantMessage seq 1")
-	}
-	if err := st.Send(eventAck(te.TurnId, 1)); err != nil {
+	if err := st.Send(eventAck(am.GetTurnEvent().TurnId, 1)); err != nil {
 		return s.failErr("ack1 send: " + err.Error())
 	}
 	s.set(func(r *report) { r.AckMatched = true })
 
-	// TokenDelta (ephemeral)
-	if msg, err = st.Receive(); err != nil {
-		return s.failErr("no tokenDelta: " + err.Error())
-	}
-	if msg.GetTokenDelta() == nil {
-		return s.failErr("expected tokenDelta")
+	// TokenDelta (ephemeral).
+	if _, err := s.recv(st, "tokenDelta", func(m *v1.WorkerMessage) bool { return m.GetTokenDelta() != nil }); err != nil {
+		return err
 	}
 	s.set(func(r *report) { r.TokenDeltaReceived = true })
 
-	// Heartbeat
-	if msg, err = st.Receive(); err != nil {
-		return s.failErr("no heartbeat: " + err.Error())
-	}
-	if msg.GetHeartbeat() == nil {
-		return s.failErr("expected heartbeat")
+	// Heartbeat.
+	if _, err := s.recv(st, "heartbeat", func(m *v1.WorkerMessage) bool { return m.GetHeartbeat() != nil }); err != nil {
+		return err
 	}
 	s.set(func(r *report) { r.HeartbeatReceived = true })
 
 	// workerOutcome COMPLETED (seq 2) -> ACK through 2 + AbortTurn, then close.
-	if msg, err = st.Receive(); err != nil {
-		return s.failErr("no outcome: " + err.Error())
+	wo, err := s.recv(st, "workerOutcome seq 2", func(m *v1.WorkerMessage) bool {
+		te := m.GetTurnEvent()
+		return te != nil && te.GetWorkerOutcome() != nil && te.GetSequence() == 2
+	})
+	if err != nil {
+		return err
 	}
-	te = msg.GetTurnEvent()
-	if te == nil || te.GetWorkerOutcome() == nil || te.GetSequence() != 2 {
-		return s.failErr("expected workerOutcome seq 2")
-	}
-	if err := st.Send(eventAck(te.TurnId, 2)); err != nil {
+	if err := st.Send(eventAck(wo.GetTurnEvent().TurnId, 2)); err != nil {
 		return s.failErr("ack2 send: " + err.Error())
 	}
-	if err := st.Send(abortTurn(te.TurnId)); err != nil {
+	if err := st.Send(abortTurn(wo.GetTurnEvent().TurnId)); err != nil {
 		return s.failErr("abort send: " + err.Error())
 	}
 	s.set(func(r *report) { r.AbortTurnSent = true })
@@ -278,21 +287,20 @@ func (s *server) scenario1(st *connect.BidiStream[v1.WorkerMessage, v1.ControlMe
 // audit tail survived the stream loss; the clean end lets the client observe
 // an OK end-of-stream (not another stream loss).
 func (s *server) scenario2(st *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error {
-	msg, err := st.Receive()
+	replay, err := s.recv(st, "replayed workerOutcome seq 2", func(m *v1.WorkerMessage) bool {
+		te := m.GetTurnEvent()
+		return te != nil && te.GetWorkerOutcome() != nil && te.GetSequence() == 2
+	})
 	if err != nil {
-		return s.failErr("no replay event: " + err.Error())
+		return err
 	}
-	te := msg.GetTurnEvent()
-	if te == nil || te.GetWorkerOutcome() == nil || te.GetSequence() != 2 {
-		return s.failErr("expected replayed workerOutcome seq 2")
-	}
-	if err := st.Send(eventAck(te.TurnId, 2)); err != nil {
+	if err := st.Send(eventAck(replay.GetTurnEvent().TurnId, 2)); err != nil {
 		return s.failErr("replay ack send: " + err.Error())
 	}
 	s.set(func(r *report) { r.ReplayAcked = true })
 
-	if _, err := st.Receive(); err != nil { // Ready after replay
-		return s.failErr("no ready after replay: " + err.Error())
+	if _, err := s.recv(st, "ready after replay", func(m *v1.WorkerMessage) bool { return m.GetReady() != nil }); err != nil {
+		return err
 	}
 	s.set(func(r *report) { r.ReadyAfterReplay = true })
 
@@ -435,5 +443,12 @@ func writePEM(path, typ string, b []byte) error {
 }
 
 func currentUIDGID() (uint32, uint32) {
-	return uint32(os.Getuid()), uint32(os.Getgid())
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid < 0 {
+		uid = 0
+	}
+	if gid < 0 {
+		gid = 0
+	}
+	return uint32(uid), uint32(gid) //nolint:gosec // uid/gid are small non-negative integers
 }
