@@ -508,3 +508,219 @@ func TestBuildDeploymentSpecDevShm(t *testing.T) {
 			"spec.devShmSize must override the 2Gi default")
 	})
 }
+
+// TestBuildDeploymentSpecCustomVLLM covers the HOR-388 custom-vLLM escape
+// hatches: command/args override (skips controller-managed --model/--port/--host
+// assembly), env passthrough (HF_HOME injected only when absent), volumes +
+// volumeMounts append-merge, hostIPC, and startupTimeoutSeconds. Pure (no
+// envtest/Postgres).
+func TestBuildDeploymentSpecCustomVLLM(t *testing.T) {
+	port := int32(defaultServingPort)
+	findVol := func(spec appsv1.DeploymentSpec, name string) *corev1.Volume {
+		for i := range spec.Template.Spec.Volumes {
+			if spec.Template.Spec.Volumes[i].Name == name {
+				return &spec.Template.Spec.Volumes[i]
+			}
+		}
+		return nil
+	}
+	findMount := func(c corev1.Container, name string) *corev1.VolumeMount {
+		for i := range c.VolumeMounts {
+			if c.VolumeMounts[i].Name == name {
+				return &c.VolumeMounts[i]
+			}
+		}
+		return nil
+	}
+	findEnv := func(c corev1.Container, name string) (corev1.EnvVar, bool) {
+		for _, e := range c.Env {
+			if e.Name == name {
+				return e, true
+			}
+		}
+		return corev1.EnvVar{}, false
+	}
+
+	t.Run("spec.args overrides controller-managed arg assembly", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "dsv4", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:  "vLLM",
+				Image: "voipmonitor/vllm:b12x",
+				// No spec.model: when args is set, the model is carried in args
+				// (positional `serve <model>`), so spec.model is not required.
+				Command: []string{"python", "-m", "vllm.entrypoints.cli.main", "serve"},
+				Args: []string{
+					"nvidia/DeepSeek-V4-Flash-NVFP4",
+					"--served-model-name", "DeepSeek-V4-Flash",
+					"--host", "0.0.0.0", "--port", "8000",
+					"--tensor-parallel-size", "2",
+					"--max-model-len", "262144",
+				},
+			},
+		}
+		spec := buildDeploymentSpec(mb, port)
+		c := spec.Template.Spec.Containers[0]
+
+		assert.Equal(t, []string{"python", "-m", "vllm.entrypoints.cli.main", "serve"}, c.Command,
+			"spec.command must override the image ENTRYPOINT verbatim")
+		assert.Equal(t, "nvidia/DeepSeek-V4-Flash-NVFP4", c.Args[0],
+			"spec.args must be used verbatim (positional model first)")
+		assert.NotContains(t, c.Args, "--model",
+			"controller must NOT inject --model when spec.args is set")
+		assert.Equal(t, "voipmonitor/vllm:b12x", c.Image)
+	})
+
+	t.Run("unset args keeps controller-managed --model/--port/--host assembly", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "plug-n-play", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B"},
+		}
+		spec := buildDeploymentSpec(mb, port)
+		c := spec.Template.Spec.Containers[0]
+
+		assert.Contains(t, c.Args, "--model")
+		assert.Contains(t, c.Args, "Qwen/Qwen3-27B")
+		assert.Contains(t, c.Args, "--port")
+		assert.Contains(t, c.Args, "--host")
+		assert.Nil(t, c.Command, "no command override when spec.command unset")
+	})
+
+	t.Run("HF_HOME injected only when env does not already set it", func(t *testing.T) {
+		// Without HF_HOME in user env -> controller injects its own.
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-hf", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind: "vLLM", Model: "Qwen/Qwen3-27B",
+				Env: []corev1.EnvVar{{Name: "CUTE_DSL_ARCH", Value: "sm_120a"}},
+			},
+		}
+		c := buildDeploymentSpec(mb, port).Template.Spec.Containers[0]
+		hf, ok := findEnv(c, "HF_HOME")
+		require.True(t, ok, "HF_HOME must be injected when user env omits it")
+		assert.Equal(t, defaultModelCachePath, hf.Value)
+		_, ok = findEnv(c, "CUTE_DSL_ARCH")
+		assert.True(t, ok, "user env must be preserved")
+
+		// With HF_HOME in user env -> controller does NOT inject its own (user wins).
+		mb2 := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "user-hf", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind: "vLLM", Model: "Qwen/Qwen3-27B",
+				Env: []corev1.EnvVar{{Name: "HF_HOME", Value: "/custom/hf"}},
+			},
+		}
+		c2 := buildDeploymentSpec(mb2, port).Template.Spec.Containers[0]
+		hf2, ok := findEnv(c2, "HF_HOME")
+		require.True(t, ok)
+		assert.Equal(t, "/custom/hf", hf2.Value, "user HF_HOME must win, not the controller default")
+		count := 0
+		for _, e := range c2.Env {
+			if e.Name == "HF_HOME" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "HF_HOME must not be duplicated")
+	})
+
+	t.Run("user volumes/mounts are appended after managed ones", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "patches", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind: "vLLM", Model: "Qwen/Qwen3-27B",
+				Volumes: []corev1.Volume{{
+					Name: "patches",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "dsv4-patches"},
+						},
+					},
+				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "patches", MountPath: "/opt/venv/lib/python3.12/site-packages/vllm/x.py", SubPath: "nvfp4.py", ReadOnly: true},
+				},
+			},
+		}
+		spec := buildDeploymentSpec(mb, port)
+
+		assert.NotNil(t, findVol(spec, "hf-cache"), "managed hf-cache volume preserved")
+		assert.NotNil(t, findVol(spec, devShmVolumeName), "managed dshm volume preserved")
+		assert.NotNil(t, findVol(spec, "patches"), "user volume appended")
+
+		c := spec.Template.Spec.Containers[0]
+		assert.NotNil(t, findMount(c, "hf-cache"), "managed hf-cache mount preserved")
+		assert.NotNil(t, findMount(c, devShmVolumeName), "managed dshm mount preserved")
+		m := findMount(c, "patches")
+		require.NotNil(t, m, "user mount appended")
+		assert.Equal(t, "/opt/venv/lib/python3.12/site-packages/vllm/x.py", m.MountPath)
+		assert.True(t, m.ReadOnly)
+	})
+
+	t.Run("hostIPC defaults false and is set when requested", func(t *testing.T) {
+		mbOff := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-ipc", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B"},
+		}
+		assert.False(t, buildDeploymentSpec(mbOff, port).Template.Spec.HostIPC, "hostIPC defaults false")
+
+		mbOn := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "ipc", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B", HostIPC: true},
+		}
+		assert.True(t, buildDeploymentSpec(mbOn, port).Template.Spec.HostIPC, "hostIPC set when requested")
+	})
+
+	t.Run("startupTimeoutSeconds scales the startupProbe window", func(t *testing.T) {
+		// Default (unset) -> 600s -> failureThreshold 60 (= today's 10 min).
+		mbDefault := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "default-timeout", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B"},
+		}
+		c := buildDeploymentSpec(mbDefault, port).Template.Spec.Containers[0]
+		require.NotNil(t, c.StartupProbe)
+		assert.Equal(t, int32(60), c.StartupProbe.FailureThreshold, "default startup window = 600s / 10 = 60")
+
+		// B12X 1M-context preset -> 1800s -> failureThreshold 180.
+		mbLong := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "long-warmup", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:        "vLLM",
+				Model:       "Qwen/Qwen3-27B",
+				HealthProbe: &v1alpha1.HealthProbeSpec{StartupTimeoutSeconds: 1800},
+			},
+		}
+		c2 := buildDeploymentSpec(mbLong, port).Template.Spec.Containers[0]
+		require.NotNil(t, c2.StartupProbe)
+		assert.Equal(t, int32(180), c2.StartupProbe.FailureThreshold, "1800s / 10 = 180")
+		assert.Equal(t, int32(10), c2.StartupProbe.PeriodSeconds)
+	})
+}
+
+// TestValidateReservedVolumeNames covers the HOR-388 guard against user
+// volumes/mounts shadowing the controller-managed hf-cache / dshm. Pure.
+func TestValidateReservedVolumeNames(t *testing.T) {
+	cm := corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "x"}}
+
+	t.Run("non-reserved names pass", func(t *testing.T) {
+		assert.NoError(t, validateReservedVolumeNames(
+			[]corev1.Volume{{Name: "patches", VolumeSource: corev1.VolumeSource{ConfigMap: &cm}}},
+			[]corev1.VolumeMount{{Name: "patches", MountPath: "/x"}},
+		))
+	})
+	t.Run("reserved volume name rejected", func(t *testing.T) {
+		assert.Error(t, validateReservedVolumeNames(
+			[]corev1.Volume{{Name: "hf-cache", VolumeSource: corev1.VolumeSource{ConfigMap: &cm}}},
+			nil,
+		))
+		assert.Error(t, validateReservedVolumeNames(
+			[]corev1.Volume{{Name: devShmVolumeName, VolumeSource: corev1.VolumeSource{ConfigMap: &cm}}},
+			nil,
+		))
+	})
+	t.Run("reserved mount name rejected", func(t *testing.T) {
+		assert.Error(t, validateReservedVolumeNames(
+			nil,
+			[]corev1.VolumeMount{{Name: "dshm", MountPath: "/x"}},
+		))
+	})
+}

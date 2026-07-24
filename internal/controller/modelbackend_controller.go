@@ -28,6 +28,7 @@ const (
 	defaultServingPort    = 8000
 	defaultHealthPath     = "/health"
 	defaultModelCachePath = "/data/hf-cache"
+	hfCacheVolumeName     = "hf-cache"
 	devShmVolumeName      = "dshm"
 	devShmMountPath       = "/dev/shm"
 	gpuResourceName       = corev1.ResourceName("nvidia.com/gpu")
@@ -122,11 +123,20 @@ func (r *ModelBackendReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *ModelBackendReconciler) reconcileVLLM(ctx context.Context, mb *v1alpha1.ModelBackend) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if mb.Spec.Model == "" {
-		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", "spec.model is required for kind vLLM")
+	// spec.model is required only when the controller assembles the serving
+	// args; a fully-overridden spec.args carries the model itself (HOR-388).
+	if len(mb.Spec.Args) == 0 && mb.Spec.Model == "" {
+		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", "spec.model is required for kind vLLM (or set spec.args to fully override the serving command)")
 	}
-	if err := validateExtraArgs(mb.Spec.ExtraArgs); err != nil {
-		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", fmt.Sprintf("spec.extraArgs: %v", err))
+	// extraArgs validation only governes the controller-assembled path; when
+	// spec.args overrides the whole command, extraArgs is ignored (HOR-388).
+	if len(mb.Spec.Args) == 0 {
+		if err := validateExtraArgs(mb.Spec.ExtraArgs); err != nil {
+			return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", fmt.Sprintf("spec.extraArgs: %v", err))
+		}
+	}
+	if err := validateReservedVolumeNames(mb.Spec.Volumes, mb.Spec.VolumeMounts); err != nil {
+		return ctrl.Result{}, r.patchStatus(ctx, mb, false, false, "", fmt.Sprintf("spec.volumes: %v", err))
 	}
 
 	port := servingPort(mb)
@@ -290,13 +300,23 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 	// the liveness probe can kill it. vLLM is slow to start serving /health
 	// (model download + GPU load takes minutes); without this the liveness probe
 	// (30s) kills the container in a CrashLoopBackOff before it ever serves.
+	// startupTimeoutSeconds (default 600s = 10 min) scales the window for large /
+	// long-context models whose warmup is slow (HOR-388).
+	startupTimeout := startupTimeoutSeconds(mb)
 	startupProbe := &corev1.Probe{
 		ProbeHandler:     probe.ProbeHandler,
 		PeriodSeconds:    10,
-		FailureThreshold: 60, // 10 minutes for model download + GPU load
+		FailureThreshold: (startupTimeout + 9) / 10, // ceil(timeout/10)
 	}
-	args := []string{"--model", mb.Spec.Model, "--port", fmt.Sprintf("%d", port), "--host", "0.0.0.0"}
-	args = append(args, mb.Spec.ExtraArgs...)
+	// When spec.args is set, the deployer fully owns the serving command shape
+	// (e.g. the positional `vllm ... serve <model>` form) and the controller
+	// skips its --model/--port/--host assembly + extraArgs. The Service + probes
+	// still target `port`; the deployer must bind --port <port> in args (HOR-388).
+	args := mb.Spec.Args
+	if len(args) == 0 {
+		args = []string{"--model", mb.Spec.Model, "--port", fmt.Sprintf("%d", port), "--host", "0.0.0.0"}
+		args = append(args, mb.Spec.ExtraArgs...)
+	}
 
 	// GPU-safe rollout (HOR-378): maxSurge=0 + maxUnavailable=1 means k8s
 	// terminates the old pod before creating the new one. With the default
@@ -333,9 +353,10 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 			Spec: corev1.PodSpec{
 				RuntimeClassName:              &runtimeClassName,
 				TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
+				HostIPC:                       mb.Spec.HostIPC,
 				NodeSelector:                  nodeSelector,
 				Tolerations:                   mb.Spec.Tolerations,
-				Volumes: []corev1.Volume{
+				Volumes: append([]corev1.Volume{
 					{
 						Name: "hf-cache",
 						VolumeSource: corev1.VolumeSource{
@@ -354,17 +375,18 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 							},
 						},
 					},
-				},
+				}, mb.Spec.Volumes...),
 				Containers: []corev1.Container{{
-					Name:  "server",
-					Image: image,
-					Args:  args,
-					Env:   []corev1.EnvVar{{Name: "HF_HOME", Value: defaultModelCachePath}},
-					Ports: []corev1.ContainerPort{{ContainerPort: port, Name: "http"}},
-					VolumeMounts: []corev1.VolumeMount{
+					Name:    "server",
+					Image:   image,
+					Command: mb.Spec.Command,
+					Args:    args,
+					Env:     buildContainerEnv(mb.Spec.Env),
+					Ports:   []corev1.ContainerPort{{ContainerPort: port, Name: "http"}},
+					VolumeMounts: append([]corev1.VolumeMount{
 						{Name: "hf-cache", MountPath: defaultModelCachePath},
 						{Name: devShmVolumeName, MountPath: devShmMountPath},
-					},
+					}, mb.Spec.VolumeMounts...),
 					Resources:      resources,
 					StartupProbe:   startupProbe,
 					ReadinessProbe: probe,
@@ -396,6 +418,61 @@ func healthPath(mb *v1alpha1.ModelBackend) string {
 		return mb.Spec.HealthProbe.Path
 	}
 	return defaultHealthPath
+}
+
+// defaultStartupTimeoutSeconds is the total time the startupProbe grants vLLM
+// to download weights + load them into GPU before liveness can kill the pod,
+// when spec.healthProbe.startupTimeoutSeconds is unset. 10 minutes covers most
+// plug-n-play models; large/long-context custom builds raise it (HOR-388).
+const defaultStartupTimeoutSeconds int32 = 600
+
+// startupTimeoutSeconds returns the effective startupProbe window. A
+// non-positive startupTimeoutSeconds means "use the default".
+func startupTimeoutSeconds(mb *v1alpha1.ModelBackend) int32 {
+	if mb.Spec.HealthProbe != nil && mb.Spec.HealthProbe.StartupTimeoutSeconds > 0 {
+		return mb.Spec.HealthProbe.StartupTimeoutSeconds
+	}
+	return defaultStartupTimeoutSeconds
+}
+
+// buildContainerEnv returns the serving container env: the user's env with the
+// controller-managed HF_HOME=/data/hf-cache injected only when the user did not
+// already set it (deterministic user-wins, no reliance on K8s last-wins
+// duplicate behavior). HOR-388.
+func buildContainerEnv(userEnv []corev1.EnvVar) []corev1.EnvVar {
+	if envHasName(userEnv, "HF_HOME") {
+		return userEnv
+	}
+	return append([]corev1.EnvVar{{Name: "HF_HOME", Value: defaultModelCachePath}}, userEnv...)
+}
+
+// envHasName reports whether env declares a variable named name.
+func envHasName(env []corev1.EnvVar, name string) bool {
+	for _, e := range env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// validateReservedVolumeNames rejects user volumes/volumeMounts that reuse the
+// controller-managed names hf-cache / dshm. The reconciler appends the managed
+// volumes after the user's; a collision would silently shadow the managed one
+// (breaking the HF cache mount or the sized /dev/shm), so it is rejected with a
+// clear status message instead. HOR-388.
+func validateReservedVolumeNames(volumes []corev1.Volume, mounts []corev1.VolumeMount) error {
+	for _, v := range volumes {
+		if v.Name == hfCacheVolumeName || v.Name == devShmVolumeName {
+			return fmt.Errorf("volume name %q is reserved (controller-managed)", v.Name)
+		}
+	}
+	for _, m := range mounts {
+		if m.Name == hfCacheVolumeName || m.Name == devShmVolumeName {
+			return fmt.Errorf("volumeMount name %q is reserved (controller-managed)", m.Name)
+		}
+	}
+	return nil
 }
 
 // validateExtraArgs rejects extraArgs that would override the controller-managed
