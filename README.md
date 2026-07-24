@@ -191,6 +191,37 @@ AgentSandbox pod's model + tool traffic.
 The credential **value** never lives in Postgres — only the K8s Secret
 reference; the value stays in a Secret mounted into the proxy.
 
+## Model backends (HOR-306/388)
+
+A `ModelBackend` (`kind: vLLM`) deploys an internal GPU workload (Deployment +
+Service) and materializes into `catalog.backends`; a `Model` references it and
+carries the client-facing alias/config. For **plug-n-play** models the
+controller assembles the serving command (`--model <id> --port --host
+<extraArgs>`) and manages the HF cache (`hf-cache` hostPath + `HF_HOME`), a
+sized `/dev/shm` (`devShmSize`, default 2Gi), the `nvidia` runtimeClass, the GPU
+request, the GPU node selector, and a 10-min startup probe.
+
+**Custom vLLM builds** (HOR-388) — e.g. a quantized/SM120-specific build with a
+non-stock entrypoint, build-tuning env vars, or runtime patch overlays — use the
+generic corev1-passthrough escape hatches. None of these affect the plug-n-play
+path when unset:
+
+| Field | Effect |
+|---|---|
+| `spec.command` / `spec.args` | Override the container ENTRYPOINT/CMD. When `args` is set, the controller **skips** its `--model/--port/--host` assembly and `extraArgs`; the deployer owns the whole command shape (e.g. positional `vllm … serve <model>`). `healthProbe.port` stays the sole port source for the Service + probes — the deployer must bind `--port <healthProbe.port>` in `args`. |
+| `spec.env` | Extra env vars (`corev1.EnvVar`, supports `valueFrom` for `HF_TOKEN` from a Secret). The controller injects `HF_HOME=/data/hf-cache` only if `env` doesn't already set it (user wins). |
+| `spec.volumes` / `spec.volumeMounts` | Extra volumes/mounts, appended after the managed `hf-cache` + `dshm`. Reserved names `hf-cache`/`dshm` are rejected. Use for runtime file-artifact overlays (a ConfigMap of patch `.py` files subPath-mounted over venv paths) or a PV. |
+| `spec.hostIPC` | Opt-in `hostIPC` (default false). Sized `/dev/shm` (`devShmSize`) is the normal TP shm mechanism; flip on only if a build's NCCL/CUDA IPC proves to need it. |
+| `spec.healthProbe.startupTimeoutSeconds` | Scales the startupProbe window (default 600s; controller renders `period=10, failureThreshold=ceil(n/10)`). Raise for large/long-context models whose warmup is slow. |
+
+The platform does **not** carry forked serving images: a custom build consumes
+its upstream image verbatim and overlays any patches as file artifacts
+(ConfigMaps). Weights are downloaded from HuggingFace into the `hf-cache` hostPath
+(no pre-mount needed); set `HF_TOKEN` in `env` for gated models. See
+`config/samples/platform_v1alpha1_modelbackend_dsv4flash_b12x.yaml` for a full
+B12X/SM120 example (DeepSeek-V4-Flash NVFP4, TP=2, MTP, 256k context, patch
+overlays). Multi-replica TP/PP and SGLang are deferred (HOR-323 / deepen).
+
 ## CRD landscape
 
 All CRDs use group `platform.iterabase.com` / `v1alpha1`, reconciled by this

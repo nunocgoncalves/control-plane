@@ -1,0 +1,181 @@
+# DeepSeek-V4-Flash (NVFP4) on SM120 — B12X vLLM build with MTP.
+#
+# Demonstrates the HOR-388 custom-vLLM fields (command/args/env/volumes/
+# volumeMounts/devShmSize/healthProbe.startupTimeoutSeconds) on a real
+# custom-build backend: the B12X native vLLM image for consumer Blackwell
+# (SM120 / 2× RTX PRO 6000), with working MTP speculative decoding.
+#
+# Two patch .py files (nvfp4.py, quant_config.py from the dsv4-flash kit) are
+# delivered as a ConfigMap and subPath-mounted over the image's venv paths —
+# see dsv4-b12x-patches below. They are version-coupled to the pinned B12X
+# image tag; bumping the image requires re-validating the patch paths.
+#
+# Reference: https://github.com/hikarioyama/dsv4-flash-nvfp4-sm120
+#
+# NOTE: weights are NOT pre-mounted. vLLM downloads
+# nvidia/DeepSeek-V4-Flash-NVFP4 from HuggingFace into the controller-managed
+# hf-cache hostPath (/data/hf-cache, HF_HOME) on first start and reuses it
+# across restarts. The model is not HF-gated, so no HF_TOKEN is required.
+#
+# Context is capped at 256k (the kit's "balanced 256K" preset:
+# --max-model-len 262144 --max-num-batched-tokens 512 --gpu-memory-utilization
+# 0.94); the 1M preset is available by raising these + startupTimeoutSeconds.
+---
+# The two patch files as a ConfigMap. In a forge overlay these are generated
+# from the kit's patches/*.py via kustomize configMapGenerator (file artifacts).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dsv4-b12x-patches
+  namespace: default
+data:
+  nvfp4.py: |
+    # placeholder — replace with the contents of patches/nvfp4.py from the
+    # dsv4-flash kit (oracle gate allowing B12X+SILU clamp on SM120).
+  quant_config.py: |
+    # placeholder — replace with the contents of patches/quant_config.py from
+    # the dsv4-flash kit (routes MTP draft experts to Mxfp4MoEMethod).
+---
+apiVersion: platform.iterabase.com/v1alpha1
+kind: ModelBackend
+metadata:
+  name: dsv4-flash-b12x
+  namespace: default
+spec:
+  kind: vLLM
+  # Upstream B12X (native SM120) vLLM build. Pinned to a specific commit; the
+  # patch overlays below are version-coupled to this tag.
+  image: voipmonitor/vllm:chthonic-consecration-f1190eab-b12x0ff2847-pr20-cu132
+  # spec.model is unset: with spec.args overridden, the model is the positional
+  # arg to `vllm ... serve` (downloaded from HF into hf-cache).
+  replicas: 1
+  # TP=2 in a single pod: 2 GPUs on one node. --tensor-parallel-size 2 in args.
+  resources:
+    limits:
+      nvidia.com/gpu: "2"
+      memory: 256Gi
+    requests:
+      nvidia.com/gpu: "2"
+      memory: 256Gi
+  # B12X needs a large /dev/shm (the kit uses --shm-size 32g).
+  devShmSize: 32Gi
+  # 256k-context warmup is slower than the 10-min default; allow ~30 min.
+  healthProbe:
+    startupTimeoutSeconds: 1800
+  # command overrides the image ENTRYPOINT (the B12X image default is /bin/bash).
+  command:
+    - python
+    - -m
+    - vllm.entrypoints.cli.main
+    - serve
+  # args fully own the serving flag set; the controller skips its
+  # --model/--port/--host assembly. --port MUST match healthProbe.port (8000).
+  args:
+    - nvidia/DeepSeek-V4-Flash-NVFP4
+    - --served-model-name
+    - DeepSeek-V4-Flash
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --kv-cache-dtype
+    - fp8
+    - --block-size
+    - "256"
+    - --load-format
+    - safetensors
+    - --tensor-parallel-size
+    - "2"
+    - --moe-backend
+    - b12x
+    - --linear-backend
+    - b12x
+    - --gpu-memory-utilization
+    - "0.94"
+    - --max-model-len
+    - "262144"
+    - --max-num-seqs
+    - "64"
+    - --async-scheduling
+    - --no-scheduler-reserve-full-isl
+    - --max-num-batched-tokens
+    - "512"
+    - --max-cudagraph-capture-size
+    - "192"
+    - --attention-backend
+    - B12X_MLA_SPARSE
+    - --enable-chunked-prefill
+    - --enable-prefix-caching
+    - --compilation-config
+    - '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
+    - --tokenizer-mode
+    - deepseek_v4
+    - --tool-call-parser
+    - deepseek_v4
+    - --enable-auto-tool-choice
+    - --reasoning-parser
+    - deepseek_v4
+    - --enable-flashinfer-autotune
+    - --speculative-config
+    - '{"method":"mtp","num_speculative_tokens":2,"draft_sample_method":"probabilistic","moe_backend":"b12x","use_local_argmax_reduction":true}'
+  # B12X build-tuning env vars (consumed by the build's Python, not CLI flags).
+  env:
+    - {name: CUDA_DEVICE_ORDER, value: PCI_BUS_ID}
+    - {name: CUTE_DSL_ARCH, value: sm_120a}
+    - {name: NCCL_IB_DISABLE, value: "1"}
+    - {name: NCCL_P2P_LEVEL, value: SYS}
+    - {name: NCCL_PROTO, value: LL,LL128,Simple}
+    - {name: PYTORCH_CUDA_ALLOC_CONF, value: expandable_segments:True}
+    - {name: VLLM_PREFIX_CACHE_RETENTION_INTERVAL, value: "4096"}
+    - {name: VLLM_USE_AOT_COMPILE, value: "1"}
+    - {name: VLLM_USE_BREAKABLE_CUDAGRAPH, value: "0"}
+    - {name: VLLM_USE_MEGA_AOT_ARTIFACT, value: "1"}
+    - {name: VLLM_MEMORY_PROFILE_INCLUDE_ATTN, value: "1"}
+    - {name: B12X_MHC_MAX_TOKENS, value: "16384"}
+    - {name: VLLM_USE_FLASHINFER_SAMPLER, value: "1"}
+    - {name: VLLM_USE_B12X_WO_PROJECTION, value: "1"}
+    - {name: VLLM_USE_B12X_MHC, value: "1"}
+    - {name: VLLM_USE_B12X_FP8_GEMM, value: "1"}
+    - {name: VLLM_USE_B12X_MOE, value: "1"}
+    - {name: VLLM_USE_B12X_SPARSE_INDEXER, value: "1"}
+    - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+    - {name: VLLM_PCIE_ALLREDUCE_BACKEND, value: b12x}
+    - {name: VLLM_ENABLE_PCIE_ALLREDUCE, value: "1"}
+    - {name: B12X_MLA_SM120_UNIFIED, value: "1"}
+    - {name: USES_B12X, value: "True"}
+    - {name: B12X_DENSE_SPLITK_TURBO, value: "1"}
+    - {name: B12X_W4A16_TC_DECODE, value: "1"}
+  # Patch overlays: the two .py files subPath-mounted over the venv paths.
+  # ⚠️ The mountPath must track the image's venv path; on an image bump the
+  # python3.12 segment may drift and vLLM will silently load the unpatched
+  # file (MTP draft breaks). Re-validate on every image change.
+  volumes:
+    - name: patches
+      configMap:
+        name: dsv4-b12x-patches
+  volumeMounts:
+    - name: patches
+      mountPath: /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/nvfp4.py
+      subPath: nvfp4.py
+      readOnly: true
+    - name: patches
+      mountPath: /opt/venv/lib/python3.12/site-packages/vllm/models/deepseek_v4/quant_config.py
+      subPath: quant_config.py
+      readOnly: true
+---
+apiVersion: platform.iterabase.com/v1alpha1
+kind: Model
+metadata:
+  name: deepseek-v4-flash
+  namespace: default
+spec:
+  # Client-facing alias; mirrors the backend's --max-model-len (256k).
+  modelID: deepseek-v4-flash
+  displayName: DeepSeek-V4-Flash (NVFP4, B12X, MTP)
+  contextLength: 262144
+  capabilities:
+    - chat
+    - tools
+  backendRef: dsv4-flash-b12x
+  transforms:
+    rewrite_model_name: true
