@@ -131,6 +131,18 @@ type ModelBackendSpec struct {
 	// +optional
 	HostIPC bool `json:"hostIPC,omitempty"`
 
+	// securityContext is the container-level SecurityContext applied to the
+	// serving container (corev1.SecurityContext passthrough). Use this for
+	// capabilities custom vLLM builds need — notably `capabilities.add:
+	// [IPC_LOCK]` for NCCL tensor-parallel, where CAP_IPC_LOCK bypasses
+	// RLIMIT_MEMLOCK (the K8s equivalent of docker's `--ulimit memlock=-1`; a
+	// bash `ulimit -l unlimited` wrapper is a no-op without CAP_SYS_RESOURCE
+	// since the hard limit is capped). Also covers runAsUser,
+	// readOnlyRootFilesystem, etc. for other custom deployments. Ignored for
+	// external.
+	// +optional
+	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
+
 	// external configures an external (non-deployed) backend. Required when
 	// kind is external.
 	// +optional

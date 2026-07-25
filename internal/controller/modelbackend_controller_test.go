@@ -750,6 +750,34 @@ func TestBuildDeploymentSpecCustomVLLM(t *testing.T) {
 		assert.True(t, buildDeploymentSpec(mbOn, port).Template.Spec.HostIPC, "hostIPC set when requested")
 	})
 
+	t.Run("securityContext is rendered on the server container", func(t *testing.T) {
+		// CAP_IPC_LOCK bypasses RLIMIT_MEMLOCK — the K8s equivalent of docker's
+		// --ulimit memlock=-1, needed for NCCL TP SHM/CUDA-IPC (HOR-390).
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "sc", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:  "vLLM",
+				Model: "Qwen/Qwen3-27B",
+				SecurityContext: &corev1.SecurityContext{
+					Capabilities: &corev1.Capabilities{
+						Add: []corev1.Capability{"IPC_LOCK", "SYS_RESOURCE"},
+					},
+				},
+			},
+		}
+		c := buildDeploymentSpec(mb, port).Template.Spec.Containers[0]
+		require.NotNil(t, c.SecurityContext, "spec.securityContext must render on the server container")
+		require.NotNil(t, c.SecurityContext.Capabilities)
+		assert.Equal(t, []corev1.Capability{"IPC_LOCK", "SYS_RESOURCE"}, c.SecurityContext.Capabilities.Add)
+
+		// Unset -> nil (plug-n-play path unchanged).
+		mbNone := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-sc", Namespace: "default"},
+			Spec:       v1alpha1.ModelBackendSpec{Kind: "vLLM", Model: "Qwen/Qwen3-27B"},
+		}
+		assert.Nil(t, buildDeploymentSpec(mbNone, port).Template.Spec.Containers[0].SecurityContext)
+	})
+
 	t.Run("startupTimeoutSeconds scales the startupProbe window", func(t *testing.T) {
 		// Default (unset) -> 600s -> failureThreshold 60 (= today's 10 min).
 		mbDefault := &v1alpha1.ModelBackend{

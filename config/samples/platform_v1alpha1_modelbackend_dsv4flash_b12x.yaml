@@ -59,6 +59,16 @@ spec:
       memory: 256Gi
   # B12X needs a large /dev/shm (the kit uses --shm-size 32g).
   devShmSize: 32Gi
+  # CAP_IPC_LOCK bypasses RLIMIT_MEMLOCK — the K8s equivalent of the kit's
+  # `--ulimit memlock=-1`. Without it NCCL's TP SHM/CUDA-IPC transport probe
+  # fails (ncclCommInitRank system error) because the container memlock is
+  # capped (8 MiB) and the hard limit can't be raised without CAP_SYS_RESOURCE.
+  # SYS_RESOURCE hedges code that checks the rlimit value (HOR-390).
+  securityContext:
+    capabilities:
+      add:
+        - IPC_LOCK
+        - SYS_RESOURCE
   # 256k-context warmup is slower than the 10-min default; allow ~30 min.
   healthProbe:
     startupTimeoutSeconds: 1800

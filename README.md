@@ -212,6 +212,7 @@ path when unset:
 | `spec.env` | Extra env vars (`corev1.EnvVar`, supports `valueFrom` for `HF_TOKEN` from a Secret). The controller injects `HF_HOME=/data/hf-cache` only if `env` doesn't already set it (user wins). |
 | `spec.volumes` / `spec.volumeMounts` | Extra volumes/mounts, appended after the managed `hf-cache` + `dshm`. Reserved names `hf-cache`/`dshm` are rejected. Use for runtime file-artifact overlays (a ConfigMap of patch `.py` files subPath-mounted over venv paths) or a PV. |
 | `spec.hostIPC` | Opt-in `hostIPC` (default false). Sized `/dev/shm` (`devShmSize`) is the normal TP shm mechanism; flip on only if a build's NCCL/CUDA IPC proves to need it. |
+| `spec.securityContext` | Container-level `corev1.SecurityContext` passthrough. Set `capabilities.add: [IPC_LOCK]` for NCCL TP — `CAP_IPC_LOCK` bypasses `RLIMIT_MEMLOCK` (the K8s equivalent of `--ulimit memlock=-1`; a bash `ulimit` wrapper is a no-op without `CAP_SYS_RESOURCE`). Also covers `runAsUser`, `readOnlyRootFilesystem`, etc. |
 | `spec.healthProbe.startupTimeoutSeconds` | Scales the startupProbe window (default 600s; controller renders `period=10, failureThreshold=ceil(n/10)`). Raise for large/long-context models whose warmup is slow. |
 
 The platform does **not** carry forked serving images: a custom build consumes
