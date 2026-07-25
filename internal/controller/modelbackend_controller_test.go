@@ -351,6 +351,86 @@ func TestModelBackendReconcile(t *testing.T) {
 		assert.True(t, errors.IsNotFound(adminClient.Get(ctx, nn, &dep)),
 			"rejected extraArgs must not create a Deployment")
 	})
+
+	// HOR-388: when spec.args fully overrides the serving command, spec.model
+	// is NOT required (the model rides in args, e.g. the positional `serve
+	// <model>` form). The reconciler must still deploy Ready. The pure unit test
+	// TestBuildDeploymentSpecCustomVLLM covers the spec rendering; this exercises
+	// the reconcile-level spec.model-required gating branch end-to-end.
+	t.Run("vLLM with spec.args and no spec.model deploys (model carried in args)", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-args-override", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind: "vLLM",
+				// spec.model intentionally empty: args carries the model.
+				Command: []string{"python", "-m", "vllm.entrypoints.cli.main", "serve"},
+				Args: []string{
+					"Qwen/Qwen3-27B",
+					"--port", fmt.Sprintf("%d", defaultServingPort),
+					"--host", "0.0.0.0",
+				},
+			},
+		}
+		require.NoError(t, adminClient.Create(ctx, mb))
+		nn := types.NamespacedName{Name: "vllm-args-override", Namespace: "default"}
+
+		require.Eventually(t, func() bool {
+			var got v1alpha1.ModelBackend
+			if err := adminClient.Get(ctx, nn, &got); err != nil {
+				return false
+			}
+			return got.Status.Deployed
+		}, 15*time.Second, 200*time.Millisecond, "args-overridden ModelBackend with no spec.model should deploy")
+
+		var dep appsv1.Deployment
+		require.NoError(t, adminClient.Get(ctx, nn, &dep))
+		c := dep.Spec.Template.Spec.Containers[0]
+		assert.Equal(t, []string{"python", "-m", "vllm.entrypoints.cli.main", "serve"}, c.Command,
+			"spec.command must override the image ENTRYPOINT")
+		assert.Equal(t, "Qwen/Qwen3-27B", c.Args[0],
+			"spec.args must be used verbatim with the model positional")
+		assert.NotContains(t, c.Args, "--model",
+			"controller must NOT inject --model when spec.args is set")
+	})
+
+	// HOR-388: user volumes/mounts that reuse the controller-managed hf-cache /
+	// dshm names are rejected at reconcile time with a status message (the
+	// managed volume would otherwise be silently shadowed). The pure unit test
+	// TestValidateReservedVolumeNames covers the validator; this exercises the
+	// reconcile-level reserved-name -> status-message path end-to-end.
+	t.Run("vLLM rejects reserved volume names with a status message", func(t *testing.T) {
+		mb := &v1alpha1.ModelBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-reserved-vol", Namespace: "default"},
+			Spec: v1alpha1.ModelBackendSpec{
+				Kind:  "vLLM",
+				Model: "Qwen/Qwen3-27B",
+				Volumes: []corev1.Volume{{
+					Name:         hfCacheVolumeName,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				}},
+			},
+		}
+		require.NoError(t, adminClient.Create(ctx, mb))
+		nn := types.NamespacedName{Name: "vllm-reserved-vol", Namespace: "default"}
+
+		require.Eventually(t, func() bool {
+			var got v1alpha1.ModelBackend
+			if err := adminClient.Get(ctx, nn, &got); err != nil {
+				return false
+			}
+			return !got.Status.Deployed && got.Status.Message != ""
+		}, 15*time.Second, 200*time.Millisecond, "reserved-volume ModelBackend should be rejected")
+
+		var got v1alpha1.ModelBackend
+		require.NoError(t, adminClient.Get(ctx, nn, &got))
+		assert.False(t, got.Status.Deployed, "reserved volume name must not deploy a workload")
+		assert.Contains(t, got.Status.Message, "reserved")
+		assert.Contains(t, got.Status.Message, hfCacheVolumeName)
+
+		var dep appsv1.Deployment
+		assert.True(t, errors.IsNotFound(adminClient.Get(ctx, nn, &dep)),
+			"reserved-volume rejection must not create a Deployment")
+	})
 }
 
 // TestValidateExtraArgs covers the controller-managed --port/--host rejection

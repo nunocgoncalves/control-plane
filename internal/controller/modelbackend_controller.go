@@ -358,7 +358,7 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 				Tolerations:                   mb.Spec.Tolerations,
 				Volumes: append([]corev1.Volume{
 					{
-						Name: "hf-cache",
+						Name: hfCacheVolumeName,
 						VolumeSource: corev1.VolumeSource{
 							HostPath: &corev1.HostPathVolumeSource{
 								Path: defaultModelCachePath,
@@ -384,7 +384,7 @@ func buildDeploymentSpec(mb *v1alpha1.ModelBackend, port int32) appsv1.Deploymen
 					Env:     buildContainerEnv(mb.Spec.Env),
 					Ports:   []corev1.ContainerPort{{ContainerPort: port, Name: "http"}},
 					VolumeMounts: append([]corev1.VolumeMount{
-						{Name: "hf-cache", MountPath: defaultModelCachePath},
+						{Name: hfCacheVolumeName, MountPath: defaultModelCachePath},
 						{Name: devShmVolumeName, MountPath: devShmMountPath},
 					}, mb.Spec.VolumeMounts...),
 					Resources:      resources,
