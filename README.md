@@ -34,9 +34,10 @@ Two Go images + one Node image:
 |---|---|---|---|
 | `manager` | `cmd/manager` | `control-plane` | controller-runtime operator: reconcilers, webhooks, probes, metrics |
 | `api` | `cmd/api` | `control-plane` | HTTP API (chi) + durable runtime (later); subcommands `serve`, `migrate up`, `migrate down`, `bootstrap` |
+| `gateway` | `cmd/gateway` | `control-plane` | tool gateway gRPC server (HOR-392): mTLS `RunnerService` + `GatewayService` |
 | `proxy` | `cmd/proxy` | `control-plane-proxy` | per-sandbox egress proxy (HOR-244): credentialed reverse proxy, single egress point for sandbox model + tool traffic |
 
-The `control-plane` image (manager + api) runs in the platform namespace;
+The `control-plane` image (manager + api + gateway) runs in the platform namespace;
 `control-plane-proxy` runs as a sidecar in AgentSandbox pods (less-trusted) and
 is self-contained (no control-plane packages). The harness image is Node
 (`harness/Dockerfile`). See `Dockerfile` (manager/api), `Dockerfile.proxy`
@@ -57,6 +58,8 @@ internal/identity/  identity store, API keys, JWT/JWKS issuer, resolver
 internal/permissions/ permission store + effective_capabilities view (HOR-243)
 internal/catalog/   model catalog store (backends + models) + effective_catalog view (HOR-306/268)
 internal/egress/    egress credential store + effective_routes view + Resolve + BuildProxyConfig (HOR-244)
+internal/gateway/   tool gateway: registry, authorization, credential resolution, durable invocation ledger (HOR-392)
+internal/spiffe/    shared SPIFFE/mTLS identity verifier (HOR-392; reused by HOR-249)
 internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permissionpolicy, modelbackend, model, egressroute
 internal/runtime/   durable turn runtime store (run/step/turn SM + event log) — HOR-246
 internal/proxy/     the per-sandbox egress proxy (config, routing, auth inject, OAuth, hot-reload) — HOR-244
@@ -75,10 +78,10 @@ Dockerfile.proxy    the egress proxy image (HOR-244)
 ## Develop
 
 ```bash
-make build              # build bin/manager + bin/api
+make build              # build bin/manager + bin/api + bin/gateway
 make build-proxy        # build bin/proxy (egress proxy, HOR-244)
 make run-manager        # run the operator locally
-make run-api            # run the API (needs DATABASE_URL)
+make run-gateway        # run the tool gateway (serve); needs DATABASE_URL + mTLS certs
 make migrate-up         # apply DB migrations
 make setup-envtest      # download kube-apiserver assets (for make test)
 make test-unit          # fast unit tests (skips Docker/envtest)
@@ -190,6 +193,48 @@ AgentSandbox pod's model + tool traffic.
 
 The credential **value** never lives in Postgres — only the K8s Secret
 reference; the value stays in a Secret mounted into the proxy.
+
+## Tool gateway (HOR-392)
+
+The tool gateway is the authorized boundary for customer-system and externally
+side-effecting tool execution (ARCH-001..ARCH-018). It runs as `cmd/gateway`, a
+third entrypoint in the `control-plane` image, serving the `iterabase.gateway.v1`
+gRPC contract over native HTTP/2 + mTLS (a SPIFFE URI SAN binds caller identity):
+
+- **`RunnerService.RegisterRunner`** — a long-lived bidi stream. Trusted tool
+  runners connect outbound, self-register immutable `ToolDescriptor`s (name /
+  version / digest / JSON input schema / effect class / credential slots /
+  artifact capabilities / timeout), heart-beat availability, and receive
+  invocations to execute. Runners expose no inbound endpoint (ARCH-015).
+- **`GatewayService`** — the caller-facing surface. `DiscoverEffectiveTools`
+  returns only the descriptors permitted for the caller's active attempt/turn or
+  workflow-step context (registered healthy versions ∩ AgentPool grants ∩
+  workflow-requested tools ∩ pool-level identity scope). `InvokeTool` is the
+  ledger-gated path: the gateway commits an invocation row **before** the
+  side-effect boundary, then dispatches over the runner stream.
+
+The durable at-most-once ledger (`toolgateway.invocations`) is uniquely keyed by
+attempt + caller scope + tool-call id + exact version digest + idempotency key.
+Duplicates of a completed invocation return the committed result; duplicates in
+progress report the existing invocation; a possible effect with no committed
+result becomes `outcome_unknown` and is never automatically repeated. Retry is
+classified by effect class: `read_only` may bounded-retry; `idempotent_write`
+only when the descriptor proves a stable strategy; `non_idempotent_write` never
+auto-retries after execution begins (ARCH-014).
+
+The gateway resolves logical credential slots to K8s Secret values via the
+in-cluster API (Secret-read RBAC scoped to `gateway.kube_namespace`) and hands a
+short-lived `CredentialContext` to the trusted runner over mTLS. Raw values
+never enter Postgres, logs, tool results, or the sandbox (ARCH-008). Large
+inputs/outputs are `ArtifactRef`s (the MinIO-backed artifact service is
+HOR-399).
+
+Several `toolgateway` tables (`pools`, `pool_grants`, `credential_bindings`,
+`workflow_pool_bindings`, `approved_runners`) are operator-seeded now and
+populated by later tickets via the Git→DB bridge: AgentPool CRD (HOR-245),
+Workflow definitions (HOR-252), the Node runner materializer (HOR-397). The
+real Node 24 runner is HOR-397; the supervisor IPC client is HOR-395; concrete
+Graph tools are HOR-358. EgressRoute/proxy removal (ARCH-009) is HOR-245.
 
 ## Model backends (HOR-306/388)
 

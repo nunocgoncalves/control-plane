@@ -15,6 +15,23 @@ api:
   tls_cert_file: "${TLS_CERT_FILE}"   # e.g. /etc/control-plane/tls/tls.crt
   tls_key_file: "${TLS_KEY_FILE}"     # e.g. /etc/control-plane/tls/tls.key
 
+# Tool gateway (cmd/gateway, HOR-392). mTLS is REQUIRED (the workload
+# boundary, not the dev HTTP API). The gateway serves the
+# iterabase.gateway.v1 gRPC contract (RunnerService + GatewayService) over
+# HTTP/2, verifying caller SPIFFE identities against client_ca_file. Env vars
+# GATEWAY_ADDR / GATEWAY_TLS_CERT_FILE / GATEWAY_TLS_KEY_FILE /
+# GATEWAY_CLIENT_CA_FILE / GATEWAY_TRUST_DOMAIN / GATEWAY_KUBE_NAMESPACE
+# override these.
+gateway:
+  addr: ":8090"
+  tls_cert_file: "${GATEWAY_TLS_CERT_FILE}"   # the gateway's workload leaf
+  tls_key_file: "${GATEWAY_TLS_KEY_FILE}"
+  client_ca_file: "${GATEWAY_CLIENT_CA_FILE}"  # SPIFFE/workload-identity CA bundle
+  trust_domain: "iterabase.local"
+  # Scopes Secret-read RBAC for credential-slot resolution (ARCH-008). The
+  # gateway reads only named K8s Secrets in this namespace.
+  kube_namespace: "${GATEWAY_KUBE_NAMESPACE}"
+
 database:
   url: "${DATABASE_URL}"      # required; e.g. postgres://cp:cp@postgres:5432/controlplane?sslmode=disable
   max_open_conns: 25
