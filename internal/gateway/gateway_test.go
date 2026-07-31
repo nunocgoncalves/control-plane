@@ -74,8 +74,10 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 		gateway.CredBearer,
 		[]byte(`{"value_ref":{"name":"graph","key":"token"}}`), []byte(`{"mailbox":"walter-inbox"}`)))
 	secrets.Set("graph", "token", "sekret-token-value")
-	// Approved runner.
-	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"ns-1"}))
+	// Approved runner. allowed_tool_namespaces is empty (no tool-namespace
+	// restriction) for the shared env; TestGateway_ToolNamespaceEnforced sets a
+	// restrictive list. The deployment namespace (ns-1) must match the SPIFFE id.
+	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, nil))
 	// Workflow-step binding (workflow "wf-quote" -> pool-1, permits echo+send_email).
 	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []string{"echo", "send_email"}))
 
@@ -775,6 +777,135 @@ func TestGateway_UnapprovedRunnerRejected(t *testing.T) {
 		_, err = stream.Receive()
 	}
 	assert.Error(t, err, "unapproved/untrusted runner must be rejected")
+}
+
+// TestGateway_ToolNamespaceEnforced verifies ARCH-015: an approved runner may
+// only register descriptors whose tool-name namespace is in its
+// allowed_tool_namespaces. The shared env has no restriction; this test
+// re-seeds the approval with a restrictive list.
+func TestGateway_ToolNamespaceEnforced(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	// Restrict the approved runner to the "graph" tool namespace.
+	require.NoError(t, env.store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"graph"}))
+
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+
+	// graph.read_mail is permitted.
+	ok := startRefRunner(t, env, &v1.ToolDescriptor{
+		Name: "graph.read_mail", Version: "1.0.0", Digest: "sha256:grm-1",
+		EffectClass: v1.EffectClass_EFFECT_CLASS_READ_ONLY, InputSchema: []byte(`{"type":"object"}`),
+		Timeout: durationPtr(5 * time.Second),
+	}, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	ok.close()
+
+	// fs.delete is rejected (namespace "fs" not permitted).
+	stream := client.RegisterRunner(context.Background())
+	require.NoError(t, stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{Descriptor_: &v1.ToolDescriptor{
+		Name: "fs.delete", Version: "1.0.0", Digest: "sha256:fsd-1",
+		EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE, InputSchema: []byte(`{"type":"object"}`),
+	}}}}))
+	_, err := stream.Receive()
+	require.Error(t, err, "tool outside the runner's permitted namespace must be rejected")
+	_ = stream.CloseRequest()
+}
+
+// TestGateway_ResourceConstraintDenial verifies ARCH-008/018: an argument that
+// names a constrained resource dimension with a value outside the binding's
+// allowed set is denied before the effect boundary.
+func TestGateway_ResourceConstraintDenial(t *testing.T) {
+	env := newTestEnv(t, nil)
+	// The send_email binding constrains {"mailbox":"walter-inbox"} (seeded in
+	// newTestEnv). An argument targeting a different mailbox is denied.
+	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		t.Error("resource-denied tool must not be dispatched")
+		return nil, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
+		ArgumentsJson: []byte(`{"to":"x@y","mailbox":"other-inbox"}`), IdempotencyKey: "res-1",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_FAILED, iresp.Msg.State)
+	assert.Equal(t, "permission_denied", iresp.Msg.Error.Code)
+	assert.Contains(t, iresp.Msg.Error.Message, "mailbox")
+}
+
+// TestGateway_LedgerScopeFromDurableResolution verifies ARCH-004/014: the
+// ledger key uses the identity-derived caller scope, not the caller-supplied
+// value. A supervisor that lies about CallerScope=WORKFLOW_STEP still records a
+// 'turn' scope row (and dedup works on the durable scope).
+func TestGateway_LedgerScopeFromDurableResolution(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	// Lie about the caller scope: claim WORKFLOW_STEP while authenticated as a
+	// supervisor. The gateway must resolve scope from the identity, so the
+	// invocation still succeeds and records 'turn'.
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "scope-1",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
+
+	// The ledger row records the durable (identity-derived) scope, not the lie.
+	inv, gerr := env.store.GetInvocationByKey(context.Background(), gateway.InvocationKey{
+		AttemptID: runID, CallerScope: gateway.CallerScopeTurn, CallerScopeID: turnID,
+		ToolCallID: "call-1", ToolVersionDigest: "sha256:echo-1", IdempotencyKey: "scope-1",
+	})
+	require.NoError(t, gerr)
+	assert.Equal(t, gateway.CallerScopeTurn, inv.CallerScope,
+		"ledger records the identity-derived scope, not the caller-supplied value")
+}
+
+// TestGateway_IdempotentRetryStableUpstreamKey verifies ARCH-014: an
+// idempotent_write retry propagates the SAME durable upstream idempotency key
+// (the invocation id) across retries, not the caller's dedup key.
+func TestGateway_IdempotentRetryStableUpstreamKey(t *testing.T) {
+	env := newTestEnv(t, nil)
+	var seenKeys []string
+	desc := upsertRowDescriptor(true)
+	desc.Timeout = durationPtr(150 * time.Millisecond)
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		seenKeys = append(seenKeys, inv.IdempotencyKey)
+		if len(seenKeys) < 2 {
+			return nil, false // ignore first dispatch; proven idempotent -> retry
+		}
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"ok":true}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "stable-1",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
+
+	require.Len(t, seenKeys, 2, "expected exactly two dispatches (one retry)")
+	assert.Equal(t, seenKeys[0], seenKeys[1], "upstream key must be stable across retries")
+	assert.Equal(t, iresp.Msg.InvocationId, seenKeys[0], "upstream key is the durable invocation id, not the caller key")
+	assert.NotEqual(t, "stable-1", seenKeys[0], "caller-supplied key is not the upstream key")
 }
 
 // durationPtr wraps a duration for a proto descriptors timeout.

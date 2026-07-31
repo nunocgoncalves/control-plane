@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -257,13 +258,30 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 		}), nil
 	}
 
+	// 4b. Resource-scope policy (ARCH-008/018): credential-binding resource
+	//     constraints are asserted against the resource target derived from the
+	//     validated arguments, before the effect boundary. The pool-level
+	//     grants + bindings ARE the v1 customer/identity policy (ARCH-018:
+	//     pool-level integration scope; per-identity bindings deferred).
+	if err := s.assertResourcePolicy(ctx, res.Pool.ID, tv.Name, msg.ArgumentsJson); err != nil {
+		s.log.Warn("tool invocation denied: resource scope", "tool", tv.Name, "pool", res.Pool.ID,
+			"attempt", res.AttemptID, "caller", id.SPIFFEID, "reason", err)
+		return connect.NewResponse(&v1.InvokeResponse{
+			State: v1.InvokeState_INVOKE_STATE_FAILED,
+			Error: &v1.ErrorDetail{Code: "permission_denied", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
+		}), nil
+	}
+
 	// 5. Commit the ledger row BEFORE the side-effect boundary (ARCH-014), with
-	//    a crash-recovery lease. On a unique-key conflict (duplicate caller)
-	//    return the existing result or report in-progress.
-	leaseExpiresAt := time.Now().Add(s.cfg.DispatchLease)
+	//    a crash-recovery lease covering the full dispatch timeout + margin so a
+	//    live invocation cannot be recovered while still executing. The caller's
+	//    scope is taken from the durable resolution (res), never from caller-
+	//    supplied msg fields (ARCH-004). On a unique-key conflict (duplicate
+	//    caller) return the existing result or report in-progress.
+	leaseExpiresAt := time.Now().Add(s.dispatchTimeout(tv) + s.cfg.DispatchLease)
 	key := InvocationKey{
-		AttemptID: res.AttemptID, CallerScope: callerScopeFromProto(msg.CallerScope),
-		CallerScopeID: msg.CallerScopeId, ToolCallID: msg.ToolCallId,
+		AttemptID: res.AttemptID, CallerScope: res.CallerScope,
+		CallerScopeID: res.CallerScopeID, ToolCallID: msg.ToolCallId,
 		ToolVersionDigest: tv.Digest, IdempotencyKey: msg.IdempotencyKey,
 	}
 	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, leaseExpiresAt, s.cfg.GatewayInstanceID)
@@ -312,21 +330,31 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 // dispatchWithRetry executes the invocation over a runner stream, applying the
 // effect-class retry policy on stream loss / ambiguity (ARCH-014).
 func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv ToolVersion, msg *v1.InvokeRequest, credCtx *v1.CredentialContext) (*v1.InvokeResponse, error) {
-	timeout := s.cfg.DefaultTimeout
-	if tv.TimeoutMS > 0 {
-		timeout = time.Duration(tv.TimeoutMS) * time.Millisecond
+	timeout := s.dispatchTimeout(tv)
+	// The stable upstream idempotency key for an idempotent_write is the durable
+	// invocation id — gateway-derived (not caller-controlled) and identical
+	// across retries, so the runner propagates one stable upstream key per
+	// ARCH-014 ("propagates an upstream idempotency key or deterministic
+	// resource identity"). The caller's idempotency_key remains the gateway
+	// dedup key (BeginInvocation); it is not trusted as the upstream key.
+	upstreamKey := msg.IdempotencyKey
+	if tv.EffectClass == EffectIdempotentWrite {
+		upstreamKey = inv.ID
 	}
 	invokeCtrl := &v1.RunnerControl{Kind: &v1.RunnerControl_Invoke{Invoke: &v1.Invoke{
 		InvocationId:      inv.ID,
 		Descriptor_:       toolVersionToDescriptor(tv),
 		ArgumentsJson:     msg.ArgumentsJson,
-		IdempotencyKey:    msg.IdempotencyKey,
+		IdempotencyKey:    upstreamKey,
 		ArtifactInputRefs: msg.ArtifactInputRefs,
 		CredentialContext: credCtx,
 	}}}
 
+	// Retry gate (ARCH-014): read_only may bounded-retry; idempotent_write may
+	// retry only when the descriptor declares a proven strategy AND a stable
+	// identity is available (inv.ID, always present after BeginInvocation).
 	canRetry := tv.EffectClass == EffectReadOnly ||
-		(tv.EffectClass == EffectIdempotentWrite && len(tv.IdempotencyProof) > 0)
+		(tv.EffectClass == EffectIdempotentWrite && len(tv.IdempotencyProof) > 0 && inv.ID != "")
 	attempts := 1
 	if canRetry {
 		attempts = s.cfg.RetryMaxAttempts
@@ -336,7 +364,9 @@ func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv Tool
 	}
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		leaseExpiresAt := time.Now().Add(s.cfg.DispatchLease)
+		// The lease covers this attempt's full timeout + margin so the recovery
+		// sweep cannot terminalize a live invocation (ARCH-014/SCN-008).
+		leaseExpiresAt := time.Now().Add(timeout + s.cfg.DispatchLease)
 		_ = s.store.MarkRunning(ctx, inv.ID, "", leaseExpiresAt, s.cfg.GatewayInstanceID) // runner_id unknown until picked; audit best-effort
 
 		res, err := s.pool.dispatchToRunner(ctx, tv.Name, tv.Digest, invokeCtrl, inv.ID, timeout)
@@ -475,30 +505,28 @@ func (s *Service) CancelInvocation(ctx context.Context, req *connect.Request[v1.
 	return connect.NewResponse(&v1.CancelResponse{State: v1.InvokeState_INVOKE_STATE_RUNNING}), nil
 }
 
-// assertCallerOwnsInvocation resolves the caller's durable scope and requires
-// the invocation's pool to match it (REQ-010). A supervisor must be bound to
-// the invocation's pool; a workflow-step caller must resolve to the same pool.
+// assertCallerOwnsInvocation proves the caller owns the SPECIFIC turn/workflow-
+// step that owns the invocation, not just the pool (REQ-010). It re-resolves
+// the caller's durable scope from the invocation's own recorded scope
+// (attempt_id + caller_scope + caller_scope_id) via resolveCallerScope: the
+// turn/run_step must still be active and its run must be durably assigned to
+// the caller's pool. A supervisor whose pool matches but whose turn does not
+// own the invocation is rejected. Runner identities are rejected upstream.
 func (s *Service) assertCallerOwnsInvocation(ctx context.Context, id spiffe.Identity, inv Invocation) error {
 	if inv.PoolID == nil {
 		return errors.New("invocation has no owning pool")
 	}
-	switch id.Kind {
-	case spiffe.KindSupervisor:
-		pool, err := s.store.ResolvePoolBySpiffePrefix(ctx, id.SPIFFEID)
-		if err != nil || pool.ID != *inv.PoolID {
-			return errors.New("caller scope does not own this invocation")
-		}
-	case spiffe.KindControlPlaneWorkflow:
-		// The workflow-step caller is a trusted control-plane service; require
-		// the invocation's attempt to be assigned to the invocation's pool.
-		var assignedPool string
-		err := s.store.pool.QueryRow(ctx,
-			`SELECT pool_id::text FROM runtime.run_pool_assignments WHERE run_id::text = $1`, inv.AttemptID).Scan(&assignedPool)
-		if err != nil || assignedPool != *inv.PoolID {
-			return errors.New("caller scope does not own this invocation")
-		}
-	default:
-		return errors.New("caller kind cannot cancel")
+	res, err := s.resolveCallerScope(ctx, id, &v1.DiscoverRequest{
+		AttemptId:     inv.AttemptID,
+		CallerScope:   callerScopeToProto(inv.CallerScope),
+		CallerScopeId: inv.CallerScopeID,
+	})
+	if err != nil {
+		return errors.New("caller scope does not own this invocation")
+	}
+	if res.Pool.ID != *inv.PoolID || res.AttemptID != inv.AttemptID ||
+		res.CallerScopeID != inv.CallerScopeID {
+		return errors.New("caller scope does not own this invocation")
 	}
 	return nil
 }
@@ -525,8 +553,12 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 		}
 		return connect.NewError(connect.CodeInternal, err)
 	}
-	if !namespaceAllowed(approved.AllowedToolNamespaces, id.Namespace) {
-		return connect.NewError(connect.CodePermissionDenied, errors.New("runner namespace not permitted"))
+	// The deployment namespace on the wire must match the approval (the
+	// SPIFFE id is /tool-runners/<namespace>/<runner-id>; the approval is keyed
+	// by spiffe_id, so this is defense-in-depth). Tool-name namespace limits
+	// are enforced per-descriptor in handleRegister (ARCH-015).
+	if id.Namespace != approved.Namespace {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("runner deployment namespace does not match approval (ARCH-015)"))
 	}
 
 	gen := s.gen.Add(1)
@@ -594,11 +626,18 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 
 // handleRegister registers one tool version for the runner + publishes the
 // immutable descriptor (idempotent on digest; fail-closed on bad descriptor).
+// Each descriptor's tool-name namespace is validated against the runner's
+// approved AllowedToolNamespaces (ARCH-015): an approved runner cannot
+// publish or serve tool names outside its authorized namespace.
 func (s *Service) handleRegister(ctx context.Context, reg *v1.Register, approved ApprovedRunner, rc *runnerConn) error {
 	desc := reg.Descriptor_
 	tv, err := descriptorToToolVersion(desc)
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if !namespaceAllowed(approved.AllowedToolNamespaces, toolNamespace(tv.Name)) {
+		return connect.NewError(connect.CodePermissionDenied,
+			fmt.Errorf("tool %s namespace %q not permitted for runner %s (ARCH-015)", tv.Name, toolNamespace(tv.Name), rc.runnerID))
 	}
 	tv, err = s.store.RegisterToolVersion(ctx, tv)
 	if err != nil {
@@ -618,11 +657,14 @@ func (s *Service) handleRegister(ctx context.Context, reg *v1.Register, approved
 
 // --- helpers ---
 
-// resolveCallerScope resolves the pool + permitted tools + attempt id for a
-// caller from durable state (ARCH-004). Supervisor/turn: pool from SPIFFE,
-// cross-checked against the active turn's run assignment. Workflow-step: pool +
-// permitted tools from the run's workflow binding, cross-checked against the
-// run assignment. Caller-supplied IDs are validated, never trusted as scope.
+// resolveCallerScope resolves the pool + permitted tools + attempt id + the
+// authoritative caller scope for a caller from durable state (ARCH-004). The
+// returned CallerScope/CallerScopeID are identity-derived and validated
+// against runtime state; callers MUST use them for the ledger key, never the
+// caller-supplied msg fields. Supervisor/turn: pool from SPIFFE, cross-checked
+// against the active turn + run assignment. Workflow-step: pool + permitted
+// tools from the run's workflow binding, cross-checked against the run
+// assignment. Caller-supplied IDs are validated, never trusted as scope.
 func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, req *v1.DiscoverRequest) (CallerResolution, error) {
 	switch id.Kind {
 	case spiffe.KindSupervisor:
@@ -694,6 +736,90 @@ func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, 
 // treats an undeclared action as the single action "<tool_name>" (SD-3); tool
 // descriptors may declare action decomposition in a later revision.
 func actionForTool(tv ToolVersion) string { return tv.Name }
+
+// toolNamespace returns the namespace prefix of a tool name — the segment
+// before the first '.' (e.g. "graph.read_mail" -> "graph"), or the whole name
+// when it has no namespace separator. ARCH-015 constrains runner registration
+// to the runner's permitted tool namespace.
+func toolNamespace(toolName string) string {
+	if i := strings.Index(toolName, "."); i > 0 {
+		return toolName[:i]
+	}
+	return toolName
+}
+
+// dispatchTimeout returns the per-invocation dispatch timeout for a tool
+// version: the descriptor's timeout, or the gateway default.
+func (s *Service) dispatchTimeout(tv ToolVersion) time.Duration {
+	if tv.TimeoutMS > 0 {
+		return time.Duration(tv.TimeoutMS) * time.Millisecond
+	}
+	return s.cfg.DefaultTimeout
+}
+
+// assertResourcePolicy enforces the resource-scope boundary before the effect
+// (ARCH-008/018): each credential binding's non-secret resource_constraints
+// (tenant/site/mailbox scope) is asserted against the resource target derived
+// from the validated arguments. An argument that names a constrained dimension
+// with a value outside the binding's allowed set is denied — input content
+// cannot widen the durable resource scope. Dimensions absent from the
+// arguments are not widened (the runner still receives ResourceConstraintsJson
+// and must honor the binding's fixed scope). The pool-level grants + bindings
+// are the v1 customer/identity policy (ARCH-018).
+func (s *Service) assertResourcePolicy(ctx context.Context, poolID, toolName string, argsJSON []byte) error {
+	bindings, err := s.store.ResolveCredentialBindings(ctx, poolID, toolName)
+	if err != nil {
+		return fmt.Errorf("resolve resource policy: %w", err)
+	}
+	if len(bindings) == 0 {
+		return nil // no bindings -> no resource policy for this tool
+	}
+	var args map[string]any
+	if len(argsJSON) > 0 {
+		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			return fmt.Errorf("invalid arguments json for resource check: %w", err)
+		}
+	}
+	for _, b := range bindings {
+		if len(b.ResourceConstraints) == 0 || string(b.ResourceConstraints) == "{}" {
+			continue // no resource narrowing on this binding
+		}
+		var constraints map[string]any
+		if err := json.Unmarshal(b.ResourceConstraints, &constraints); err != nil {
+			return fmt.Errorf("invalid resource_constraints for slot %s: %w", b.SlotName, err)
+		}
+		for dim, allowed := range constraints {
+			argVal, present := args[dim]
+			if !present {
+				continue // argument does not target this dimension; runner honors the fixed scope
+			}
+			argStr, ok := argVal.(string)
+			if !ok {
+				continue // non-string arg cannot widen a string scope dimension
+			}
+			if !resourceAllowed(allowed, argStr) {
+				return fmt.Errorf("argument %q=%q exceeds resource constraint on slot %s (ARCH-008/018)", dim, argStr, b.SlotName)
+			}
+		}
+	}
+	return nil
+}
+
+// resourceAllowed reports whether val is within the allowed scope value (a
+// single string or a list of strings; "*" is a wildcard).
+func resourceAllowed(allowed any, val string) bool {
+	switch a := allowed.(type) {
+	case string:
+		return a == val || a == "*"
+	case []any:
+		for _, x := range a {
+			if s, ok := x.(string); ok && (s == val || s == "*") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // namespaceAllowed reports whether the runner's namespace is in the allowed
 // list (empty allowed list = no namespace restriction configured).

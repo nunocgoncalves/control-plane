@@ -202,12 +202,16 @@ type Invocation struct {
 
 // CallerResolution is the durable caller scope resolved from runtime state
 // (ARCH-004): the pool the call is bound to, the workflow-permitted tool set
-// (nil = no narrowing for the turn path; empty slice = explicitly none), and
-// the attempt id (the runtime run id for v1).
+// (nil = no narrowing for the turn path; empty slice = explicitly none), the
+// attempt id (the runtime run id for v1), and the authoritative caller scope
+// + scope id (identity-derived + validated; used for the ledger key, never the
+// caller-supplied values).
 type CallerResolution struct {
 	Pool           Pool
 	PermittedTools []string // nil = no workflow narrowing; len==0 = deny all
 	AttemptID      string   // runtime run id (v1 attempt identity)
+	CallerScope    CallerScope
+	CallerScopeID  string // validated turn_id / run_step_id
 }
 
 // Store reads and writes the toolgateway schema via a pgx connection pool.
@@ -283,8 +287,15 @@ func validateToolVersion(tv ToolVersion) error {
 		if err := json.Unmarshal(tv.IdempotencyProof, &proof); err != nil {
 			return fmt.Errorf("tool %s: idempotency_proof is not valid JSON: %w", tv.Name, err)
 		}
-		if proof.Strategy == "" {
-			return fmt.Errorf("tool %s: idempotent_write requires a concrete idempotency_proof.strategy", tv.Name)
+		// A concrete, recognized strategy is the "proven stable strategy" the
+		// retry gate requires (ARCH-014): upstream_key propagates a stable
+		// gateway-derived idempotency key; resource_identity relies on a
+		// deterministic resource identity. An unknown string is rejected so a
+		// malformed descriptor cannot become retryable.
+		switch proof.Strategy {
+		case "upstream_key", "resource_identity":
+		default:
+			return fmt.Errorf("tool %s: idempotent_write requires a recognized idempotency_proof.strategy (upstream_key|resource_identity), got %q", tv.Name, proof.Strategy)
 		}
 	}
 	return nil
@@ -469,8 +480,10 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID 
 		return CallerResolution{}, ErrScopeDenied
 	}
 	// Turn path has no workflow-requested narrowing: all pool-granted (and
-	// attempt-pinned) tools are in scope. nil = no narrowing.
-	return CallerResolution{Pool: pool, PermittedTools: nil, AttemptID: runID}, nil
+	// attempt-pinned) tools are in scope. nil = no narrowing. The caller scope
+	// is identity-derived (turn) + the validated turn id; callers use these for
+	// the ledger key rather than caller-supplied values.
+	return CallerResolution{Pool: pool, PermittedTools: nil, AttemptID: runID, CallerScope: CallerScopeTurn, CallerScopeID: turnID}, nil
 }
 
 // ResolveWorkflowStepScope resolves a control-plane workflow-step caller against
@@ -512,12 +525,13 @@ func (s *Store) ResolveWorkflowStepScope(ctx context.Context, attemptID, runStep
 	}
 	// permitted_tools: nil (absent) = no narrowing is not valid for the workflow
 	// path — the binding always carries an explicit set. An empty slice = deny all
-	// (preserved distinctly from nil).
+	// (preserved distinctly from nil). The caller scope is identity-derived
+	// (workflow_step) + the validated run_step id.
 	permitted := b.PermittedTools
 	if permitted == nil {
 		permitted = []string{}
 	}
-	return CallerResolution{Pool: pool, PermittedTools: permitted, AttemptID: attemptID}, nil
+	return CallerResolution{Pool: pool, PermittedTools: permitted, AttemptID: attemptID, CallerScope: CallerScopeWorkflowStep, CallerScopeID: runStepID}, nil
 }
 
 // getPoolByID fetches a non-deleted pool by id.
