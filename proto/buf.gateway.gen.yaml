@@ -1,7 +1,8 @@
 # Codegen for the tool-gateway RPC contract (HOR-392). Generates:
 #   - Go stubs -> internal/gatewayrpc/iterabase/gateway/v1
-#     (consumed by internal/gateway + the Go reference runner; HOR-397's Node
-#     runner will add TypeScript stubs later under harness/src/gen).
+#     (consumed by internal/gateway + the Go reference runner).
+#   - TypeScript -> harness/src/gen/iterabase/gateway/v1
+#     (consumed by the harness supervisor's GatewayService client, HOR-395).
 #
 # paths=source_relative places each generated file next to its .proto source
 # under `out`. The Makefile `proto` target restricts this template to the
@@ -13,6 +14,9 @@ version: v2
 managed:
   enabled: true
 plugins:
+  - local: protoc-gen-es
+    out: ../harness/src/gen
+    opt: target=ts
   - local: protoc-gen-go
     out: ../internal/gatewayrpc
     opt: paths=source_relative

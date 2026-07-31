@@ -345,10 +345,10 @@ func assignTurn() *v1.ControlMessage {
 			Uid:       uid, Gid: gid,
 			WorkingDir: "home",
 		},
-		Persona:       "you are an agent",
-		Model:         &v1.ModelConfig{Id: "m", Api: "openai-completions", ContextWindow: 131072},
-		ToolAllowList: &v1.ToolAllowList{All: true},
-		Message:       "classify this email",
+		Persona:        "you are an agent",
+		Model:          &v1.ModelConfig{Id: "m", Api: "openai-completions", ContextWindow: 131072},
+		WorkspaceTools: true,
+		Message:        "classify this email",
 	}}}
 }
 

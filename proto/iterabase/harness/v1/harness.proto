@@ -279,20 +279,26 @@ message Welcome {
 }
 
 // AssignTurn carries all per-turn business/session config and no boot infra.
-// The model endpoint stays boot-bound (egress proxy); extension paths stay
-// pool-bound (read-only). Validate IDs/ranges/sizes/MIME/tool names/relative
-// paths/sandbox ownership before spawning the child; a structurally invalid
-// assignment yields typed failure events + a failed outcome.
+// Model and tool egress both cross the supervisor's authenticated gateway
+// bridges (ARCH-010/011): the supervisor holds the worker mTLS cert and opens
+// the inference-gateway stream + tool-gateway RPC; the child receives neither
+// endpoint nor credential. Gateway-tool descriptors are NOT carried here —
+// after assignment the supervisor discovers them via the tool gateway
+// (DiscoverEffectiveTools) and passes the non-secret descriptors to the child
+// over the dedicated IPC channel (ARCH-006). Validate IDs/ranges/sizes/MIME/
+// relative paths/sandbox ownership before spawning the child; a structurally
+// invalid assignment yields typed failure events + a failed outcome.
 message AssignTurn {
   string turn_id = 1;
   string session_id = 2;
   SandboxRef sandbox = 3;
   string persona = 4;                 // pi systemPromptOverride
   ModelConfig model = 5;
-  ToolAllowList tool_allow_list = 6;
+  bool workspace_tools = 6;           // ARCH-016: expose exactly read/write/edit/bash under session UID/GID; never widened per turn
   string scope_identity_id = 7;       // validation/audit
   string message = 8;                 // the user/task message
   repeated Image images = 9;          // optional; the email demo is text-only
+  string run_id = 10;                 // workflow run id; v1 attempt_id (HOR-392 SD-1) + X-Iterabase-Run-Id (HOR-398)
 }
 
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
@@ -311,15 +317,6 @@ message ModelConfig {
   int32 context_window = 3;
   int32 max_output_tokens = 4;
   string thinking_level = 5;  // off|low|medium|high|...
-}
-
-// ToolAllowList: all=true => broad-default (built-in coding tools disabled, all
-// overlay tools exposed); a specific list enables only those names (used for
-// agentic-coding sessions that need built-in coding tools). Enforcement by
-// construction — disallowed tools are never exposed to the model.
-message ToolAllowList {
-  bool all = 1;
-  repeated string tools = 2;  // specific tool names (ignored when all=true)
 }
 
 message Image {

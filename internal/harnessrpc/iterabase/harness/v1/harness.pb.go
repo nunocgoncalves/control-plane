@@ -2137,10 +2137,15 @@ func (x *Welcome) GetLeaseTimeoutMs() int32 {
 }
 
 // AssignTurn carries all per-turn business/session config and no boot infra.
-// The model endpoint stays boot-bound (egress proxy); extension paths stay
-// pool-bound (read-only). Validate IDs/ranges/sizes/MIME/tool names/relative
-// paths/sandbox ownership before spawning the child; a structurally invalid
-// assignment yields typed failure events + a failed outcome.
+// Model and tool egress both cross the supervisor's authenticated gateway
+// bridges (ARCH-010/011): the supervisor holds the worker mTLS cert and opens
+// the inference-gateway stream + tool-gateway RPC; the child receives neither
+// endpoint nor credential. Gateway-tool descriptors are NOT carried here —
+// after assignment the supervisor discovers them via the tool gateway
+// (DiscoverEffectiveTools) and passes the non-secret descriptors to the child
+// over the dedicated IPC channel (ARCH-006). Validate IDs/ranges/sizes/MIME/
+// relative paths/sandbox ownership before spawning the child; a structurally
+// invalid assignment yields typed failure events + a failed outcome.
 type AssignTurn struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TurnId          string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
@@ -2148,10 +2153,11 @@ type AssignTurn struct {
 	Sandbox         *SandboxRef            `protobuf:"bytes,3,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	Persona         string                 `protobuf:"bytes,4,opt,name=persona,proto3" json:"persona,omitempty"` // pi systemPromptOverride
 	Model           *ModelConfig           `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	ToolAllowList   *ToolAllowList         `protobuf:"bytes,6,opt,name=tool_allow_list,json=toolAllowList,proto3" json:"tool_allow_list,omitempty"`
+	WorkspaceTools  bool                   `protobuf:"varint,6,opt,name=workspace_tools,json=workspaceTools,proto3" json:"workspace_tools,omitempty"`     // ARCH-016: expose exactly read/write/edit/bash under session UID/GID; never widened per turn
 	ScopeIdentityId string                 `protobuf:"bytes,7,opt,name=scope_identity_id,json=scopeIdentityId,proto3" json:"scope_identity_id,omitempty"` // validation/audit
 	Message         string                 `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`                                          // the user/task message
 	Images          []*Image               `protobuf:"bytes,9,rep,name=images,proto3" json:"images,omitempty"`                                            // optional; the email demo is text-only
+	RunId           string                 `protobuf:"bytes,10,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`                                // workflow run id; v1 attempt_id (HOR-392 SD-1) + X-Iterabase-Run-Id (HOR-398)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2221,11 +2227,11 @@ func (x *AssignTurn) GetModel() *ModelConfig {
 	return nil
 }
 
-func (x *AssignTurn) GetToolAllowList() *ToolAllowList {
+func (x *AssignTurn) GetWorkspaceTools() bool {
 	if x != nil {
-		return x.ToolAllowList
+		return x.WorkspaceTools
 	}
-	return nil
+	return false
 }
 
 func (x *AssignTurn) GetScopeIdentityId() string {
@@ -2247,6 +2253,13 @@ func (x *AssignTurn) GetImages() []*Image {
 		return x.Images
 	}
 	return nil
+}
+
+func (x *AssignTurn) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
 }
 
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
@@ -2396,62 +2409,6 @@ func (x *ModelConfig) GetThinkingLevel() string {
 	return ""
 }
 
-// ToolAllowList: all=true => broad-default (built-in coding tools disabled, all
-// overlay tools exposed); a specific list enables only those names (used for
-// agentic-coding sessions that need built-in coding tools). Enforcement by
-// construction — disallowed tools are never exposed to the model.
-type ToolAllowList struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	All           bool                   `protobuf:"varint,1,opt,name=all,proto3" json:"all,omitempty"`
-	Tools         []string               `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"` // specific tool names (ignored when all=true)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ToolAllowList) Reset() {
-	*x = ToolAllowList{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ToolAllowList) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ToolAllowList) ProtoMessage() {}
-
-func (x *ToolAllowList) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ToolAllowList.ProtoReflect.Descriptor instead.
-func (*ToolAllowList) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *ToolAllowList) GetAll() bool {
-	if x != nil {
-		return x.All
-	}
-	return false
-}
-
-func (x *ToolAllowList) GetTools() []string {
-	if x != nil {
-		return x.Tools
-	}
-	return nil
-}
-
 type Image struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
@@ -2462,7 +2419,7 @@ type Image struct {
 
 func (x *Image) Reset() {
 	*x = Image{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2474,7 +2431,7 @@ func (x *Image) String() string {
 func (*Image) ProtoMessage() {}
 
 func (x *Image) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2487,7 +2444,7 @@ func (x *Image) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Image.ProtoReflect.Descriptor instead.
 func (*Image) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Image) GetData() []byte {
@@ -2518,7 +2475,7 @@ type AbortTurn struct {
 
 func (x *AbortTurn) Reset() {
 	*x = AbortTurn{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2530,7 +2487,7 @@ func (x *AbortTurn) String() string {
 func (*AbortTurn) ProtoMessage() {}
 
 func (x *AbortTurn) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2543,7 +2500,7 @@ func (x *AbortTurn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortTurn.ProtoReflect.Descriptor instead.
 func (*AbortTurn) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AbortTurn) GetTurnId() string {
@@ -2581,7 +2538,7 @@ type EventAck struct {
 
 func (x *EventAck) Reset() {
 	*x = EventAck{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2593,7 +2550,7 @@ func (x *EventAck) String() string {
 func (*EventAck) ProtoMessage() {}
 
 func (x *EventAck) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2606,7 +2563,7 @@ func (x *EventAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventAck.ProtoReflect.Descriptor instead.
 func (*EventAck) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *EventAck) GetTurnId() string {
@@ -2758,7 +2715,7 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
 	"\x12fencing_generation\x18\x02 \x01(\x04R\x11fencingGeneration\x122\n" +
 	"\x15heartbeat_interval_ms\x18\x03 \x01(\x05R\x13heartbeatIntervalMs\x12(\n" +
-	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\x9b\x03\n" +
+	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\x8e\x03\n" +
 	"\n" +
 	"AssignTurn\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1d\n" +
@@ -2766,11 +2723,13 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12:\n" +
 	"\asandbox\x18\x03 \x01(\v2 .iterabase.harness.v1.SandboxRefR\asandbox\x12\x18\n" +
 	"\apersona\x18\x04 \x01(\tR\apersona\x127\n" +
-	"\x05model\x18\x05 \x01(\v2!.iterabase.harness.v1.ModelConfigR\x05model\x12K\n" +
-	"\x0ftool_allow_list\x18\x06 \x01(\v2#.iterabase.harness.v1.ToolAllowListR\rtoolAllowList\x12*\n" +
+	"\x05model\x18\x05 \x01(\v2!.iterabase.harness.v1.ModelConfigR\x05model\x12'\n" +
+	"\x0fworkspace_tools\x18\x06 \x01(\bR\x0eworkspaceTools\x12*\n" +
 	"\x11scope_identity_id\x18\a \x01(\tR\x0fscopeIdentityId\x12\x18\n" +
 	"\amessage\x18\b \x01(\tR\amessage\x123\n" +
-	"\x06images\x18\t \x03(\v2\x1b.iterabase.harness.v1.ImageR\x06images\"p\n" +
+	"\x06images\x18\t \x03(\v2\x1b.iterabase.harness.v1.ImageR\x06images\x12\x15\n" +
+	"\x06run_id\x18\n" +
+	" \x01(\tR\x05runId\"p\n" +
 	"\n" +
 	"SandboxRef\x12\x1d\n" +
 	"\n" +
@@ -2784,10 +2743,7 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x03api\x18\x02 \x01(\tR\x03api\x12%\n" +
 	"\x0econtext_window\x18\x03 \x01(\x05R\rcontextWindow\x12*\n" +
 	"\x11max_output_tokens\x18\x04 \x01(\x05R\x0fmaxOutputTokens\x12%\n" +
-	"\x0ethinking_level\x18\x05 \x01(\tR\rthinkingLevel\"7\n" +
-	"\rToolAllowList\x12\x10\n" +
-	"\x03all\x18\x01 \x01(\bR\x03all\x12\x14\n" +
-	"\x05tools\x18\x02 \x03(\tR\x05tools\"8\n" +
+	"\x0ethinking_level\x18\x05 \x01(\tR\rthinkingLevel\"8\n" +
 	"\x05Image\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1b\n" +
 	"\tmime_type\x18\x02 \x01(\tR\bmimeType\"y\n" +
@@ -2851,7 +2807,7 @@ func file_iterabase_harness_v1_harness_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(WorkerState)(0),            // 0: iterabase.harness.v1.WorkerState
 	(PiPhase)(0),                // 1: iterabase.harness.v1.PiPhase
@@ -2885,10 +2841,9 @@ var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(*AssignTurn)(nil),          // 29: iterabase.harness.v1.AssignTurn
 	(*SandboxRef)(nil),          // 30: iterabase.harness.v1.SandboxRef
 	(*ModelConfig)(nil),         // 31: iterabase.harness.v1.ModelConfig
-	(*ToolAllowList)(nil),       // 32: iterabase.harness.v1.ToolAllowList
-	(*Image)(nil),               // 33: iterabase.harness.v1.Image
-	(*AbortTurn)(nil),           // 34: iterabase.harness.v1.AbortTurn
-	(*EventAck)(nil),            // 35: iterabase.harness.v1.EventAck
+	(*Image)(nil),               // 32: iterabase.harness.v1.Image
+	(*AbortTurn)(nil),           // 33: iterabase.harness.v1.AbortTurn
+	(*EventAck)(nil),            // 34: iterabase.harness.v1.EventAck
 }
 var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	7,  // 0: iterabase.harness.v1.WorkerMessage.hello:type_name -> iterabase.harness.v1.Hello
@@ -2920,20 +2875,19 @@ var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	4,  // 26: iterabase.harness.v1.TokenDelta.type:type_name -> iterabase.harness.v1.DeltaType
 	28, // 27: iterabase.harness.v1.ControlMessage.welcome:type_name -> iterabase.harness.v1.Welcome
 	29, // 28: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
-	34, // 29: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
-	35, // 30: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
+	33, // 29: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
+	34, // 30: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
 	30, // 31: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
 	31, // 32: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
-	32, // 33: iterabase.harness.v1.AssignTurn.tool_allow_list:type_name -> iterabase.harness.v1.ToolAllowList
-	33, // 34: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
-	5,  // 35: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
-	6,  // 36: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
-	27, // 37: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
-	37, // [37:38] is the sub-list for method output_type
-	36, // [36:37] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	32, // 33: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
+	5,  // 34: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
+	6,  // 35: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
+	27, // 36: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
+	36, // [36:37] is the sub-list for method output_type
+	35, // [35:36] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_harness_v1_harness_proto_init() }
@@ -2974,7 +2928,7 @@ func file_iterabase_harness_v1_harness_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_harness_v1_harness_proto_rawDesc), len(file_iterabase_harness_v1_harness_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   30,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
