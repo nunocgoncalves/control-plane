@@ -189,6 +189,8 @@ func (s *Service) DiscoverEffectiveTools(ctx context.Context, req *connect.Reque
 // InvokeTool is the ledger-gated execution path (ARCH-014). Authorization,
 // version pinning, argument validation, and credential resolution all occur
 // BEFORE the side-effect boundary; the ledger row is committed before dispatch.
+//
+//nolint:gocyclo // the pre-effect gate is naturally branchy; kept flat for readability (cf. RegisterRunner).
 func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.InvokeRequest]) (*connect.Response[v1.InvokeResponse], error) {
 	id, ok := identityFromContext(ctx)
 	if !ok {
@@ -377,7 +379,9 @@ func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv Tool
 		"code": "outcome_unknown", "message": reason, "retryability": "unknown",
 		"effect_class": tv.EffectClass,
 	})
-	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, state, nil, []byte("[]"), errDetail); ferr != nil {
+	commitCtx, cancel := s.detachedCtx(ctx)
+	defer cancel()
+	if ferr := s.store.FinishInvocation(commitCtx, inv.ID, state, nil, []byte("[]"), errDetail); ferr != nil {
 		return nil, fmt.Errorf("commit ambiguous outcome: %w", ferr)
 	}
 	resp := &v1.InvokeResponse{InvocationId: inv.ID}
@@ -393,7 +397,9 @@ func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv Tool
 
 func (s *Service) finishFailed(ctx context.Context, inv Invocation, err *v1.ErrorDetail) (*v1.InvokeResponse, error) {
 	errJSON, _ := marshalJSON(err)
-	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, InvocationFailed, nil, []byte("[]"), errJSON); ferr != nil {
+	commitCtx, cancel := s.detachedCtx(ctx)
+	defer cancel()
+	if ferr := s.store.FinishInvocation(commitCtx, inv.ID, InvocationFailed, nil, []byte("[]"), errJSON); ferr != nil {
 		return nil, fmt.Errorf("commit failed result: %w", ferr)
 	}
 	return &v1.InvokeResponse{InvocationId: inv.ID, State: v1.InvokeState_INVOKE_STATE_FAILED, Error: err}, nil
@@ -420,7 +426,9 @@ func (s *Service) finishFromResult(ctx context.Context, inv Invocation, tv ToolV
 			return s.classifyAmbiguous(ctx, inv, tv, "runner reported succeeded with malformed JSON result")
 		}
 	}
-	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, state, resultJSON, res.artifactRefs, res.errorDetail); ferr != nil {
+	commitCtx, cancel := s.detachedCtx(ctx)
+	defer cancel()
+	if ferr := s.store.FinishInvocation(commitCtx, inv.ID, state, resultJSON, res.artifactRefs, res.errorDetail); ferr != nil {
 		return nil, fmt.Errorf("commit result: %w", ferr)
 	}
 	resp := &v1.InvokeResponse{InvocationId: inv.ID}
@@ -718,15 +726,15 @@ func welcome(gen uint64, cfg Config) *v1.RunnerControl {
 
 // detachedCtx returns a context that survives caller cancellation, for
 // terminal ledger commits after a possible effect (ARCH-014). If the request
-// context is still alive it is returned unchanged; otherwise a fresh background
-// context with a bounded timeout is used so the durable outcome always commits.
-func (s *Service) detachedCtx(ctx context.Context) context.Context {
+// context is still alive it is returned unchanged; otherwise a fresh
+// non-cancellable context (context.WithoutCancel) with a bounded timeout is
+// used so the durable outcome always commits even after the caller disconnects.
+// The returned cancel must be deferred by the caller.
+func (s *Service) detachedCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx.Err() == nil {
-		return ctx
+		return ctx, func() {}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	_ = cancel // bounded by the timeout; the commit is a single query
-	return ctx
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 }
 
 // jsonValid reports whether b is valid JSON.

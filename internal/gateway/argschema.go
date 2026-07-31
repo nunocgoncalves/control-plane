@@ -34,7 +34,9 @@ func validateArguments(args []byte, schema []byte, limit int) error {
 		return nil // permissive schema; syntax + size already checked
 	}
 	c := jsonschema.NewCompiler()
-	c.AddResource("input.json", bytes.NewReader(schema))
+	if err := c.AddResource("input.json", bytes.NewReader(schema)); err != nil {
+		return fmt.Errorf("load input_schema: %w", err)
+	}
 	sch, err := c.Compile("input.json")
 	if err != nil {
 		// A descriptor with an un-compilable schema is a registration defect;
