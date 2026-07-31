@@ -18,6 +18,7 @@ import (
 // Config is the top-level control-plane configuration.
 type Config struct {
 	API      APIConfig      `yaml:"api"`
+	Gateway  GatewayConfig  `yaml:"gateway"`
 	Database DatabaseConfig `yaml:"database"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	JWT      JWTConfig      `yaml:"jwt"`
@@ -33,6 +34,22 @@ type APIConfig struct {
 	Addr        string `yaml:"addr"`
 	TLSCertFile string `yaml:"tls_cert_file"`
 	TLSKeyFile  string `yaml:"tls_key_file"`
+}
+
+// GatewayConfig configures the tool-gateway gRPC server (cmd/gateway, HOR-392).
+// mTLS is REQUIRED (the workload boundary, not the dev HTTP API): the server
+// cert + key serve HTTP/2, and ClientCAFile is the SPIFFE/workload-identity CA
+// bundle used to verify runner/supervisor/workflow-step caller certs.
+type GatewayConfig struct {
+	Addr         string `yaml:"addr"`
+	TLSCertFile  string `yaml:"tls_cert_file"`
+	TLSKeyFile   string `yaml:"tls_key_file"`
+	ClientCAFile string `yaml:"client_ca_file"`
+	TrustDomain  string `yaml:"trust_domain"`
+	// KubeNamespace scopes Secret-read RBAC for credential-slot resolution
+	// (ARCH-008). The gateway reads only named K8s Secrets in this namespace.
+	KubeNamespace string `yaml:"kube_namespace"`
+	InlineLimit   int    `yaml:"inline_limit"`
 }
 
 // DatabaseConfig configures the Postgres connection pool.
@@ -110,6 +127,7 @@ func DatabaseFromEnv() (DatabaseConfig, error) {
 func defaults() *Config {
 	return &Config{
 		API:      APIConfig{Addr: ":8080"},
+		Gateway:  GatewayConfig{Addr: ":8090", TrustDomain: "iterabase.local"},
 		Database: DatabaseConfig{MaxOpenConns: 25, MaxIdleConns: 10},
 		Logging:  LoggingConfig{Level: "info", Format: "json"},
 		JWT:      JWTConfig{TTL: "15m"},
@@ -119,6 +137,8 @@ func defaults() *Config {
 
 // applyEnvOverrides lets critical values be set entirely via environment
 // variables, taking precedence over the YAML file.
+//
+//nolint:gocyclo // a flat list of env-var checks; complexity is inherent.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		cfg.Database.URL = v
@@ -146,6 +166,24 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("IDENTITY_MODE"); v != "" {
 		cfg.Identity.Mode = v
+	}
+	if v := os.Getenv("GATEWAY_ADDR"); v != "" {
+		cfg.Gateway.Addr = v
+	}
+	if v := os.Getenv("GATEWAY_TLS_CERT_FILE"); v != "" {
+		cfg.Gateway.TLSCertFile = v
+	}
+	if v := os.Getenv("GATEWAY_TLS_KEY_FILE"); v != "" {
+		cfg.Gateway.TLSKeyFile = v
+	}
+	if v := os.Getenv("GATEWAY_CLIENT_CA_FILE"); v != "" {
+		cfg.Gateway.ClientCAFile = v
+	}
+	if v := os.Getenv("GATEWAY_TRUST_DOMAIN"); v != "" {
+		cfg.Gateway.TrustDomain = v
+	}
+	if v := os.Getenv("GATEWAY_KUBE_NAMESPACE"); v != "" {
+		cfg.Gateway.KubeNamespace = v
 	}
 }
 
@@ -187,6 +225,26 @@ func ValidateServe(cfg *Config) error {
 	// Exactly one set is a misconfig — fail loud rather than guess.
 	if (cfg.API.TLSCertFile == "") != (cfg.API.TLSKeyFile == "") {
 		return fmt.Errorf("api.tls_cert_file and api.tls_key_file must both be set (HTTPS) or both unset (HTTP)")
+	}
+	return nil
+}
+
+// ValidateGatewayServe checks gateway-serve requirements (cmd/gateway). mTLS is
+// required: server cert + key + the client CA bundle that verifies workload
+// identities. KubeNamespace scopes Secret-read RBAC (ARCH-008).
+func ValidateGatewayServe(cfg *Config) error {
+	g := cfg.Gateway
+	if g.Addr == "" {
+		return fmt.Errorf("gateway.addr (or GATEWAY_ADDR) is required for gateway serve")
+	}
+	if g.TLSCertFile == "" || g.TLSKeyFile == "" {
+		return fmt.Errorf("gateway.tls_cert_file + gateway.tls_key_file are required (mTLS is mandatory for the gateway)")
+	}
+	if g.ClientCAFile == "" {
+		return fmt.Errorf("gateway.client_ca_file is required (mTLS client verification)")
+	}
+	if g.KubeNamespace == "" {
+		return fmt.Errorf("gateway.kube_namespace is required (Secret-read scope for credential resolution)")
 	}
 	return nil
 }
