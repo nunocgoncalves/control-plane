@@ -47,6 +47,7 @@ import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
 import { createGatewayClient, type GatewayClient } from "./gateway-client.js";
 import { streamModel } from "./model-bridge.js";
 import { InvokeState } from "./gen/iterabase/gateway/v1/gateway_pb.js";
+import type { GatewayToolDescriptor } from "./ipc.js";
 
 /** A durable TurnEvent payload (the oneof) the supervisor sequences + sends. */
 export type TurnEventPayload = TurnEvent["kind"];
@@ -287,7 +288,7 @@ export class Supervisor {
       // non-secret descriptors to the child (ARCH-006). Discovery failure fails
       // the turn fail-closed — the child must not run with a stale/empty set.
       const scope = { turnId: at.turnId, runId: at.runId };
-      let descriptors;
+      let descriptors: GatewayToolDescriptor[];
       try {
         descriptors = await this.gatewayClient.discover(scope);
       } catch (err) {
@@ -296,7 +297,7 @@ export class Supervisor {
       child.rpcSend({ type: "gatewayTools", descriptors });
       // Drain the child's model/tool RPC requests (fd 4) concurrently with the
       // audit event stream (fd 3). Both close when the child exits.
-      const rpcDone = this.dispatchChildRpc(child, at).catch(() => {
+      const rpcDone = this.dispatchChildRpc(child, at, descriptors).catch(() => {
         /* errors surface as tool/model error frames; logged only as outcome */
       });
       for await (const ev of child.events) {
@@ -334,10 +335,17 @@ export class Supervisor {
    * the in-flight upstream call (ARCH-014 — cannot undo an effect already
    * started; the gateway classifies per effect class on caller disconnect).
    */
-  private async dispatchChildRpc(child: Child, at: AssignTurn): Promise<void> {
+  private async dispatchChildRpc(child: Child, at: AssignTurn, descriptors: GatewayToolDescriptor[]): Promise<void> {
     const scope = { turnId: at.turnId, runId: at.runId };
     const controllers = new Map<string, AbortController>();
     const assignedModel = at.model?.id ?? "";
+    // The effective gateway tools discovered for this turn (ARCH-006). The
+    // supervisor rejects a toolCall whose name is not in this set BEFORE
+    // calling the gateway — defense-in-depth fail-closed (acceptance: an
+    // unassigned tool request fails closed in the supervisor). The gateway
+    // re-validates scope + version pin upstream.
+    const discovered = new Map<string, GatewayToolDescriptor>();
+    for (const d of descriptors) discovered.set(d.name, d);
 
     for await (const req of child.rpcRequests) {
       if (this.turn?.aborted) break;
@@ -351,7 +359,7 @@ export class Supervisor {
         continue;
       }
       if (req.type === "toolCall") {
-        void this.handleToolCall(child, req, scope, controllers);
+        void this.handleToolCall(child, req, scope, discovered, controllers);
         continue;
       }
     }
@@ -389,13 +397,20 @@ export class Supervisor {
     }
   }
 
-  /** Forward one gateway tool call (ARCH-004/014). */
+  /** Forward one gateway tool call (ARCH-004/014). Rejects unassigned tools
+   * fail-closed before calling the gateway (acceptance criterion). */
   private async handleToolCall(
     child: Child,
     req: { requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
     scope: { turnId: string; runId: string },
+    discovered: Map<string, GatewayToolDescriptor>,
     controllers: Map<string, AbortController>,
   ): Promise<void> {
+    const pinned = discovered.get(req.toolName);
+    if (!pinned) {
+      child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: `tool not permitted: ${req.toolName}` });
+      return;
+    }
     const ac = new AbortController();
     controllers.set(req.requestId, ac);
     try {
@@ -404,7 +419,9 @@ export class Supervisor {
         {
           toolCallId: req.toolCallId,
           toolName: req.toolName,
-          toolVersionDigest: req.toolVersionDigest,
+          // The pinned immutable digest (ARCH-007); the gateway ignores/rejects
+          // a caller-supplied digest that differs.
+          toolVersionDigest: pinned.digest,
           argumentsJson: req.argumentsJson,
           ...(req.idempotencyKey !== undefined ? { idempotencyKey: req.idempotencyKey } : {}),
         },

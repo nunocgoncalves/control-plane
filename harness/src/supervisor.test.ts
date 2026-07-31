@@ -374,6 +374,78 @@ function fakeGatewayClient(): import("./gateway-client.js").GatewayClient {
     cancelInvocation: async () => ({ state: 0 }),
   };
 }
+
+/** A fake child that emits one toolCall RPC request then closes. */
+function fakeToolCallChild(toolName: string): Child & { sent: unknown[] } {
+  const q = new Q<ChildEvent>();
+  q.close();
+  const rpcQ = new Q<import("./supervisor.js").ChildRpcRequest>();
+  rpcQ.push({ type: "toolCall", requestId: "req-1", toolCallId: "tc-1", toolName, toolVersionDigest: "sha256:xyz", argumentsJson: "{}", idempotencyKey: "tc-1" });
+  rpcQ.close();
+  const sent: unknown[] = [];
+  const result = new Promise<ChildResult>(() => {}); // never resolves (test drains)
+  return { abort: () => {}, events: q, rpcRequests: rpcQ, rpcSend: (f) => sent.push(f), result, sent } as Child & { sent: unknown[] };
+}
+
+describe("Supervisor RPC dispatch (HOR-395)", () => {
+  let sandboxParent: string;
+  let walDir: string;
+  let probes: Probes;
+  beforeEach(() => {
+    sandboxParent = mkdtempSync(join(tmpdir(), "harness-sup-rpc-"));
+    walDir = mkdtempSync(join(tmpdir(), "harness-wal-rpc-"));
+    const root = join(sandboxParent, "sess-a");
+    mkdirSync(root, { recursive: true });
+    chmodSync(root, 0o700);
+    probes = new Probes();
+  });
+  afterEach(() => {
+    rmSync(sandboxParent, { recursive: true, force: true });
+    rmSync(walDir, { recursive: true, force: true });
+  });
+
+  it("fails closed on an unassigned tool request (no gateway invoke)", async () => {
+    let assignTurnSent = false;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, { kind: { case: "welcome", value: create(WelcomeSchema, { fencingGeneration: 1n }) } as never });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn("sess-a");
+            }
+          }
+        },
+      });
+    });
+    let invoked = false;
+    const child = fakeToolCallChild("graph.never_permitted");
+    const sup = new Supervisor({
+      cfg: makeCfg(sandboxParent, walDir),
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: () => child,
+      probes,
+      transport: () => transport,
+      gatewayClient: {
+        discover: async () => [], // empty effective set → tool is unassigned
+        invokeTool: async () => { invoked = true; return { invocationId: "", state: 0, resultJson: new Uint8Array(), artifactOutputRefs: [], error: undefined, existingInvocationId: "" }; },
+        cancelInvocation: async () => ({ state: 0 }),
+      },
+      modelStream: fakeModelStream(),
+    });
+    const runP = sup.run();
+    await new Promise((r) => setTimeout(r, 200));
+    await sup.drain();
+    await runP.catch(() => {});
+    const sent = child.sent;
+    const toolResult = sent.find((f) => (f as { type?: string }).type === "toolResult") as { isError: boolean; errorMessage?: string } | undefined;
+    expect(toolResult).toBeDefined();
+    expect(toolResult?.isError).toBe(true);
+    expect(toolResult?.errorMessage).toContain("not permitted");
+    expect(invoked).toBe(false);
+  }, 5_000);
+});
 /** A no-op model stream (tests that don't exercise model calls). */
 function fakeModelStream(): typeof import("./model-bridge.js").streamModel {
   return async () => {};
