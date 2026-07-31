@@ -75,6 +75,17 @@ const (
 	InvocationOutcomeUnknown InvocationState = "outcome_unknown"
 )
 
+// IsTerminal reports whether the state is a committed terminal outcome
+// (succeeded / failed / outcome_unknown). Non-terminal states (dispatching,
+// running) are still in flight and may not be reported as a final result.
+func (s InvocationState) IsTerminal() bool {
+	switch s {
+	case InvocationSucceeded, InvocationFailed, InvocationOutcomeUnknown:
+		return true
+	}
+	return false
+}
+
 // CredentialScheme mirrors the proto CredentialScheme, stored as text.
 type CredentialScheme string
 
@@ -777,14 +788,25 @@ func (s *Store) BeginInvocation(ctx context.Context, key InvocationKey, tv ToolV
 }
 
 // RenewDispatchLease extends the crash-recovery lease for an in-flight
-// invocation (called on dispatch/running transitions).
+// invocation (called on dispatch/running transitions). It returns
+// ErrInvalidTransition when zero rows are affected — i.e. the invocation is
+// no longer in a live dispatching/running state (the SCN-008 recovery sweep
+// has already terminalized it). Callers MUST treat a non-nil result as "the
+// safety lease was not renewed" and fail closed before the effect boundary
+// (ARCH-014): never dispatch a retry whose lease could not be re-established.
 func (s *Store) RenewDispatchLease(ctx context.Context, invocationID, gatewayInstanceID string, leaseExpiresAt time.Time) error {
-	_, err := s.pool.Exec(ctx, `
+	ct, err := s.pool.Exec(ctx, `
 		UPDATE toolgateway.invocations
 		SET dispatch_lease_expires_at = $2, gateway_instance_id = $3
 		WHERE id = $1 AND state IN ('dispatching', 'running')`,
 		invocationID, leaseExpiresAt, gatewayInstanceID)
-	return err
+	if err != nil {
+		return fmt.Errorf("renew dispatch lease: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 // MarkRunning transitions dispatching -> running (dispatched over the runner

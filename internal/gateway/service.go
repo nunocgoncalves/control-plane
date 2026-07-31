@@ -364,11 +364,15 @@ func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv Tool
 	}
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		// Renew the recovery lease for this attempt's full timeout + margin so
-		// the SCN-008 recovery sweep cannot terminalize a live invocation
-		// mid-dispatch (ARCH-014). See renewDispatchLease for the running-row
-		// renewal that multi-attempt retries depend on.
-		s.renewDispatchLease(ctx, inv.ID, timeout)
+		// Establish/renew the recovery lease for this attempt's full timeout +
+		// margin BEFORE crossing the side-effect boundary, so the SCN-008 recovery
+		// sweep cannot terminalize a live invocation mid-dispatch AND a retry
+		// cannot dispatch after recovery already terminalized the row (ARCH-014).
+		// Fail closed: if the lease was not (re-)established, do not dispatch.
+		if err := s.renewDispatchLease(ctx, inv.ID, timeout); err != nil {
+			s.log.Warn("dispatch lease not established; aborting before effect boundary", "inv", inv.ID, "attempt", attempt, "error", err)
+			return s.abortAfterLeaseFailure(ctx, inv, tv, "dispatch lease not established/renewed: "+err.Error())
+		}
 		res, err := s.pool.dispatchToRunner(ctx, tv.Name, tv.Digest, invokeCtrl, inv.ID, timeout)
 		// A streamLost result (Send succeeded, result lost / ctx cancelled)
 		// means a possible effect occurred with no committed result. Classify
@@ -842,20 +846,37 @@ func namespaceAllowed(allowed []string, ns string) bool {
 // (first attempt, dispatching -> running) or renews the lease on an
 // already-running row (retry attempt), so a multi-attempt retry whose
 // cumulative duration exceeds the original lease is not terminalized by the
-// SCN-008 recovery sweep mid-dispatch (ARCH-014). Lease-renew errors are
-// logged, not discarded, so a dropped safety lease is observable.
-func (s *Service) renewDispatchLease(ctx context.Context, invID string, timeout time.Duration) {
+// SCN-008 recovery sweep mid-dispatch (ARCH-014). It returns a non-nil error
+// if the lease could not be established or renewed — including the
+// zero-rows case where recovery has already terminalized the row — so the
+// caller can fail closed before the effect boundary.
+func (s *Service) renewDispatchLease(ctx context.Context, invID string, timeout time.Duration) error {
 	leaseExpiresAt := time.Now().Add(timeout + s.cfg.DispatchLease)
 	if err := s.store.MarkRunning(ctx, invID, "", leaseExpiresAt, s.cfg.GatewayInstanceID); err != nil {
-		if errors.Is(err, ErrInvalidTransition) {
-			// Already 'running' (retry attempt): renew the lease.
-			if rerr := s.store.RenewDispatchLease(ctx, invID, s.cfg.GatewayInstanceID, leaseExpiresAt); rerr != nil {
-				s.log.Warn("renew dispatch lease failed", "inv", invID, "error", rerr)
-			}
-		} else {
-			s.log.Warn("mark running failed", "inv", invID, "error", err)
+		if !errors.Is(err, ErrInvalidTransition) {
+			return fmt.Errorf("mark running: %w", err)
+		}
+		// Already 'running' (retry attempt): renew the lease. A zero-rows result
+		// (ErrInvalidTransition) means recovery terminalized the row; surface it
+		// so the caller does not dispatch.
+		if rerr := s.store.RenewDispatchLease(ctx, invID, s.cfg.GatewayInstanceID, leaseExpiresAt); rerr != nil {
+			return fmt.Errorf("renew dispatch lease: %w", rerr)
 		}
 	}
+	return nil
+}
+
+// abortAfterLeaseFailure handles a dispatch/retry that could not (re-)establish
+// its safety lease before the effect boundary (ARCH-014/SCN-008). The
+// invocation MUST NOT be dispatched. If the SCN-008 recovery sweep already
+// terminalized the row, return that committed durable state (a duplicate must
+// reflect the committed outcome, never repeat the effect — REQ-009).
+// Otherwise commit outcome_unknown (writes) / failed (read_only) fail-closed.
+func (s *Service) abortAfterLeaseFailure(ctx context.Context, inv Invocation, tv ToolVersion, reason string) (*v1.InvokeResponse, error) {
+	if cur, err := s.store.GetInvocation(ctx, inv.ID); err == nil && cur.State.IsTerminal() {
+		return invocationToResponse(cur), nil
+	}
+	return s.classifyAmbiguous(ctx, inv, tv, reason)
 }
 
 func mapErr(err error) error {

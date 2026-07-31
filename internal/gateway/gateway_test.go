@@ -948,6 +948,66 @@ func TestGateway_RetryRenewsRunningLease(t *testing.T) {
 	assert.Equal(t, gateway.InvocationSucceeded, inv.State, "lease renewal kept the live retry from being recovered")
 }
 
+// TestGateway_RetryAbortsWhenLeaseNotRenewed verifies ARCH-014/SCN-008 fail-
+// closed behavior: if the SCN-008 recovery sweep terminalizes a row while a
+// proven-idempotent retry is in flight (the lease could not be renewed because
+// the row is no longer dispatching/running), the retry MUST NOT cross the
+// side-effect boundary. The runner is not dispatched a second time and the
+// caller receives the committed durable outcome (outcome_unknown), never a
+// repeated effect.
+func TestGateway_RetryAbortsWhenLeaseNotRenewed(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	desc := upsertRowDescriptor(true)
+	desc.Timeout = durationPtr(150 * time.Millisecond)
+	var calls int32
+	var firstErr error
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			// Simulate the recovery sweep terminalizing the row mid-dispatch:
+			// expire the lease and run SCN-008 recovery while the first
+			// (stream-losing) dispatch is still in flight. The gateway will
+			// time out, classify stream loss as retryable, and attempt a retry
+			// whose lease renewal must then fail closed.
+			if _, err := env.pgpool.Exec(ctx,
+				`UPDATE toolgateway.invocations SET dispatch_lease_expires_at = now() - interval '1 hour' WHERE id = $1`,
+				inv.InvocationId); err != nil {
+				firstErr = err
+				return nil, true
+			}
+			if _, err := env.store.RecoverOrphanedInvocations(ctx); err != nil {
+				firstErr = err
+				return nil, true
+			}
+			return nil, false // no result -> gateway times out -> streamLost -> retry
+		}
+		t.Error("retry must not dispatch after recovery terminalized the row (ARCH-014 fail-closed)")
+		return nil, true
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "abort-1",
+	}))
+	require.NoError(t, firstErr, "test harness: recovery terminalization failed")
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_OUTCOME_UNKNOWN, iresp.Msg.State,
+		"a retry whose lease was not renewed must abort fail-closed, returning the recovered outcome_unknown")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+		"the effect boundary must not be crossed a second time")
+
+	// The durable row is the recovered outcome_unknown; a duplicate must not
+	// repeat the effect (REQ-009).
+	inv, gerr := env.store.GetInvocation(ctx, iresp.Msg.InvocationId)
+	require.NoError(t, gerr)
+	assert.Equal(t, gateway.InvocationOutcomeUnknown, inv.State)
+}
+
 // TestGateway_IdempotentRetryStableUpstreamKey verifies ARCH-014: an
 // idempotent_write retry propagates the SAME durable upstream idempotency key
 // (the invocation id) across retries, not the caller's dedup key.
