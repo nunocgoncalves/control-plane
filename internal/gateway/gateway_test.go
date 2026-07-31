@@ -74,10 +74,14 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 		gateway.CredBearer,
 		[]byte(`{"value_ref":{"name":"graph","key":"token"}}`), []byte(`{"mailbox":"walter-inbox"}`)))
 	secrets.Set("graph", "token", "sekret-token-value")
-	// Approved runner. allowed_tool_namespaces is empty (no tool-namespace
-	// restriction) for the shared env; TestGateway_ToolNamespaceEnforced sets a
-	// restrictive list. The deployment namespace (ns-1) must match the SPIFFE id.
-	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, nil))
+	// Approved runner. allowed_tool_namespaces is the explicit set of tool
+	// namespaces used across the shared env (echo / send_email / upsert_row
+	// have no '.' separator, so their namespace is the full name; graph.* maps
+	// to "graph"). ARCH-015 fail-closed: an empty list would deny all
+	// registrations, so the shared env declares the permitted set explicitly;
+	// TestGateway_ToolNamespaceEnforced / TestGateway_NamespaceDenyOnEmptyApproval
+	// cover restriction and denial.
+	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"echo", "send_email", "upsert_row", "graph", "danger"}))
 	// Workflow-step binding (workflow "wf-quote" -> pool-1, permits echo+send_email).
 	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []string{"echo", "send_email"}))
 
@@ -872,6 +876,76 @@ func TestGateway_LedgerScopeFromDurableResolution(t *testing.T) {
 	require.NoError(t, gerr)
 	assert.Equal(t, gateway.CallerScopeTurn, inv.CallerScope,
 		"ledger records the identity-derived scope, not the caller-supplied value")
+}
+
+// TestGateway_NamespaceDenyOnEmptyApproval verifies ARCH-015 fail-closed: an
+// approved runner whose allowed_tool_namespaces is empty (the default approval
+// record) may NOT register any tool — empty is deny, not unrestricted.
+func TestGateway_NamespaceDenyOnEmptyApproval(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	// Re-seed the approved runner with an empty namespace list (the default).
+	require.NoError(t, env.store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, nil))
+
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	stream := client.RegisterRunner(context.Background())
+	require.NoError(t, stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{Descriptor_: echoDescriptor()}}}))
+	_, err := stream.Receive()
+	require.Error(t, err, "an approved runner with no permitted tool namespace must be rejected (ARCH-015 fail-closed)")
+	_ = stream.CloseRequest()
+}
+
+// TestGateway_IdempotentWriteUnprovableStrategyRejected verifies ARCH-014
+// fail-closed: an idempotent_write descriptor whose idempotency_proof strategy
+// is not gateway-provable in v1 (e.g. resource_identity, which the gateway
+// cannot verify without a declared resource-identity argument) is rejected at
+// registration rather than becoming auto-retryable.
+func TestGateway_IdempotentWriteUnprovableStrategyRejected(t *testing.T) {
+	env := newTestEnv(t, nil)
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	stream := client.RegisterRunner(context.Background())
+	desc := upsertRowDescriptor(true)
+	desc.IdempotencyProof = &v1.IdempotencyProof{Strategy: "resource_identity"}
+	require.NoError(t, stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{Descriptor_: desc}}}))
+	_, err := stream.Receive()
+	require.Error(t, err, "an unprovable idempotency_proof.strategy must be rejected at registration (ARCH-014 fail-closed)")
+	_ = stream.CloseRequest()
+}
+
+// TestGateway_RetryRenewsRunningLease verifies ARCH-014/SCN-008: a multi-attempt
+// retry of an idempotent_write renews the dispatch lease on the already-running
+// row so the recovery sweep cannot terminalize live work mid-retry.
+func TestGateway_RetryRenewsRunningLease(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	desc := upsertRowDescriptor(true)
+	desc.Timeout = durationPtr(150 * time.Millisecond)
+	var calls int32
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		if atomic.AddInt32(&calls, 1) < 2 {
+			return nil, false // stream loss -> proven idempotent retry
+		}
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "lease-1",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
+	require.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2), "expected at least one retry")
+
+	// The invocation must have reached a terminal committed state, not been
+	// recovered as outcome_unknown by a racing sweep (the lease was renewed).
+	inv, gerr := env.store.GetInvocation(ctx, iresp.Msg.InvocationId)
+	require.NoError(t, gerr)
+	assert.Equal(t, gateway.InvocationSucceeded, inv.State, "lease renewal kept the live retry from being recovered")
 }
 
 // TestGateway_IdempotentRetryStableUpstreamKey verifies ARCH-014: an

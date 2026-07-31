@@ -364,11 +364,11 @@ func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv Tool
 	}
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		// The lease covers this attempt's full timeout + margin so the recovery
-		// sweep cannot terminalize a live invocation (ARCH-014/SCN-008).
-		leaseExpiresAt := time.Now().Add(timeout + s.cfg.DispatchLease)
-		_ = s.store.MarkRunning(ctx, inv.ID, "", leaseExpiresAt, s.cfg.GatewayInstanceID) // runner_id unknown until picked; audit best-effort
-
+		// Renew the recovery lease for this attempt's full timeout + margin so
+		// the SCN-008 recovery sweep cannot terminalize a live invocation
+		// mid-dispatch (ARCH-014). See renewDispatchLease for the running-row
+		// renewal that multi-attempt retries depend on.
+		s.renewDispatchLease(ctx, inv.ID, timeout)
 		res, err := s.pool.dispatchToRunner(ctx, tv.Name, tv.Digest, invokeCtrl, inv.ID, timeout)
 		// A streamLost result (Send succeeded, result lost / ctx cancelled)
 		// means a possible effect occurred with no committed result. Classify
@@ -821,11 +821,14 @@ func resourceAllowed(allowed any, val string) bool {
 	return false
 }
 
-// namespaceAllowed reports whether the runner's namespace is in the allowed
-// list (empty allowed list = no namespace restriction configured).
+// namespaceAllowed reports whether the runner is permitted to register a
+// tool in namespace ns (ARCH-015). An empty allowed list is DENY: an approved
+// runner must declare an explicit permitted tool namespace, and the default
+// approval record (allowed_tool_namespaces = '{}') fails closed rather than
+// being treated as unrestricted. "*" is a wildcard.
 func namespaceAllowed(allowed []string, ns string) bool {
 	if len(allowed) == 0 {
-		return true // no restriction configured
+		return false // no permitted namespace -> deny (ARCH-015 fail-closed)
 	}
 	for _, a := range allowed {
 		if a == ns || a == "*" {
@@ -833,6 +836,26 @@ func namespaceAllowed(allowed []string, ns string) bool {
 		}
 	}
 	return false
+}
+
+// renewDispatchLease transitions a freshly committed invocation to 'running'
+// (first attempt, dispatching -> running) or renews the lease on an
+// already-running row (retry attempt), so a multi-attempt retry whose
+// cumulative duration exceeds the original lease is not terminalized by the
+// SCN-008 recovery sweep mid-dispatch (ARCH-014). Lease-renew errors are
+// logged, not discarded, so a dropped safety lease is observable.
+func (s *Service) renewDispatchLease(ctx context.Context, invID string, timeout time.Duration) {
+	leaseExpiresAt := time.Now().Add(timeout + s.cfg.DispatchLease)
+	if err := s.store.MarkRunning(ctx, invID, "", leaseExpiresAt, s.cfg.GatewayInstanceID); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			// Already 'running' (retry attempt): renew the lease.
+			if rerr := s.store.RenewDispatchLease(ctx, invID, s.cfg.GatewayInstanceID, leaseExpiresAt); rerr != nil {
+				s.log.Warn("renew dispatch lease failed", "inv", invID, "error", rerr)
+			}
+		} else {
+			s.log.Warn("mark running failed", "inv", invID, "error", err)
+		}
+	}
 }
 
 func mapErr(err error) error {

@@ -287,15 +287,21 @@ func validateToolVersion(tv ToolVersion) error {
 		if err := json.Unmarshal(tv.IdempotencyProof, &proof); err != nil {
 			return fmt.Errorf("tool %s: idempotency_proof is not valid JSON: %w", tv.Name, err)
 		}
-		// A concrete, recognized strategy is the "proven stable strategy" the
-		// retry gate requires (ARCH-014): upstream_key propagates a stable
-		// gateway-derived idempotency key; resource_identity relies on a
-		// deterministic resource identity. An unknown string is rejected so a
-		// malformed descriptor cannot become retryable.
+		// A concrete, gateway-provable strategy is the "proven stable strategy"
+		// the retry gate requires (ARCH-014). In v1 only `upstream_key` is
+		// accepted: the gateway derives the stable upstream key from the durable
+		// invocation id and propagates it to the runner across retries, so the
+		// proof is verifiable end-to-end. A `resource_identity`/
+		// `deterministic_resource_id` strategy is NOT accepted in v1 because the
+		// gateway has no declared resource-identity argument to validate it
+		// against (the v1 proto carries no such field); accepting a bare strategy
+		// string would let an unprovable descriptor become auto-retryable.
+		// Fail-closed: reject anything but `upstream_key` until a later ticket
+		// adds a gateway-verifiable resource-identity contract.
 		switch proof.Strategy {
-		case "upstream_key", "resource_identity":
+		case "upstream_key":
 		default:
-			return fmt.Errorf("tool %s: idempotent_write requires a recognized idempotency_proof.strategy (upstream_key|resource_identity), got %q", tv.Name, proof.Strategy)
+			return fmt.Errorf("tool %s: idempotent_write requires idempotency_proof.strategy=upstream_key in v1 (gateway-derived stable key); %q is not gateway-provable (ARCH-014 fail-closed)", tv.Name, proof.Strategy)
 		}
 	}
 	return nil
