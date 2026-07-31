@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,8 @@ type Config struct {
 	DefaultTimeout    time.Duration // per-invocation timeout when descriptor has none
 	RetryMaxAttempts  int           // bounded automatic retry for read_only / proven idempotent_write
 	RetryBackoff      time.Duration
+	DispatchLease     time.Duration // crash-recovery lease for in-flight invocations (ARCH-014/SCN-008)
+	GatewayInstanceID string        // unique per process; auto-generated if empty
 }
 
 // Defaults applied when zero.
@@ -49,7 +53,19 @@ func (c Config) defaults() Config {
 	if c.RetryBackoff == 0 {
 		c.RetryBackoff = 200 * time.Millisecond
 	}
+	if c.DispatchLease == 0 {
+		c.DispatchLease = 60 * time.Second
+	}
+	if c.GatewayInstanceID == "" {
+		c.GatewayInstanceID = randomInstanceID()
+	}
 	return c
+}
+
+func randomInstanceID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "gw-" + hex.EncodeToString(b[:])
 }
 
 // Service implements the tool-gateway gRPC handlers (RunnerService +
@@ -65,7 +81,8 @@ type Service struct {
 }
 
 // NewService builds a gateway Service. store/secrets/oauth are required; cfg is
-// defaulted.
+// defaulted. Crash-recovery reconciliation is started separately via
+// StartReconciler (cmd/gateway) so tests control it explicitly.
 func NewService(store *Store, secrets SecretResolver, oauth OAuthAcquirer, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
@@ -78,6 +95,35 @@ func NewService(store *Store, secrets SecretResolver, oauth OAuthAcquirer, cfg C
 		pool:    newRunnerPool(),
 		log:     log,
 	}
+}
+
+// StartReconciler runs the crash-recovery sweep once at start, then on a ticker
+// until ctx is done (SCN-008/ARCH-014). It classifies orphaned in-flight
+// invocations (read_only -> failed, writes -> outcome_unknown). Call once per
+// process, before accepting traffic.
+func (s *Service) StartReconciler(ctx context.Context) {
+	recovered, err := s.store.RecoverOrphanedInvocations(ctx)
+	if err != nil {
+		s.log.Error("initial orphan recovery failed", "error", err)
+	} else if recovered > 0 {
+		s.log.Info("recovered orphaned invocations", "count", recovered)
+	}
+	ticker := time.NewTicker(s.cfg.DispatchLease / 2)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := s.store.RecoverOrphanedInvocations(ctx); err != nil {
+					s.log.Warn("orphan recovery sweep failed", "error", err)
+				} else if n > 0 {
+					s.log.Info("recovered orphaned invocations", "count", n)
+				}
+			}
+		}
+	}()
 }
 
 // --- identity middleware (stamps the mTLS-verified SPIFFE identity into context) ---
@@ -110,17 +156,23 @@ func identityFromContext(ctx context.Context) (spiffe.Identity, bool) {
 // --- GatewayService ---
 
 // DiscoverEffectiveTools returns only the descriptors permitted for the
-// caller's active context (ARCH-006/016/018).
+// caller's active, durably-resolved context (ARCH-004/006/007/016/018). The
+// caller's pool/attempt/permitted set is resolved from runtime state + the
+// attempt's immutable tool-version pin snapshot; caller-supplied IDs are
+// validated, never trusted as scope.
 func (s *Service) DiscoverEffectiveTools(ctx context.Context, req *connect.Request[v1.DiscoverRequest]) (*connect.Response[v1.DiscoverResponse], error) {
 	id, ok := identityFromContext(ctx)
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("no caller identity"))
 	}
-	pool, permitted, err := s.resolveCallerScope(ctx, id, req.Msg)
+	if id.Kind == spiffe.KindRunner {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("runners cannot call GatewayService"))
+	}
+	res, err := s.resolveCallerScope(ctx, id, req.Msg)
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	tools, err := s.store.DiscoverEffectiveTools(ctx, pool.ID, permitted)
+	tools, err := s.store.DiscoverEffectiveTools(ctx, res.AttemptID, res.Pool.ID, res.PermittedTools)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -134,98 +186,130 @@ func (s *Service) DiscoverEffectiveTools(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(&v1.DiscoverResponse{Descriptors: descs}), nil
 }
 
-// InvokeTool is the ledger-gated execution path (ARCH-014).
+// InvokeTool is the ledger-gated execution path (ARCH-014). Authorization,
+// version pinning, argument validation, and credential resolution all occur
+// BEFORE the side-effect boundary; the ledger row is committed before dispatch.
 func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.InvokeRequest]) (*connect.Response[v1.InvokeResponse], error) {
 	id, ok := identityFromContext(ctx)
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("no caller identity"))
 	}
+	if id.Kind == spiffe.KindRunner {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("runners cannot call GatewayService"))
+	}
 	msg := req.Msg
 
-	// 1. Resolve the pinned tool version (ARCH-007). An unknown pin fails before
-	//    action execution; the gateway never substitutes another version.
-	tv, err := s.store.GetToolVersion(ctx, msg.ToolName, msg.ToolVersionDigest)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("pinned tool %s@%s unavailable; no substitution (ARCH-007)", msg.ToolName, msg.ToolVersionDigest))
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	// 2. Resolve caller scope -> pool + permitted tools (deny-by-default).
-	pool, permitted, err := s.resolveCallerScope(ctx, id, &v1.DiscoverRequest{
+	// 1. Resolve the caller's durable scope (ARCH-004): pool + permitted tools +
+	//    attempt id, validated against runtime state. Fail closed.
+	res, err := s.resolveCallerScope(ctx, id, &v1.DiscoverRequest{
 		AttemptId: msg.AttemptId, CallerScope: msg.CallerScope, CallerScopeId: msg.CallerScopeId,
 	})
 	if err != nil {
 		return nil, mapErr(err)
 	}
 
-	// 3. Authorization: the tool must be granted to the pool with an effect-class
-	//    ceiling >= the tool's effect (SCN-009). Absence = denied, attributable.
-	if !s.authorized(ctx, pool.ID, tv, permitted) {
-		s.log.Warn("tool invocation denied (out of scope)",
-			"tool", tv.Name, "pool", pool.ID, "attempt", msg.AttemptId, "caller", id.SPIFFEID)
-		return connect.NewResponse(&v1.InvokeResponse{
-			State: v1.InvokeState_INVOKE_STATE_FAILED,
-			Error: &v1.ErrorDetail{Code: "permission_denied", Message: "tool not authorized for this scope", Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
-		}), nil
+	// 2. Resolve the pinned tool version from the attempt's immutable snapshot
+	//    (ARCH-007). The caller-supplied digest is NOT trusted: if present it
+	//    must equal the pin. No pin => fail closed (no substitution).
+	pinDigest, err := s.store.GetAttemptToolPin(ctx, res.AttemptID, msg.ToolName)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("tool %s is not pinned for attempt %s; no substitution (ARCH-007)", msg.ToolName, res.AttemptID))
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if msg.ToolVersionDigest != "" && msg.ToolVersionDigest != pinDigest {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("requested digest %s does not match the pinned digest %s for attempt %s (ARCH-007)", msg.ToolVersionDigest, pinDigest, res.AttemptID))
+	}
+	tv, err := s.store.GetToolVersion(ctx, msg.ToolName, pinDigest)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("pinned tool %s@%s unavailable; no substitution (ARCH-007)", msg.ToolName, pinDigest))
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	// 4. Argument validation (deterministic, pre-effect). v1: valid JSON + inline
-	//    size limit. Full JSON-Schema validation is a fast-follow.
-	if err := validateArgs(msg.ArgumentsJson, s.cfg.InlineLimit); err != nil {
+	// 3. Authorization (ARCH-008/016/018): workflow-permitted intersection +
+	//    pool grant effect ceiling + action allow-list. Absence = denied,
+	//    attributable.
+	allowed, err := s.authorize(ctx, res.Pool.ID, tv, res.PermittedTools)
+	if err != nil {
+		s.log.Warn("tool invocation denied", "tool", tv.Name, "pool", res.Pool.ID,
+			"attempt", res.AttemptID, "caller", id.SPIFFEID, "reason", err)
+		return connect.NewResponse(&v1.InvokeResponse{
+			State: v1.InvokeState_INVOKE_STATE_FAILED,
+			Error: &v1.ErrorDetail{Code: "permission_denied", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
+		}), nil
+	}
+	_ = allowed
+
+	// 4. Argument validation against the pinned descriptor's JSON Schema
+	//    (REQ-010/ARCH-014) — deterministic, pre-effect.
+	if err := validateArguments(msg.ArgumentsJson, tv.InputSchema, s.cfg.InlineLimit); err != nil {
 		return connect.NewResponse(&v1.InvokeResponse{
 			State: v1.InvokeState_INVOKE_STATE_FAILED,
 			Error: &v1.ErrorDetail{Code: "invalid_arguments", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
 		}), nil
 	}
 
-	// 5. Commit the ledger row BEFORE the side-effect boundary (ARCH-014). This
-	//    MUST precede the runner-availability check so a duplicate of an
-	//    already-terminal invocation (e.g. outcome_unknown after a runner drop)
-	//    returns its committed result rather than a fresh tool_unavailable. On a
-	//    unique-key conflict (duplicate caller) return the existing result or
-	//    report in-progress.
+	// 5. Commit the ledger row BEFORE the side-effect boundary (ARCH-014), with
+	//    a crash-recovery lease. On a unique-key conflict (duplicate caller)
+	//    return the existing result or report in-progress.
+	leaseExpiresAt := time.Now().Add(s.cfg.DispatchLease)
 	key := InvocationKey{
-		AttemptID: msg.AttemptId, CallerScope: callerScopeFromProto(msg.CallerScope),
+		AttemptID: res.AttemptID, CallerScope: callerScopeFromProto(msg.CallerScope),
 		CallerScopeID: msg.CallerScopeId, ToolCallID: msg.ToolCallId,
 		ToolVersionDigest: tv.Digest, IdempotencyKey: msg.IdempotencyKey,
 	}
-	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &pool.ID, msg.ArgumentsJson)
+	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, leaseExpiresAt, s.cfg.GatewayInstanceID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if !inserted {
-		resp := invocationToResponse(inv)
-		return connect.NewResponse(resp), nil
+		return connect.NewResponse(invocationToResponse(inv)), nil
 	}
 
 	// 6. A live runner must serve the pinned version (ARCH-007). No runner => no
-	//    effect possible => fail the committed invocation (not a pre-ledger
-	//    error, so a later duplicate still returns this committed failure).
+	//    effect possible => fail the committed invocation (retryable). This is a
+	//    post-ledger failure, so a later duplicate returns this committed
+	//    failure rather than re-dispatching.
 	if !s.pool.toolAvailable(tv.Name, tv.Digest) {
-		return connect.NewResponse(s.finishFailed(ctx, inv, &v1.ErrorDetail{
+		resp, ferr := s.finishFailed(ctx, inv, &v1.ErrorDetail{
 			Code: "tool_unavailable", Message: "no live runner for the pinned tool version", Retryability: v1.Retryability_RETRYABILITY_RETRYABLE,
-		})), nil
+		})
+		if ferr != nil {
+			return nil, connect.NewError(connect.CodeInternal, ferr)
+		}
+		return connect.NewResponse(resp), nil
 	}
 
-	// 7. Resolve credential bindings -> CredentialContext (ARCH-008).
-	credCtx, err := resolveCredentialContext(ctx, pool.ID, tv.Name, s.store, s.secrets, s.oauth)
+	// 7. Resolve credential bindings -> CredentialContext, validated against the
+	//    pinned descriptor's declared slots (ARCH-008).
+	credCtx, err := resolveCredentialContext(ctx, res.Pool.ID, tv.Name, tv, s.store, s.secrets, s.oauth)
 	if err != nil {
-		return connect.NewResponse(s.finishFailed(ctx, inv, &v1.ErrorDetail{
+		resp, ferr := s.finishFailed(ctx, inv, &v1.ErrorDetail{
 			Code: "credential_resolution_failed", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE,
-		})), nil
+		})
+		if ferr != nil {
+			return nil, connect.NewError(connect.CodeInternal, ferr)
+		}
+		return connect.NewResponse(resp), nil
 	}
 
 	// 8. Dispatch (with retry classification by effect class).
-	resp := s.dispatchWithRetry(ctx, inv, tv, msg, credCtx)
+	resp, derr := s.dispatchWithRetry(ctx, inv, tv, msg, credCtx)
+	if derr != nil {
+		return nil, connect.NewError(connect.CodeInternal, derr)
+	}
 	return connect.NewResponse(resp), nil
 }
 
 // dispatchWithRetry executes the invocation over a runner stream, applying the
 // effect-class retry policy on stream loss / ambiguity (ARCH-014).
-func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv ToolVersion, msg *v1.InvokeRequest, credCtx *v1.CredentialContext) *v1.InvokeResponse {
+func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv ToolVersion, msg *v1.InvokeRequest, credCtx *v1.CredentialContext) (*v1.InvokeResponse, error) {
 	timeout := s.cfg.DefaultTimeout
 	if tv.TimeoutMS > 0 {
 		timeout = time.Duration(tv.TimeoutMS) * time.Millisecond
@@ -250,35 +334,41 @@ func (s *Service) dispatchWithRetry(ctx context.Context, inv Invocation, tv Tool
 	}
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		// Transition dispatching -> running for this attempt.
-		_ = s.store.MarkRunning(ctx, inv.ID, "") // runner_id unknown until picked; audit best-effort
+		leaseExpiresAt := time.Now().Add(s.cfg.DispatchLease)
+		_ = s.store.MarkRunning(ctx, inv.ID, "", leaseExpiresAt, s.cfg.GatewayInstanceID) // runner_id unknown until picked; audit best-effort
 
 		res, err := s.pool.dispatchToRunner(ctx, tv.Name, tv.Digest, invokeCtrl, inv.ID, timeout)
+		// A streamLost result (Send succeeded, result lost / ctx cancelled)
+		// means a possible effect occurred with no committed result. Classify
+		// by effect class BEFORE treating a non-nil err as a hard failure — a
+		// post-send cancellation is ambiguity, not a plain dispatch error.
+		if res.streamLost {
+			if canRetry && attempt < attempts-1 {
+				time.Sleep(s.cfg.RetryBackoff)
+				continue
+			}
+			return s.classifyAmbiguous(ctx, inv, tv, "runner stream lost / context cancelled after send")
+		}
 		if err != nil {
 			if errors.Is(err, ErrNoRunner) {
 				// Runner vanished between check and dispatch: ambiguous for writes.
 				return s.classifyAmbiguous(ctx, inv, tv, "no runner available for dispatch")
 			}
-			return s.finishFailed(ctx, inv, &v1.ErrorDetail{Code: "dispatch_error", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_RETRYABLE})
-		}
-		if res.streamLost {
-			// Ambiguous: a possible effect occurred with no committed result.
-			if attempt < attempts-1 && canRetry {
-				time.Sleep(s.cfg.RetryBackoff)
-				continue
-			}
-			return s.classifyAmbiguous(ctx, inv, tv, "runner stream lost before result")
+			resp, ferr := s.finishFailed(ctx, inv, &v1.ErrorDetail{Code: "dispatch_error", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_RETRYABLE})
+			return resp, ferr
 		}
 		// Runner reported a terminal result.
-		return s.finishFromResult(ctx, inv, res)
+		return s.finishFromResult(ctx, inv, tv, res)
 	}
 	return s.classifyAmbiguous(ctx, inv, tv, "retry budget exhausted")
 }
 
 // classifyAmbiguous terminalizes an invocation as outcome_unknown (a possible
 // effect with no committed result; never automatically repeated — ARCH-014) for
-// writes, or failed for read_only (no effect possible).
-func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv ToolVersion, reason string) *v1.InvokeResponse {
+// writes, or failed for read_only (no effect possible). Returns an error if the
+// ledger transition does not commit (the caller must not fabricate a terminal
+// response).
+func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv ToolVersion, reason string) (*v1.InvokeResponse, error) {
 	state := InvocationOutcomeUnknown
 	if tv.EffectClass == EffectReadOnly {
 		state = InvocationFailed
@@ -287,7 +377,9 @@ func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv Tool
 		"code": "outcome_unknown", "message": reason, "retryability": "unknown",
 		"effect_class": tv.EffectClass,
 	})
-	_ = s.store.FinishInvocation(ctx, inv.ID, state, nil, []byte("[]"), errDetail)
+	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, state, nil, []byte("[]"), errDetail); ferr != nil {
+		return nil, fmt.Errorf("commit ambiguous outcome: %w", ferr)
+	}
 	resp := &v1.InvokeResponse{InvocationId: inv.ID}
 	switch state {
 	case InvocationOutcomeUnknown:
@@ -296,44 +388,75 @@ func (s *Service) classifyAmbiguous(ctx context.Context, inv Invocation, tv Tool
 		resp.State = v1.InvokeState_INVOKE_STATE_FAILED
 	}
 	resp.Error = &v1.ErrorDetail{Code: "outcome_unknown", Message: reason, Retryability: v1.Retryability_RETRYABILITY_UNKNOWN}
-	return resp
+	return resp, nil
 }
 
-func (s *Service) finishFailed(ctx context.Context, inv Invocation, err *v1.ErrorDetail) *v1.InvokeResponse {
+func (s *Service) finishFailed(ctx context.Context, inv Invocation, err *v1.ErrorDetail) (*v1.InvokeResponse, error) {
 	errJSON, _ := marshalJSON(err)
-	_ = s.store.FinishInvocation(ctx, inv.ID, InvocationFailed, nil, []byte("[]"), errJSON)
-	return &v1.InvokeResponse{InvocationId: inv.ID, State: v1.InvokeState_INVOKE_STATE_FAILED, Error: err}
+	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, InvocationFailed, nil, []byte("[]"), errJSON); ferr != nil {
+		return nil, fmt.Errorf("commit failed result: %w", ferr)
+	}
+	return &v1.InvokeResponse{InvocationId: inv.ID, State: v1.InvokeState_INVOKE_STATE_FAILED, Error: err}, nil
 }
 
-func (s *Service) finishFromResult(ctx context.Context, inv Invocation, res dispatchResult) *v1.InvokeResponse {
-	state := InvocationSucceeded
-	if res.state == InvocationFailed {
-		state = InvocationFailed
+// finishFromResult commits a runner-reported terminal result. Runner output is
+// bounded + validated before commit (REQ-009/ARCH-014). A succeeded write with
+// malformed/oversized output cannot be trusted as a clean success: it is
+// classified outcome_unknown (a possible effect with an uncommittable result).
+// Never emits a terminal response unless the ledger transition commits.
+func (s *Service) finishFromResult(ctx context.Context, inv Invocation, tv ToolVersion, res dispatchResult) (*v1.InvokeResponse, error) {
+	state := res.state
+	resultJSON := res.resultJSON
+	// Bound + validate runner output before committing.
+	if state == InvocationSucceeded {
+		if len(resultJSON) > s.cfg.InlineLimit {
+			// Oversized success: the effect may have happened but the result
+			// cannot be stored inline. Classify by effect class.
+			return s.classifyAmbiguous(ctx, inv, tv, "runner result exceeds inline limit (use artifact refs)")
+		}
+		if len(resultJSON) == 0 {
+			resultJSON = []byte("{}")
+		} else if !jsonValid(resultJSON) {
+			return s.classifyAmbiguous(ctx, inv, tv, "runner reported succeeded with malformed JSON result")
+		}
 	}
-	_ = s.store.FinishInvocation(ctx, inv.ID, state, res.resultJSON, res.artifactRefs, res.errorDetail)
-	resp := &v1.InvokeResponse{InvocationId: inv.ID, ArtifactOutputRefs: nil}
+	if ferr := s.store.FinishInvocation(s.detachedCtx(ctx), inv.ID, state, resultJSON, res.artifactRefs, res.errorDetail); ferr != nil {
+		return nil, fmt.Errorf("commit result: %w", ferr)
+	}
+	resp := &v1.InvokeResponse{InvocationId: inv.ID}
 	if state == InvocationSucceeded {
 		resp.State = v1.InvokeState_INVOKE_STATE_SUCCEEDED
-		resp.ResultJson = res.resultJSON
+		resp.ResultJson = resultJSON
 	} else {
 		resp.State = v1.InvokeState_INVOKE_STATE_FAILED
 		resp.Error = &v1.ErrorDetail{Code: "tool_failed", Message: "tool execution failed", Retryability: v1.Retryability_RETRYABILITY_UNKNOWN}
 	}
-	// Artifact refs are parsed from the ledger's JSONB for the response.
-	refs := parseArtifactRefs(res.artifactRefs)
-	resp.ArtifactOutputRefs = refs
-	return resp
+	resp.ArtifactOutputRefs = parseArtifactRefs(res.artifactRefs)
+	return resp, nil
 }
 
-// CancelInvocation propagates cancellation to an in-flight invocation. It
-// cannot undo an effect already started (ARCH-014).
+// CancelInvocation propagates cancellation to an in-flight invocation. The
+// caller's durable scope must own the invocation (REQ-010 applies to
+// cancellation). It cannot undo an effect already started (ARCH-014).
 func (s *Service) CancelInvocation(ctx context.Context, req *connect.Request[v1.CancelRequest]) (*connect.Response[v1.CancelResponse], error) {
+	id, ok := identityFromContext(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("no caller identity"))
+	}
+	if id.Kind == spiffe.KindRunner {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("runners cannot cancel invocations"))
+	}
 	inv, err := s.store.GetInvocation(ctx, req.Msg.InvocationId)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	// Ownership: resolve the caller's scope and require the invocation's pool
+	// to match. Runner identities are already rejected above.
+	if err := s.assertCallerOwnsInvocation(ctx, id, inv); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 	// If terminal, return the committed state unchanged.
 	if inv.State == InvocationSucceeded || inv.State == InvocationFailed || inv.State == InvocationOutcomeUnknown {
@@ -342,6 +465,34 @@ func (s *Service) CancelInvocation(ctx context.Context, req *connect.Request[v1.
 	// Propagate cancel to the runner serving this invocation (best-effort).
 	s.pool.propagateCancel(ctx, inv.ID, req.Msg.Reason)
 	return connect.NewResponse(&v1.CancelResponse{State: v1.InvokeState_INVOKE_STATE_RUNNING}), nil
+}
+
+// assertCallerOwnsInvocation resolves the caller's durable scope and requires
+// the invocation's pool to match it (REQ-010). A supervisor must be bound to
+// the invocation's pool; a workflow-step caller must resolve to the same pool.
+func (s *Service) assertCallerOwnsInvocation(ctx context.Context, id spiffe.Identity, inv Invocation) error {
+	if inv.PoolID == nil {
+		return errors.New("invocation has no owning pool")
+	}
+	switch id.Kind {
+	case spiffe.KindSupervisor:
+		pool, err := s.store.ResolvePoolBySpiffePrefix(ctx, id.SPIFFEID)
+		if err != nil || pool.ID != *inv.PoolID {
+			return errors.New("caller scope does not own this invocation")
+		}
+	case spiffe.KindControlPlaneWorkflow:
+		// The workflow-step caller is a trusted control-plane service; require
+		// the invocation's attempt to be assigned to the invocation's pool.
+		var assignedPool string
+		err := s.store.pool.QueryRow(ctx,
+			`SELECT pool_id::text FROM runtime.run_pool_assignments WHERE run_id::text = $1`, inv.AttemptID).Scan(&assignedPool)
+		if err != nil || assignedPool != *inv.PoolID {
+			return errors.New("caller scope does not own this invocation")
+		}
+	default:
+		return errors.New("caller kind cannot cancel")
+	}
+	return nil
 }
 
 // --- RunnerService (bidi) ---
@@ -434,11 +585,14 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 }
 
 // handleRegister registers one tool version for the runner + publishes the
-// immutable descriptor (idempotent on digest).
+// immutable descriptor (idempotent on digest; fail-closed on bad descriptor).
 func (s *Service) handleRegister(ctx context.Context, reg *v1.Register, approved ApprovedRunner, rc *runnerConn) error {
 	desc := reg.Descriptor_
-	tv := descriptorToToolVersion(desc)
-	tv, err := s.store.RegisterToolVersion(ctx, tv)
+	tv, err := descriptorToToolVersion(desc)
+	if err != nil {
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	tv, err = s.store.RegisterToolVersion(ctx, tv)
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -456,52 +610,37 @@ func (s *Service) handleRegister(ctx context.Context, reg *v1.Register, approved
 
 // --- helpers ---
 
-// resolveCallerScope resolves the pool + workflow-permitted tools for a caller.
-// Supervisor: pool from SPIFFE prefix; permitted = {} (all granted; workflow
-// narrowing for turns is a follow-up). Workflow-step: pool + permitted from the
-// workflow binding (ARCH-012/018).
-func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, req *v1.DiscoverRequest) (Pool, []string, error) {
+// resolveCallerScope resolves the pool + permitted tools + attempt id for a
+// caller from durable state (ARCH-004). Supervisor/turn: pool from SPIFFE,
+// cross-checked against the active turn's run assignment. Workflow-step: pool +
+// permitted tools from the run's workflow binding, cross-checked against the
+// run assignment. Caller-supplied IDs are validated, never trusted as scope.
+func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, req *v1.DiscoverRequest) (CallerResolution, error) {
 	switch id.Kind {
 	case spiffe.KindSupervisor:
+		// Pool is resolved from the verified SPIFFE id (prefix match), then
+		// cross-checked against the active turn + run assignment.
 		pool, err := s.store.ResolvePoolBySpiffePrefix(ctx, id.SPIFFEID)
 		if err != nil {
-			return Pool{}, nil, fmt.Errorf("supervisor pool not bound: %w", err)
+			return CallerResolution{}, ErrScopeDenied
 		}
-		return pool, nil, nil // no workflow narrowing for turns in v1
+		return s.store.ResolveTurnScope(ctx, pool.ID, req.AttemptId, req.CallerScopeId)
 	case spiffe.KindControlPlaneWorkflow:
-		// The workflow-step caller carries the workflow definition key via the
-		// attempt context. v1: derive workflow key from the caller_scope_id
-		// (run_step_id) -> the binding is looked up by the workflow the step
-		// belongs to. For the hermetic path the caller passes the workflow key
-		// in AttemptId's place is not ideal; resolve by the step's workflow.
-		// Simpler: the workflow-step caller's pool is resolved from a binding
-		// keyed by workflow_definition_key passed as CallerScopeId.
-		b, err := s.store.GetWorkflowPoolBinding(ctx, req.CallerScopeId)
-		if err != nil {
-			return Pool{}, nil, fmt.Errorf("workflow pool binding not found: %w", err)
-		}
-		pool, err := s.getPool(ctx, b.PoolID)
-		if err != nil {
-			return Pool{}, nil, err
-		}
-		return pool, b.PermittedTools, nil
+		// The run_step + run are validated; the workflow binding is derived
+		// from the run's definition_key (NOT a caller-supplied key).
+		return s.store.ResolveWorkflowStepScope(ctx, req.AttemptId, req.CallerScopeId)
 	}
-	return Pool{}, nil, fmt.Errorf("caller kind %s cannot resolve scope", id.Kind)
+	return CallerResolution{}, ErrScopeDenied
 }
 
-func (s *Service) getPool(ctx context.Context, poolID string) (Pool, error) {
-	// Pools are keyed by id; a direct fetch.
-	row := s.store.pool.QueryRow(ctx, `SELECT id, key, name, spiffe_id_prefix FROM toolgateway.pools WHERE id = $1 AND deleted_at IS NULL`, poolID)
-	var p Pool
-	if err := row.Scan(&p.ID, &p.Key, &p.Name, &p.SpiffeIDPrefix); err != nil {
-		return Pool{}, fmt.Errorf("get pool: %w", err)
-	}
-	return p, nil
-}
-
-// authorized checks the pool grant ceiling + workflow-permitted intersection.
-func (s *Service) authorized(ctx context.Context, poolID string, tv ToolVersion, permitted []string) bool {
-	if len(permitted) > 0 {
+// authorize evaluates the durable action/resource policy before the effect
+// boundary (ARCH-008/016/018): workflow-permitted intersection + pool grant
+// effect ceiling + action allow-list. Returns nil if authorized, an error
+// (permission_denied ...) otherwise.
+func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, permitted []string) (bool, error) {
+	// Workflow-requested intersection. nil = no narrowing (turn path); empty
+	// slice = explicitly none (deny all).
+	if permitted != nil {
 		found := false
 		for _, t := range permitted {
 			if t == tv.Name {
@@ -510,29 +649,43 @@ func (s *Service) authorized(ctx context.Context, poolID string, tv ToolVersion,
 			}
 		}
 		if !found {
-			return false
+			return false, errors.New("tool not in workflow-permitted set")
 		}
 	}
-	var maxEffect string
-	err := s.store.pool.QueryRow(ctx,
-		`SELECT max_effect_class FROM toolgateway.pool_grants WHERE pool_id = $1 AND tool_name = $2 AND deleted_at IS NULL`,
-		poolID, tv.Name).Scan(&maxEffect)
+	grant, err := s.store.GetPoolGrant(ctx, poolID, tv.Name)
 	if err != nil {
-		return false // absence = denied
+		if errors.Is(err, ErrNotFound) {
+			return false, errors.New("tool not granted to pool")
+		}
+		return false, err
 	}
-	return effectRank(tv.EffectClass) <= effectRank(EffectClass(maxEffect))
+	if effectRank(tv.EffectClass) > effectRank(grant.MaxEffectClass) {
+		return false, fmt.Errorf("tool effect_class %s exceeds pool grant ceiling %s", tv.EffectClass, grant.MaxEffectClass)
+	}
+	// Action allow-list (ARCH-008/018). An empty allowed_actions means
+	// effect-class-only (no action narrowing). Otherwise the tool's effective
+	// action (the tool name when the descriptor declares no action
+	// decomposition) must be in the list.
+	if len(grant.AllowedActions) > 0 {
+		action := actionForTool(tv)
+		ok := false
+		for _, a := range grant.AllowedActions {
+			if a == action || a == "*" {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false, fmt.Errorf("action %q not permitted by pool grant", action)
+		}
+	}
+	return true, nil
 }
 
-func validateArgs(args []byte, limit int) error {
-	if len(args) > limit {
-		return fmt.Errorf("arguments exceed inline limit %d (use artifact refs)", limit)
-	}
-	if len(args) == 0 {
-		return nil
-	}
-	var any json.RawMessage
-	return json.Unmarshal(args, &any)
-}
+// actionForTool derives the effective action a tool invocation targets. v1
+// treats an undeclared action as the single action "<tool_name>" (SD-3); tool
+// descriptors may declare action decomposition in a later revision.
+func actionForTool(tv ToolVersion) string { return tv.Name }
 
 // namespaceAllowed reports whether the runner's namespace is in the allowed
 // list (empty allowed list = no namespace restriction configured).
@@ -549,7 +702,7 @@ func namespaceAllowed(allowed []string, ns string) bool {
 }
 
 func mapErr(err error) error {
-	if errors.Is(err, ErrNotFound) {
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrScopeDenied) {
 		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("scope not authorized: %w", err))
 	}
 	return connect.NewError(connect.CodeInternal, err)
@@ -562,3 +715,19 @@ func welcome(gen uint64, cfg Config) *v1.RunnerControl {
 		LeaseTimeoutMs:      int32(cfg.LeaseInterval / time.Millisecond),     //nolint:gosec // G115
 	}}}
 }
+
+// detachedCtx returns a context that survives caller cancellation, for
+// terminal ledger commits after a possible effect (ARCH-014). If the request
+// context is still alive it is returned unchanged; otherwise a fresh background
+// context with a bounded timeout is used so the durable outcome always commits.
+func (s *Service) detachedCtx(ctx context.Context) context.Context {
+	if ctx.Err() == nil {
+		return ctx
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_ = cancel // bounded by the timeout; the commit is a single query
+	return ctx
+}
+
+// jsonValid reports whether b is valid JSON.
+func jsonValid(b []byte) bool { return json.Valid(b) }

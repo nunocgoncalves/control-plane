@@ -86,22 +86,72 @@ func resolveCredential(ctx context.Context, b CredentialBinding, secrets SecretR
 	return nil, fmt.Errorf("unknown credential scheme %q", b.Scheme)
 }
 
-// resolveCredentialContext resolves all slot bindings for a pool+tool into a
-// CredentialContext keyed by slot name.
-func resolveCredentialContext(ctx context.Context, poolID, toolName string, store *Store, secrets SecretResolver, oauth OAuthAcquirer) (*v1.CredentialContext, error) {
+// resolveCredentialContext resolves the slot bindings for a pool+tool into a
+// CredentialContext keyed by slot name, validated against the pinned
+// descriptor's declared credential_slots (ARCH-008). The gateway resolves
+// EXACTLY the logical slots the descriptor declared: every required slot must
+// have a binding with a matching scheme; no extra/undeclared binding is sent to
+// the runner. A mismatch fails closed before dispatch.
+func resolveCredentialContext(ctx context.Context, poolID, toolName string, tv ToolVersion, store *Store, secrets SecretResolver, oauth OAuthAcquirer) (*v1.CredentialContext, error) {
+	declared, err := parseCredentialSlots(tv.CredentialSlots)
+	if err != nil {
+		return nil, fmt.Errorf("parse declared credential slots: %w", err)
+	}
 	bindings, err := store.ResolveCredentialBindings(ctx, poolID, toolName)
 	if err != nil {
 		return nil, err
 	}
-	slots := make(map[string]*v1.Credential, len(bindings))
+	bindingByName := make(map[string]CredentialBinding, len(bindings))
 	for _, b := range bindings {
+		bindingByName[b.SlotName] = b
+	}
+	slots := make(map[string]*v1.Credential, len(declared))
+	for _, slot := range declared {
+		b, ok := bindingByName[slot.Name]
+		if !ok {
+			if slot.Required {
+				return nil, fmt.Errorf("required credential slot %q has no binding (ARCH-008)", slot.Name)
+			}
+			continue // optional slot, intentionally unbound
+		}
+		if b.Scheme != slot.Scheme {
+			return nil, fmt.Errorf("credential slot %q scheme mismatch: binding %q != declared %q (ARCH-008)",
+				slot.Name, b.Scheme, slot.Scheme)
+		}
 		cred, err := resolveCredential(ctx, b, secrets, oauth)
 		if err != nil {
 			return nil, fmt.Errorf("slot %q: %w", b.SlotName, err)
 		}
 		slots[b.SlotName] = cred
+		delete(bindingByName, slot.Name)
+	}
+	if len(bindingByName) > 0 {
+		extras := make([]string, 0, len(bindingByName))
+		for name := range bindingByName {
+			extras = append(extras, name)
+		}
+		return nil, fmt.Errorf("undeclared credential bindings for tool %s would leak to runner: %v (ARCH-008)", toolName, extras)
 	}
 	return &v1.CredentialContext{Slots: slots}, nil
+}
+
+// declaredCredentialSlot is a parsed row of a ToolVersion's credential_slots
+// JSONB: {name, scheme, binding_schema, required}.
+type declaredCredentialSlot struct {
+	Name     string           `json:"name"`
+	Scheme   CredentialScheme `json:"scheme"`
+	Required bool             `json:"required"`
+}
+
+func parseCredentialSlots(raw []byte) ([]declaredCredentialSlot, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var slots []declaredCredentialSlot
+	if err := json.Unmarshal(raw, &slots); err != nil {
+		return nil, err
+	}
+	return slots, nil
 }
 
 // --- production implementations ---

@@ -2,6 +2,9 @@
 
 DROP VIEW IF EXISTS toolgateway.available_tool_versions;
 
+DROP TABLE IF EXISTS toolgateway.attempt_tool_pins;
+DROP TABLE IF EXISTS runtime.run_pool_assignments;
+
 DROP TRIGGER IF EXISTS invocations_updated ON toolgateway.invocations;
 DROP TRIGGER IF EXISTS approved_runners_updated ON toolgateway.approved_runners;
 DROP TRIGGER IF EXISTS workflow_pool_bindings_updated ON toolgateway.workflow_pool_bindings;

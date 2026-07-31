@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nunocgoncalves/control-plane/internal/gateway"
 	v1 "github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1"
 	"github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1/gatewayv1connect"
@@ -29,11 +31,13 @@ const td = "iterabase.local"
 // mTLS server with in-memory CA + the cert material for each caller class.
 type testEnv struct {
 	store      *gateway.Store
+	pgpool     *pgxpool.Pool // raw pool for seeding runtime/identity rows
 	srvURL     string
 	supervisor tls.Certificate // spiffe://td/pools/pool-1/workers/worker-1
 	runner     tls.Certificate // spiffe://td/tool-runners/ns-1/runner-1
 	wfStep     tls.Certificate // spiffe://td/control-plane/workflow-runtime
 	caPool     *x509.CertPool
+	poolID     string // the seeded pool's uuid
 	stop       func()
 }
 
@@ -43,15 +47,20 @@ const (
 	runnerSpiffe = "spiffe://iterabase.local/tool-runners/ns-1/runner-1"
 	supvSpiffe   = "spiffe://iterabase.local/pools/pool-1/workers/worker-1"
 	wfSpiffe     = "spiffe://iterabase.local/control-plane/workflow-runtime"
+	wfKey        = "wf-quote"
 )
+
+var idCounter atomic.Uint64
+
+func shortID() string { return fmt.Sprintf("t%d", idCounter.Add(1)) }
 
 func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	t.Helper()
 	if secrets == nil {
 		secrets = gateway.NewFakeSecretResolver()
 	}
-	pool := testutil.NewPostgresPool(t)
-	store := gateway.NewStore(pool)
+	pgpool := testutil.NewPostgresPool(t)
+	store := gateway.NewStore(pgpool)
 
 	// Seed: pool, grants, credential binding, approved runner, workflow binding.
 	ctx := context.Background()
@@ -68,7 +77,7 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	// Approved runner.
 	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"ns-1"}))
 	// Workflow-step binding (workflow "wf-quote" -> pool-1, permits echo+send_email).
-	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, "wf-quote", p.ID, []string{"echo", "send_email"}))
+	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []string{"echo", "send_email"}))
 
 	// In-memory CA + certs.
 	ca, err := testca.New()
@@ -82,7 +91,7 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	wfStep, err := ca.Leaf(testca.LeafOpts{SPIFFEID: wfSpiffe})
 	require.NoError(t, err)
 
-	svc := gateway.NewService(store, secrets, gateway.NewFakeOAuthAcquirer("oauth-token"), gateway.Config{TrustDomain: td}, nil)
+	svc := gateway.NewService(store, secrets, gateway.NewFakeOAuthAcquirer("oauth-token"), gateway.Config{TrustDomain: td, DispatchLease: 2 * time.Second}, nil)
 
 	mux := http.NewServeMux()
 	idmw := gateway.IdentityMiddleware(td)
@@ -107,8 +116,8 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	t.Cleanup(stop)
 
 	return &testEnv{
-		store: store, srvURL: fmt.Sprintf("https://localhost:%d", port),
-		supervisor: supervisor, runner: runner, wfStep: wfStep, caPool: ca.Pool, stop: stop,
+		store: store, pgpool: pgpool, srvURL: fmt.Sprintf("https://localhost:%d", port),
+		supervisor: supervisor, runner: runner, wfStep: wfStep, caPool: ca.Pool, poolID: p.ID, stop: stop,
 	}
 }
 
@@ -125,6 +134,55 @@ func mTLSClient(cert tls.Certificate, caPool *x509.CertPool) *http.Client {
 
 func gatewayClient(env *testEnv, cert tls.Certificate) gatewayv1connect.GatewayServiceClient {
 	return gatewayv1connect.NewGatewayServiceClient(mTLSClient(cert, env.caPool), env.srvURL, connect.WithGRPC())
+}
+
+// seedTurnAttempt creates a chat run + active turn + run->pool assignment and
+// snapshots the attempt's tools. Must be called AFTER a runner has registered
+// (SnapshotAttemptTools resolves healthy versions). Returns runID (attempt_id)
+// and turnID (caller_scope_id).
+func seedTurnAttempt(t *testing.T, env *testEnv) (runID, turnID string) {
+	t.Helper()
+	ctx := context.Background()
+	sid := shortID()
+	var identID string
+	require.NoError(t, env.pgpool.QueryRow(ctx,
+		`INSERT INTO identity.identities (key,kind,source,display_name) VALUES ($1,'workflow','local',$1) RETURNING id`,
+		"ident-"+sid).Scan(&identID))
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		INSERT INTO runtime.workflow_runs (kind, definition_key, scope_identity_id, session_id, session_dir, state, started_at)
+		VALUES ('chat', NULL, $1, $2, $3, 'running', now()) RETURNING id::text`,
+		identID, sid, "/sessions/"+sid).Scan(&runID))
+	require.NoError(t, env.store.UpsertRunPoolAssignment(ctx, runID, env.poolID))
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		INSERT INTO runtime.turns (run_id, session_id, state, started_at)
+		VALUES ($1::uuid, $2, 'running', now()) RETURNING id::text`,
+		runID, sid).Scan(&turnID))
+	require.NoError(t, env.store.SnapshotAttemptTools(ctx, runID, env.poolID, nil))
+	return runID, turnID
+}
+
+// seedWorkflowStepAttempt creates a workflow run (definition_key=wf-quote) + a
+// running run_step + run->pool assignment and snapshots the attempt's tools
+// restricted to the workflow-permitted set.
+func seedWorkflowStepAttempt(t *testing.T, env *testEnv, permitted []string) (runID, stepID string) {
+	t.Helper()
+	ctx := context.Background()
+	sid := shortID()
+	var identID string
+	require.NoError(t, env.pgpool.QueryRow(ctx,
+		`INSERT INTO identity.identities (key,kind,source,display_name) VALUES ($1,'workflow','local',$1) RETURNING id`,
+		"ident-"+sid).Scan(&identID))
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		INSERT INTO runtime.workflow_runs (kind, definition_key, scope_identity_id, session_id, session_dir, state, started_at)
+		VALUES ('workflow', $1, $2, $3, $4, 'running', now()) RETURNING id::text`,
+		wfKey, identID, sid, "/sessions/"+sid).Scan(&runID))
+	require.NoError(t, env.store.UpsertRunPoolAssignment(ctx, runID, env.poolID))
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		INSERT INTO runtime.run_steps (run_id, seq, kind, state, started_at)
+		VALUES ($1::uuid, 1, 'tool_call', 'running', now()) RETURNING id::text`,
+		runID).Scan(&stepID))
+	require.NoError(t, env.store.SnapshotAttemptTools(ctx, runID, env.poolID, permitted))
+	return runID, stepID
 }
 
 // refRunner is the Go reference runner: connects over mTLS, registers a tool,
@@ -174,7 +232,7 @@ func startRefRunner(t *testing.T, env *testEnv, desc *v1.ToolDescriptor,
 			}
 		}
 	}()
-	// Wait for welcome.
+	// Wait for welcome (registration complete -> tool available).
 	require.Eventually(t, func() bool { return rr.welcome != nil }, 2*time.Second, 10*time.Millisecond, "runner welcome not received")
 	return rr
 }
@@ -230,11 +288,12 @@ func TestGateway_RegistrationDiscoveryAndInvoke(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 
-	// Discovery: supervisor sees the registered echo tool.
+	// Discovery: supervisor sees the registered+pinned echo tool.
 	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
-		AttemptId: "att-1", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-1",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 	}))
 	require.NoError(t, err)
 	var names []string
@@ -245,7 +304,7 @@ func TestGateway_RegistrationDiscoveryAndInvoke(t *testing.T) {
 
 	// Invoke echo -> succeeded with the echoed args.
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: "att-1", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-1",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{"msg":"hi"}`), IdempotencyKey: "k1",
 	}))
@@ -262,9 +321,10 @@ func TestGateway_DuplicateInvocationReturnsCommittedResult(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	req := &v1.InvokeRequest{
-		AttemptId: "att-2", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-2",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "dup-key",
 	}
@@ -282,7 +342,8 @@ func TestGateway_DuplicateInvocationReturnsCommittedResult(t *testing.T) {
 
 func TestGateway_PermissionDenialFailsClosed(t *testing.T) {
 	env := newTestEnv(t, nil)
-	// Register a tool NOT granted to the pool.
+	// Register a tool NOT granted to the pool. It will not be pinned (snapshot
+	// intersects with grants), so invocation is rejected fail-closed.
 	rr := startRefRunner(t, env, &v1.ToolDescriptor{
 		Name: "danger", Version: "1.0.0", Digest: "sha256:danger-1",
 		EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE, InputSchema: []byte(`{}`),
@@ -293,10 +354,34 @@ func TestGateway_PermissionDenialFailsClosed(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	_, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "danger", ToolVersionDigest: "sha256:danger-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
+	}))
+	require.Error(t, err, "ungranted/unpinned tool must be rejected fail-closed")
+	assert.Contains(t, err.Error(), "not pinned")
+}
+
+func TestGateway_ActionDenialFailsClosed(t *testing.T) {
+	env := newTestEnv(t, nil)
+	// Grant echo with an action allow-list that excludes echo's action.
+	ctx := context.Background()
+	require.NoError(t, env.store.UpsertPoolGrant(ctx, env.poolID, "echo", gateway.EffectReadOnly, []byte(`["other_action"]`)))
+	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		t.Error("action-denied tool must not be dispatched")
+		return nil, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: "att-3", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-3",
-		ToolCallId: "call-1", ToolName: "danger", ToolVersionDigest: "sha256:danger-1",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
 	require.NoError(t, err)
@@ -312,15 +397,16 @@ func TestGateway_VersionPinningNoSubstitution(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
-	// Invoke with a digest that was never published.
+	// Invoke with a digest that differs from the pinned one.
 	_, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: "att-4", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-4",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:does-not-exist",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unavailable")
+	assert.Contains(t, err.Error(), "does not match the pinned digest")
 }
 
 func TestGateway_CredentialBindingResolution(t *testing.T) {
@@ -333,38 +419,60 @@ func TestGateway_CredentialBindingResolution(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: "att-5", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-5",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-1",
 	}))
 	require.NoError(t, err)
 	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
-	// The runner received the resolved bearer value (not the SecretRef); raw
-	// creds never enter Postgres/logs (ARCH-008).
 	require.NotNil(t, seenCred)
 	assert.Equal(t, "sekret-token-value", seenCred.Slots["graph_token"].BearerValue)
 }
 
+func TestGateway_CredentialSlotMismatchRejected(t *testing.T) {
+	env := newTestEnv(t, nil)
+	// Add an UNDECLARED binding for send_email (extra slot the descriptor did
+	// not declare) -> resolution must fail closed.
+	ctx := context.Background()
+	require.NoError(t, env.store.UpsertCredentialBinding(ctx, env.poolID, "send_email", "rogue_slot",
+		gateway.CredBearer, []byte(`{"value_ref":{"name":"graph","key":"token"}}`), nil))
+	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		t.Error("slot-mismatched tool must not be dispatched")
+		return nil, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
+		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-1",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_FAILED, iresp.Msg.State)
+	assert.Equal(t, "credential_resolution_failed", iresp.Msg.Error.Code)
+}
+
 func TestGateway_AmbiguousOutcomeNotRepeated(t *testing.T) {
 	env := newTestEnv(t, nil)
-	// The runner drops its stream on first invoke (no result) -> outcome_unknown
-	// for the non_idempotent write. A second invoke returns outcome_unknown.
 	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
 		return nil, true // drop stream
 	})
 	defer rr.close()
 	t.Cleanup(rr.close)
 
+	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	req := &v1.InvokeRequest{
-		AttemptId: "att-6", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "turn-6",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-once",
 	}
-	// Wait for the runner stream to drop after the (lost) dispatch is not needed;
-	// the dispatch + drop happen synchronously on invoke.
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(req))
 	require.NoError(t, err)
 	assert.Equal(t, v1.InvokeState_INVOKE_STATE_OUTCOME_UNKNOWN, iresp.Msg.State,
@@ -377,6 +485,258 @@ func TestGateway_AmbiguousOutcomeNotRepeated(t *testing.T) {
 	assert.Equal(t, iresp.Msg.InvocationId, second.Msg.InvocationId, "outcome_unknown invocation is not repeated")
 }
 
+func TestGateway_ReadOnlyRetryOnStreamLoss(t *testing.T) {
+	env := newTestEnv(t, nil)
+	var calls int32
+	desc := echoDescriptor()
+	desc.Timeout = durationPtr(150 * time.Millisecond) // short: a non-response times out -> streamLost -> retry
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 2 {
+			return nil, false // ignore first dispatch; let it time out (retryable for read_only)
+		}
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"ok":true}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State, "read_only retries after stream loss")
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2))
+}
+
+func TestGateway_ProvenIdempotentRetry(t *testing.T) {
+	env := newTestEnv(t, nil)
+	var calls int32
+	desc := upsertRowDescriptor(true)
+	desc.Timeout = durationPtr(150 * time.Millisecond)
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 2 {
+			return nil, false // ignore first dispatch; proven idempotent -> retryable
+		}
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"ok":true}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "up-1",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State, "proven idempotent_write retries after stream loss")
+}
+
+func TestGateway_IdempotentWriteWithoutProofRejected(t *testing.T) {
+	env := newTestEnv(t, nil)
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	stream := client.RegisterRunner(context.Background())
+	err := stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{
+		Descriptor_: upsertRowDescriptor(false), // no proof
+	}}})
+	require.NoError(t, err)
+	_, err = stream.Receive()
+	require.Error(t, err, "idempotent_write without proof must be rejected at registration")
+}
+
+func TestGateway_EmptyEffectClassRejected(t *testing.T) {
+	env := newTestEnv(t, nil)
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	stream := client.RegisterRunner(context.Background())
+	err := stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{
+		Descriptor_: &v1.ToolDescriptor{
+			Name: "bad", Version: "1.0.0", Digest: "sha256:bad-1",
+			EffectClass: v1.EffectClass_EFFECT_CLASS_UNSPECIFIED, InputSchema: []byte(`{}`),
+		},
+	}}})
+	require.NoError(t, err)
+	_, err = stream.Receive()
+	require.Error(t, err, "unspecified effect_class must be rejected at registration")
+}
+
+func TestGateway_SchemaValidation(t *testing.T) {
+	env := newTestEnv(t, nil)
+	desc := &v1.ToolDescriptor{
+		Name: "echo", Version: "1.0.0", Digest: "sha256:echo-1",
+		EffectClass: v1.EffectClass_EFFECT_CLASS_READ_ONLY,
+		InputSchema: []byte(`{"type":"object","required":["msg"],"properties":{"msg":{"type":"string"}},"additionalProperties":false}`),
+		Timeout:     durationPtr(5 * time.Second),
+	}
+	rr := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: inv.ArgumentsJson}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	// Missing required field -> invalid_arguments (pre-effect, not dispatched).
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
+		ArgumentsJson: []byte(`{"other":1}`), IdempotencyKey: "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_FAILED, iresp.Msg.State)
+	assert.Equal(t, "invalid_arguments", iresp.Msg.Error.Code)
+}
+
+func TestGateway_PostDispatchContextCancel(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		<-time.After(500 * time.Millisecond) // never responds promptly
+		return nil, true
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	// Caller cancels mid-dispatch (write): a possible effect -> outcome_unknown.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := gc.InvokeTool(ctx, connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
+		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "cancel-1",
+	}))
+	// The gateway classifies the post-send cancellation as outcome_unknown and
+	// returns a response; the connect client may surface a deadline error. The
+	// durable invariant is checked directly below.
+	_ = err
+	// Wait for the ledger to settle, then assert the row is outcome_unknown.
+	time.Sleep(800 * time.Millisecond)
+	inv, gerr := env.store.GetInvocationByKey(context.Background(), gateway.InvocationKey{
+		AttemptID: runID, CallerScope: gateway.CallerScopeTurn, CallerScopeID: turnID,
+		ToolCallID: "call-1", ToolVersionDigest: "sha256:send-1", IdempotencyKey: "cancel-1",
+	})
+	require.NoError(t, gerr)
+	assert.Equal(t, gateway.InvocationOutcomeUnknown, inv.State,
+		"post-send cancellation of a write must be outcome_unknown, not failed")
+}
+
+func TestGateway_RestartRecovery(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	// Seed an orphaned running write (lease expired) and an orphaned running
+	// read (lease expired), as if the process died mid-dispatch.
+	runID, _ := seedTurnAttempt(t, env) // pins echo+send_email for this attempt
+
+	now := time.Now()
+	writeInv := seedOrphanInvocation(t, env, runID, gateway.EffectNonIdempotentWrite, now.Add(-time.Hour))
+	readInv := seedOrphanInvocation(t, env, runID, gateway.EffectReadOnly, now.Add(-time.Hour))
+
+	recovered, err := env.store.RecoverOrphanedInvocations(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, recovered, 2)
+
+	wInv, err := env.store.GetInvocation(ctx, writeInv)
+	require.NoError(t, err)
+	assert.Equal(t, gateway.InvocationOutcomeUnknown, wInv.State, "orphaned write -> outcome_unknown")
+
+	rInv, err := env.store.GetInvocation(ctx, readInv)
+	require.NoError(t, err)
+	assert.Equal(t, gateway.InvocationFailed, rInv.State, "orphaned read_only -> failed")
+}
+
+// seedOrphanInvocation inserts a non-terminal invocation row with an expired
+// lease, simulating a crash mid-dispatch.
+func seedOrphanInvocation(t *testing.T, env *testEnv, attemptID string, ec gateway.EffectClass, expiresAt time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		INSERT INTO toolgateway.invocations
+			(attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
+			 tool_version_digest, idempotency_key, effect_class, pool_id, arguments_json,
+			 state, dispatch_lease_expires_at, gateway_instance_id)
+		VALUES ($1, 'turn', 'orphan-turn', $2, $3, $4, $5, $6, $7, '{}', 'running', $8, 'dead-gw')
+		RETURNING id::text`,
+		attemptID, "call-"+shortID(), "orphan_tool", "sha256:orphan", "k-"+shortID(), ec, env.poolID, expiresAt).Scan(&id))
+	return id
+}
+
+func TestGateway_CallerScopeValidation(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		t.Error("scope-invalid call must not be dispatched")
+		return nil, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, _ := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	// A turn id that does not exist -> scope denied (fail closed).
+	_, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: "00000000-0000-0000-0000-000000000000",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope not authorized")
+
+	// A run id that does not match the turn's run -> scope denied.
+	_, turnID := seedTurnAttempt(t, env)
+	_, err = gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: "00000000-0000-0000-0000-000000000000", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope not authorized")
+}
+
+func TestGateway_CancelOwnership(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		<-time.After(2 * time.Second) // hold in-flight
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env)
+	gc := gatewayClient(env, env.supervisor)
+	// Start an in-flight invocation owned by pool-1's supervisor.
+	go func() {
+		_, _ = gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+			AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+			ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
+			ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "cancel-own",
+		}))
+	}()
+
+	// Wait for the row to exist + be in-flight.
+	var inv gateway.Invocation
+	require.Eventually(t, func() bool {
+		inv, _ = env.store.GetInvocationByKey(context.Background(), gateway.InvocationKey{
+			AttemptID: runID, CallerScope: gateway.CallerScopeTurn, CallerScopeID: turnID,
+			ToolCallID: "call-1", ToolVersionDigest: "sha256:send-1", IdempotencyKey: "cancel-own",
+		})
+		return inv.ID != "" && (inv.State == gateway.InvocationDispatching || inv.State == gateway.InvocationRunning)
+	}, 2*time.Second, 20*time.Millisecond)
+
+	// A runner identity cannot cancel.
+	rc := gatewayv1connect.NewGatewayServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	_, err := rc.CancelInvocation(context.Background(), connect.NewRequest(&v1.CancelRequest{InvocationId: inv.ID, Reason: "r"}))
+	require.Error(t, err)
+
+	// The owning supervisor can cancel (returns running state).
+	cresp, err := gc.CancelInvocation(context.Background(), connect.NewRequest(&v1.CancelRequest{InvocationId: inv.ID, Reason: "r"}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_RUNNING, cresp.Msg.State)
+}
+
 func TestGateway_WorkflowStepCallerDiscovery(t *testing.T) {
 	env := newTestEnv(t, nil)
 	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
@@ -385,19 +745,19 @@ func TestGateway_WorkflowStepCallerDiscovery(t *testing.T) {
 	defer rr.close()
 	t.Cleanup(rr.close)
 
-	// The control-plane workflow-step caller discovers tools for workflow "wf-quote".
+	// The control-plane workflow-step caller discovers tools for workflow wf-quote.
+	runID, stepID := seedWorkflowStepAttempt(t, env, []string{"echo", "send_email"})
 	gc := gatewayClient(env, env.wfStep)
 	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
-		AttemptId: "att-7", CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: "wf-quote",
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: stepID,
 	}))
 	require.NoError(t, err)
 	var names []string
 	for _, d := range dresp.Msg.Descriptors {
 		names = append(names, d.Name)
 	}
-	// workflow_pool_binding permits echo + send_email; echo is registered+healthy.
 	assert.Contains(t, names, "echo")
-	assert.NotContains(t, names, "upsert_row", "workflow does not permit upsert_row")
+	assert.NotContains(t, names, "upsert_row", "workflow does not permit upsert_row -> not pinned")
 }
 
 func TestGateway_UnapprovedRunnerRejected(t *testing.T) {
@@ -411,12 +771,11 @@ func TestGateway_UnapprovedRunnerRejected(t *testing.T) {
 	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(rogue, env.caPool), env.srvURL, connect.WithGRPC())
 	stream := client.RegisterRunner(context.Background())
 	err = stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{Descriptor_: echoDescriptor()}}})
-	// Either Send fails or the next Receive returns the mTLS rejection.
 	if err == nil {
 		_, err = stream.Receive()
 	}
 	assert.Error(t, err, "unapproved/untrusted runner must be rejected")
 }
 
-// durationPtr wraps a duration for a proto descriptor timeout.
+// durationPtr wraps a duration for a proto descriptors timeout.
 func durationPtr(d time.Duration) *durationpb.Duration { return durationpb.New(d) }

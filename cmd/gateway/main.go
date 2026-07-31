@@ -105,6 +105,12 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		logger,
 	)
 
+	// Crash-recovery reconciliation (SCN-008/ARCH-014): classify orphaned
+	// in-flight invocations before accepting traffic, then on a ticker.
+	recCtx, cancelRec := context.WithCancel(ctx)
+	defer cancelRec()
+	svc.StartReconciler(recCtx)
+
 	mux := http.NewServeMux()
 	idmw := gateway.IdentityMiddleware(cfg.Gateway.TrustDomain)
 	runnerPath, runnerHandler := gatewayv1connect.NewRunnerServiceHandler(svc)

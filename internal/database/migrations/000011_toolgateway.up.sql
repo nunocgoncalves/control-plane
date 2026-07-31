@@ -40,6 +40,11 @@ CREATE SCHEMA IF NOT EXISTS toolgateway;
 -- sight of a (name, version, digest); re-registration of the same digest is
 -- idempotent.
 -- ---------------------------------------------------------------------------
+-- NOTE: tool_versions has NO updated_at column and NO set_updated_at trigger.
+-- Descriptors are immutable (ARCH-007): re-registration of the same (name,
+-- digest) is a validated no-op (the store uses INSERT ... ON CONFLICT DO
+-- NOTHING then SELECT); no descriptor field is ever mutated. A different digest
+-- for the same (name, version) is rejected by the store's immutability guard.
 CREATE TABLE toolgateway.tool_versions (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name                 text NOT NULL,
@@ -218,29 +223,34 @@ CREATE INDEX idx_approved_runners_active ON toolgateway.approved_runners (namesp
 -- runtime.workflow_runs.definition_key, which has no FK until HOR-252).
 -- ---------------------------------------------------------------------------
 CREATE TABLE toolgateway.invocations (
-    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    attempt_id           text NOT NULL,
-    caller_scope         text NOT NULL CHECK (caller_scope IN ('turn', 'workflow_step')),
-    caller_scope_id      text NOT NULL,             -- turn_id or run_step_id
-    tool_call_id         text NOT NULL,
-    tool_name            text NOT NULL,
-    tool_version_digest  text NOT NULL,             -- the pinned immutable version
-    idempotency_key      text NOT NULL DEFAULT '',  -- '' for read_only; required for non_idempotent_write
-    effect_class         text NOT NULL CHECK (effect_class IN
-                           ('read_only', 'idempotent_write', 'non_idempotent_write')),
-    pool_id              uuid REFERENCES toolgateway.pools(id) ON DELETE SET NULL,
-    runner_id            text,                      -- the runner that executed (audit)
-    arguments_json       jsonb NOT NULL DEFAULT '{}'::jsonb,
-    state                text NOT NULL DEFAULT 'dispatching' CHECK (state IN
-                           ('dispatching', 'running', 'succeeded', 'failed', 'outcome_unknown')),
-    result_json          jsonb,                     -- committed structured result (when succeeded)
-    artifact_output_refs jsonb NOT NULL DEFAULT '[]'::jsonb,  -- committed ArtifactRef list
-    error                jsonb,                     -- {code, message, retryability, details_json} when failed/outcome_unknown
-    dispatching_at       timestamptz NOT NULL DEFAULT now(),
-    running_at           timestamptz,
-    finished_at          timestamptz,
-    created_at           timestamptz NOT NULL DEFAULT now(),
-    updated_at           timestamptz NOT NULL DEFAULT now()
+    id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    attempt_id                text NOT NULL,
+    caller_scope              text NOT NULL CHECK (caller_scope IN ('turn', 'workflow_step')),
+    caller_scope_id           text NOT NULL,             -- turn_id or run_step_id
+    tool_call_id              text NOT NULL,
+    tool_name                 text NOT NULL,
+    tool_version_digest       text NOT NULL,             -- the pinned immutable version (resolved from attempt_tool_pins)
+    idempotency_key           text NOT NULL DEFAULT '',  -- '' for read_only; required for non_idempotent_write
+    effect_class              text NOT NULL CHECK (effect_class IN
+                                ('read_only', 'idempotent_write', 'non_idempotent_write')),
+    pool_id                   uuid REFERENCES toolgateway.pools(id) ON DELETE SET NULL,
+    runner_id                 text,                      -- the runner that executed (audit)
+    arguments_json            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    state                     text NOT NULL DEFAULT 'dispatching' CHECK (state IN
+                                ('dispatching', 'running', 'succeeded', 'failed', 'outcome_unknown')),
+    result_json               jsonb,                     -- committed structured result (when succeeded)
+    artifact_output_refs      jsonb NOT NULL DEFAULT '[]'::jsonb,  -- committed ArtifactRef list
+    error                     jsonb,                     -- {code, message, retryability, details_json} when failed/outcome_unknown
+    -- Crash-recovery lease (ARCH-014, SCN-008). Set at dispatch; a row whose
+    -- lease has expired while still non-terminal is swept at gateway start (and
+    -- by a background ticker): read_only -> failed, writes -> outcome_unknown.
+    dispatch_lease_expires_at timestamptz,
+    gateway_instance_id       text,                      -- the process that owns the in-flight dispatch
+    dispatching_at            timestamptz NOT NULL DEFAULT now(),
+    running_at                timestamptz,
+    finished_at               timestamptz,
+    created_at                timestamptz NOT NULL DEFAULT now(),
+    updated_at                timestamptz NOT NULL DEFAULT now()
 );
 
 -- The at-most-once uniqueness backstop (ARCH-014). A second InvokeTool with the
@@ -250,6 +260,49 @@ CREATE UNIQUE INDEX idx_invocations_uniq
 
 CREATE INDEX idx_invocations_attempt ON toolgateway.invocations (attempt_id);
 CREATE INDEX idx_invocations_state ON toolgateway.invocations (state) WHERE finished_at IS NULL;
+-- Crash-recovery sweep index: non-terminal rows with an expired lease.
+CREATE INDEX idx_invocations_recoverable
+    ON toolgateway.invocations (dispatch_lease_expires_at)
+    WHERE state IN ('dispatching', 'running') AND finished_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- attempt_tool_pins: the attempt's immutable tool-version snapshot (ARCH-007).
+-- At attempt creation, each permitted logical gateway tool resolves to one
+-- exact immutable (name, digest); every turn/invocation in that attempt uses
+-- that snapshot. The gateway resolves the digest from here and IGNORES any
+-- caller-supplied digest. Absence of a pin for (attempt, tool) => fail closed.
+--
+-- `attempt_id` is the runtime run id (text; v1 treats a run as its attempt
+-- until HOR-252 introduces a first-class attempts table). Populated by
+-- SnapshotAttemptTools at attempt creation (HOR-254 / workflow runtime are the
+-- production callers; tests call it directly).
+-- ---------------------------------------------------------------------------
+CREATE TABLE toolgateway.attempt_tool_pins (
+    attempt_id          text NOT NULL,
+    tool_name           text NOT NULL,
+    tool_version_digest text NOT NULL,            -- the pinned immutable digest
+    pinned_at           timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (attempt_id, tool_name)
+);
+
+CREATE INDEX idx_attempt_tool_pins_digest ON toolgateway.attempt_tool_pins (tool_version_digest);
+
+-- ---------------------------------------------------------------------------
+-- run_pool_assignments: durable run -> pool binding (ARCH-004).
+--
+-- The gateway resolves the caller's pool from durable state, not from
+-- agent-supplied scope. A supervisor's SPIFFE id encodes the pool, but the
+-- gateway must ALSO prove the turn's run is actually assigned to that pool
+-- before trusting the turn context. HOR-249 (dispatch) writes this row when a
+-- turn is assigned to a pool/worker; the gateway reads it fail-closed. Cross-
+-- schema (runtime); pool_id is validated in Go (no cross-schema FK, mirroring
+-- the existing definition_key/attempt_id no-FK-until-later pattern).
+-- ---------------------------------------------------------------------------
+CREATE TABLE runtime.run_pool_assignments (
+    run_id      uuid PRIMARY KEY REFERENCES runtime.workflow_runs(id) ON DELETE CASCADE,
+    pool_id     uuid NOT NULL,                 -- toolgateway.pools.id (validated in Go)
+    assigned_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- ---------------------------------------------------------------------------
 -- available_tool_versions: a version is discoverable for NEW attempts when at
@@ -282,8 +335,6 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER tool_versions_updated BEFORE UPDATE ON toolgateway.tool_versions
-    FOR EACH ROW EXECUTE FUNCTION toolgateway.set_updated_at();
 CREATE TRIGGER runner_registrations_updated BEFORE UPDATE ON toolgateway.runner_registrations
     FOR EACH ROW EXECUTE FUNCTION toolgateway.set_updated_at();
 CREATE TRIGGER pools_updated BEFORE UPDATE ON toolgateway.pools

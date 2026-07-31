@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	v1 "github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1"
@@ -22,16 +23,16 @@ func effectClassToProto(c EffectClass) v1.EffectClass {
 	return v1.EffectClass_EFFECT_CLASS_UNSPECIFIED
 }
 
-func effectClassFromProto(c v1.EffectClass) EffectClass {
+func effectClassFromProto(c v1.EffectClass) (EffectClass, error) {
 	switch c {
 	case v1.EffectClass_EFFECT_CLASS_READ_ONLY:
-		return EffectReadOnly
+		return EffectReadOnly, nil
 	case v1.EffectClass_EFFECT_CLASS_IDEMPOTENT_WRITE:
-		return EffectIdempotentWrite
+		return EffectIdempotentWrite, nil
 	case v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE:
-		return EffectNonIdempotentWrite
+		return EffectNonIdempotentWrite, nil
 	}
-	return EffectReadOnly // default; registration should set explicitly
+	return "", fmt.Errorf("effect_class must be a concrete class (read_only|idempotent_write|non_idempotent_write); unspecified is rejected (ARCH-014)")
 }
 
 // --- caller scope ---
@@ -84,15 +85,21 @@ func toolVersionToDescriptor(tv ToolVersion) *v1.ToolDescriptor {
 }
 
 // descriptorToToolVersion maps a runner-supplied descriptor to a stored
-// ToolVersion, marshalling structured fields to JSONB for storage.
-func descriptorToToolVersion(d *v1.ToolDescriptor) ToolVersion {
+// ToolVersion, marshalling structured fields to JSONB for storage. It rejects
+// an unspecified effect class (fail-closed, ARCH-014); idempotent_write proof
+// is validated by the store on insert.
+func descriptorToToolVersion(d *v1.ToolDescriptor) (ToolVersion, error) {
+	ec, err := effectClassFromProto(d.EffectClass)
+	if err != nil {
+		return ToolVersion{}, err
+	}
 	tv := ToolVersion{
 		Name:        d.Name,
 		Version:     d.Version,
 		Digest:      d.Digest,
 		Description: d.Description,
 		InputSchema: d.InputSchema,
-		EffectClass: effectClassFromProto(d.EffectClass),
+		EffectClass: ec,
 	}
 	if d.Timeout != nil {
 		tv.TimeoutMS = d.Timeout.AsDuration().Milliseconds()
@@ -124,13 +131,18 @@ func descriptorToToolVersion(d *v1.ToolDescriptor) ToolVersion {
 		tv.ArtifactCapabs = []byte("{}")
 	}
 	if d.IdempotencyProof != nil {
+		// Reject a non-nil but empty proof: a serialized object with no strategy
+		// must not pass the `len > 0` retry gate (ARCH-014 fail-closed).
+		if d.IdempotencyProof.Strategy == "" {
+			return ToolVersion{}, fmt.Errorf("idempotency_proof present but strategy is empty; idempotent_write requires a concrete strategy")
+		}
 		tv.IdempotencyProof, _ = marshalJSON(map[string]any{
 			"strategy":            d.IdempotencyProof.Strategy,
 			"description":         d.IdempotencyProof.Description,
 			"upstream_key_header": d.IdempotencyProof.UpstreamKeyHeader,
 		})
 	}
-	return tv
+	return tv, nil
 }
 
 func schemeToStorage(s v1.CredentialScheme) CredentialScheme {
