@@ -43,7 +43,7 @@ bidi method: `rpc Work(stream WorkerMessage) returns (stream ControlMessage)`.
   `Heartbeat`, `TurnEvent` (durable, sequenced, cumulatively ACKed),
   `TokenDelta` (ephemeral, non-sequenced — live token streaming).
 - **CP→worker:** `Welcome` (fencing generation + lease intervals),
-  `AssignTurn` (per-turn session/persona/model/tool-allowlist/sandbox/message),
+  `AssignTurn` (per-turn session/persona/model/workspace-tools/run-id/sandbox/message),
   `AbortTurn` (idempotent), `EventAck` (cumulative, post-Postgres-commit).
 
 12 durable `TurnEvent` payloads (`ExecutionStarted`, `ModelCallStarted`,
@@ -61,18 +61,23 @@ checkouts for agentic coding); the **supervisor validates-only** (never chowns,
 no v1 auto-create — missing/mismatched → typed `FAILED`). The child runs under
 the session UID with `no_new_privs` + all caps dropped (kernel `EACCES` for
 sibling session roots). Extension code is pool-bound read-only; the per-turn
-`toolAllowList` picks exposed tools.
+`workspaceTools` switch (ARCH-016) exposes exactly pi's built-in
+`read`/`write`/`edit`/`bash` when enabled — no arbitrary local-tool catalogue.
 
 ## Config (`/etc/harness/config.yaml`, ConfigMap-mounted by HOR-245)
 
 **Infra-only at boot** — no persona/model/session/tools (those are per-turn via
 `AssignTurn`): control-plane gRPC URL + expected server name, worker Pod UID +
 pool UID, optional pool scope identity, mTLS cert/key/CA paths, sandbox mount
-root, read-only `piDirs`, egress-proxy URL, WAL spool dir (emptyDir), probe
-port, + HTTP/2 ping / reconnect / child-liveness / abort-grace / outbox-bound /
-model-retry / token-delta-buffer tunables. Certs are re-read each reconnect
-(rotation). The harness holds zero real credentials — the per-sandbox egress
-proxy (HOR-244) injects them.
+root, read-only `piDirs`, the **tool-gateway** + **inference-gateway** mTLS
+endpoints (ARCH-010 — separate domain gateways, one worker SPIFFE cert), WAL
+spool dir (emptyDir), probe port, + HTTP/2 ping / reconnect / child-liveness /
+abort-grace / outbox-bound / model-retry / token-delta-buffer tunables. Certs
+are re-read each reconnect (rotation). The supervisor holds the only mTLS
+credential; the disposable child receives no endpoint or credential and has no
+direct network route (ARCH-003) — model/tool traffic crosses dedicated IPC
+channels (fd 4/fd 5) to the supervisor, which opens the authenticated upstream
+streams (ARCH-011).
 
 ## Failure semantics
 
@@ -94,10 +99,17 @@ proxy (HOR-244) injects them.
 - `main.ts` — entry point: boot config + probes + supervisor + SIGTERM/SIGINT drain.
 - `work-client.ts` — mTLS gRPC HTTP/2 transport + bidi `Work` stream + `Hello`/`Welcome`.
 - `worker-state.ts` — protocol state machine + single-credit invariant.
-- `supervisor.ts` — connect/turn loop, reconnect+backoff, heartbeat, outbox/replay.
+- `supervisor.ts` — connect/turn loop, reconnect+backoff, heartbeat, outbox/replay,
+  + gateway/model RPC dispatch (fd 4/fd 5 → tool/inference gateways).
 - `event-outbox.ts` — per-turn outbox + WAL (fsync per event/ack; crash recovery).
-- `child-process.ts` — spawn the child via the launcher + IPC + exit classification.
-- `child.ts` — the pi child: `AgentSession` + pi-event → `TurnEvent` mapping.
+- `child-process.ts` — spawn the child via the launcher + IPC (fd 0/3/4/5) + exit classification.
+- `child.ts` — the pi child: `AgentSession` + custom `streamSimple` provider +
+  gateway tool stubs + pi-event → `TurnEvent` mapping.
+- `child-rpc.ts` — child→supervisor RPC demux (model/tool requests over fd 4/fd 5).
+- `gateway-client.ts` — supervisor→tool-gateway Connect client (discover/invoke/cancel).
+- `model-bridge.ts` — supervisor→inference-gateway HTTP/2 mTLS SSE bridge.
+- `openai-stream.ts` — OpenAI SSE → pi `AssistantMessageEvent` (child-owned model semantics).
+- `ipc.ts` — framed discriminated-union IPC for fd 0/3/4/5 + runtime validation.
 - `launcher.ts` — the `setpriv` privilege-dropping launcher (full cap-drop + `no_new_privs`).
 - `sandbox.ts` — canonical paths + ownership/mode/cwd validation.
 - `config.ts` — infra-only boot config loader/validator.

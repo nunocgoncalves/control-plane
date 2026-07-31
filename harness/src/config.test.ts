@@ -23,7 +23,12 @@ tls:
   key: /etc/harness/tls/tls.key
   ca: /etc/harness/tls/ca.crt
 sandboxRoot: /data/sandboxes
-egressProxyUrl: https://localhost:8444
+toolGateway:
+  url: https://control-plane:8442
+  serverName: tool-gateway
+inferenceGateway:
+  url: https://inference-gateway:8443
+  serverName: inference-gateway
 walDir: /var/harness/wal
 `;
 
@@ -36,7 +41,8 @@ describe("loadConfig (infra-only boot config)", () => {
     expect(cfg.worker.poolId).toBe("pool-xyz");
     expect(cfg.tls).toEqual({ cert: "/etc/harness/tls/tls.crt", key: "/etc/harness/tls/tls.key", ca: "/etc/harness/tls/ca.crt" });
     expect(cfg.sandboxRoot).toBe("/data/sandboxes");
-    expect(cfg.egressProxyUrl).toBe("https://localhost:8444");
+    expect(cfg.toolGateway).toEqual({ url: "https://control-plane:8442", serverName: "tool-gateway" });
+    expect(cfg.inferenceGateway).toEqual({ url: "https://inference-gateway:8443", serverName: "inference-gateway" });
     expect(cfg.walDir).toBe("/var/harness/wal");
     // defaults
     expect(cfg.piDirs).toEqual(["/pi/product", "/pi/client"]);
@@ -54,7 +60,7 @@ describe("loadConfig (infra-only boot config)", () => {
     expect(cfg.poolScopeIdentityId).toBe("scope-wf-123");
   });
 
-  it("does NOT depend on persona/model/session/toolAllowList (they are per-turn, via AssignTurn)", () => {
+  it("does NOT depend on persona/model/session/workspaceTools (they are per-turn, via AssignTurn)", () => {
     // A config with only infra (no persona/model/session) loads fine — those
     // are no longer boot dependencies.
     const cfg = loadConfig(writeCfg(VALID));
@@ -77,7 +83,8 @@ describe("loadConfig (infra-only boot config)", () => {
 
   it("rejects a missing sandbox root / egress / wal dir", () => {
     expect(() => loadConfig(writeCfg(VALID.replace("sandboxRoot: /data/sandboxes", "")))).toThrow(ConfigError);
-    expect(() => loadConfig(writeCfg(VALID.replace("egressProxyUrl: https://localhost:8444", "")))).toThrow(ConfigError);
+    expect(() => loadConfig(writeCfg(VALID.replace("  url: https://control-plane:8442", "")))).toThrow(ConfigError);
+    expect(() => loadConfig(writeCfg(VALID.replace("  url: https://inference-gateway:8443", "")))).toThrow(ConfigError);
     expect(() => loadConfig(writeCfg(VALID.replace("walDir: /var/harness/wal", "")))).toThrow(ConfigError);
   });
 

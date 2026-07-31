@@ -12,6 +12,7 @@ import {
   WelcomeSchema,
   AssignTurnSchema,
   SandboxRefSchema,
+  ModelConfigSchema,
   EventAckSchema,
   AssistantMessageSchema,
   Outcome,
@@ -55,8 +56,10 @@ function fakeChild(events: ChildEvent[], outcome: Outcome, message?: string): Ch
   const q = new Q<ChildEvent>();
   for (const e of events) q.push(e);
   q.close();
+  const rpcQ = new Q<import("./supervisor.js").ChildRpcRequest>();
+  rpcQ.close(); // no RPC requests in these tests
   const result = Promise.resolve<ChildResult>({ outcome, message });
-  return { abort: () => {}, events: q, result };
+  return { abort: () => {}, events: q, rpcRequests: rpcQ, rpcSend: () => {}, result };
 }
 
 const UID = process.getuid();
@@ -69,7 +72,8 @@ function makeCfg(sandboxRoot: string, walDir: string): HarnessConfig {
     tls: { cert: "", key: "", ca: "" },
     sandboxRoot,
     piDirs: [],
-    egressProxyUrl: "",
+    toolGateway: { url: "https://localhost:8442", serverName: "tool-gateway" },
+    inferenceGateway: { url: "https://localhost:8443", serverName: "inference-gateway" },
     walDir,
     probe: { port: 0 },
     transport: { http2PingIntervalMs: 30000, http2PingTimeoutMs: 10000 },
@@ -171,6 +175,8 @@ describe("Supervisor turn loop", () => {
         ),
       probes,
       transport: () => transport,
+      gatewayClient: fakeGatewayClient(),
+      modelStream: fakeModelStream(),
       onCreditAdvertised,
     });
 
@@ -234,6 +240,8 @@ describe("Supervisor turn loop", () => {
       childFactory: () => fakeChild([], Outcome.COMPLETED), // never reached (sandbox invalid)
       probes,
       transport: () => transport,
+      gatewayClient: fakeGatewayClient(),
+      modelStream: fakeModelStream(),
       onCreditAdvertised: () => (globalThis as { __creditCb?: () => void }).__creditCb?.(),
     });
 
@@ -318,6 +326,8 @@ describe("Supervisor crash recovery", () => {
       childFactory: () => fakeChild([], Outcome.COMPLETED), // not used (no AssignTurn)
       probes,
       transport: () => transport,
+      gatewayClient: fakeGatewayClient(),
+      modelStream: fakeModelStream(),
     });
 
     const runP = sup.run();
@@ -345,6 +355,9 @@ function assignTurn(sandboxId: string): ControlMessageLike {
         sessionId: "sess-1",
         sandbox: create(SandboxRefSchema, { sandboxId, uid: UID, gid: GID, workingDir: "home" }),
         persona: "you are an agent",
+        model: create(ModelConfigSchema, { id: "m", api: "openai-completions", contextWindow: 131072 }),
+        workspaceTools: true,
+        runId: "run-1",
         message: "classify this email",
       }) as AssignTurn,
     },
@@ -352,3 +365,16 @@ function assignTurn(sandboxId: string): ControlMessageLike {
 }
 
 type ControlMessageLike = ReturnType<typeof create<never>> extends never ? never : import("./gen/iterabase/harness/v1/harness_pb.js").ControlMessage;
+
+/** A no-op gateway client (tests that don't exercise tool calls). */
+function fakeGatewayClient(): import("./gateway-client.js").GatewayClient {
+  return {
+    discover: async () => [],
+    invokeTool: async () => ({ invocationId: "", state: 0, resultJson: new Uint8Array(), artifactOutputRefs: [], error: { code: "", message: "", retryability: 0, detailsJson: new Uint8Array() }, existingInvocationId: "" }),
+    cancelInvocation: async () => ({ state: 0 }),
+  };
+}
+/** A no-op model stream (tests that don't exercise model calls). */
+function fakeModelStream(): typeof import("./model-bridge.js").streamModel {
+  return async () => {};
+}

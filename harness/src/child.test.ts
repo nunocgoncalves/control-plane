@@ -32,8 +32,9 @@ function assignmentJson(overrides: Record<string, unknown> = {}): unknown {
     sandbox: { sandboxId: "s", uid: 1000, gid: 1000, workingDir: "home" },
     persona: "you are an agent",
     model: { id: "m", api: "openai-completions", contextWindow: 131072, maxOutputTokens: 4096, thinkingLevel: "none" },
-    toolAllowList: { all: true, tools: [] },
+    workspaceTools: false,
     scopeIdentityId: "scope-1",
+    runId: "run-1",
     message: "hi",
     images: [],
     ...overrides,
@@ -104,12 +105,11 @@ describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () 
   it("parses a framed assignment and emits a heartbeat (not a 'no assignment' failure)", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "harness-child-"));
     const proc = spawn(process.execPath, [CHILD_BIN], {
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         HARNESS_SESSION_DIR: join(tmp, "session"),
         HARNESS_WORKING_DIR: tmp,
-        HARNESS_EGRESS_PROXY_URL: "http://127.0.0.1:1", // unreachable — irrelevant; we stop at the heartbeat
         HARNESS_PI_DIRS: "",
         HARNESS_MODEL_MAX_ATTEMPTS: "0",
         HARNESS_LIVENESS_INTERVAL_MS: "60000",
@@ -140,12 +140,11 @@ describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () 
   it("emits FAILED 'no valid assignment' when stdin closes with no frame", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "harness-child-"));
     const proc = spawn(process.execPath, [CHILD_BIN], {
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         HARNESS_SESSION_DIR: join(tmp, "session"),
         HARNESS_WORKING_DIR: tmp,
-        HARNESS_EGRESS_PROXY_URL: "http://127.0.0.1:1",
         HARNESS_PI_DIRS: "",
         HARNESS_MODEL_MAX_ATTEMPTS: "0",
         HARNESS_LIVENESS_INTERVAL_MS: "60000",
@@ -234,7 +233,8 @@ describe("parseAssignment", () => {
     expect(a!.model.id).toBe("m");
     expect(a!.model.contextWindow).toBe(131072);
     expect(a!.model.maxOutputTokens).toBe(4096);
-    expect(a!.toolAllowList.all).toBe(true);
+    expect(a!.workspaceTools).toBe(false);
+    expect(a!.runId).toBe("run-1");
     expect(a!.message).toBe("hi");
   });
 
@@ -247,6 +247,6 @@ describe("parseAssignment", () => {
   it("rejects missing/invalid fields", () => {
     expect(parseAssignment({ turnId: "t" })).toBeUndefined();
     expect(parseAssignment({ ...assignmentJson(), model: { id: "m" } })).toBeUndefined();
-    expect(parseAssignment({ ...assignmentJson(), toolAllowList: { all: "yes", tools: [] } })).toBeUndefined();
+    expect(parseAssignment({ ...assignmentJson(), workspaceTools: "yes" })).toBeUndefined();
   });
 });

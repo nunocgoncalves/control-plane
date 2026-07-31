@@ -10,7 +10,6 @@ import {
   ModelConfigSchema,
   Outcome,
   SandboxRefSchema,
-  ToolAllowListSchema,
   TurnEventSchema,
   type AssignTurn,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
@@ -51,7 +50,8 @@ function cfg(): HarnessConfig {
     tls: { cert: "", key: "", ca: "" },
     sandboxRoot: dir,
     piDirs: [],
-    egressProxyUrl: "https://localhost:8444",
+    toolGateway: { url: "https://localhost:8442", serverName: "tool-gateway" },
+    inferenceGateway: { url: "https://localhost:8443", serverName: "inference-gateway" },
     walDir: dir,
     probe: { port: 0 },
     transport: { http2PingIntervalMs: 30000, http2PingTimeoutMs: 10000 },
@@ -70,7 +70,8 @@ function assignment(): AssignTurn {
     sandbox: create(SandboxRefSchema, { sandboxId: "sess-a", uid: UID, gid: GID, workingDir: "home" }),
     persona: "you are an agent",
     model: create(ModelConfigSchema, { id: "m", api: "openai-completions", contextWindow: 131072 }),
-    toolAllowList: create(ToolAllowListSchema, { all: true }),
+    workspaceTools: true,
+    runId: "run-1",
     message: "hi",
   });
 }

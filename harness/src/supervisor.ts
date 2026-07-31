@@ -44,6 +44,9 @@ import { WorkerState as WorkerStateMachine, ProtocolError } from "./worker-state
 import { resolveSandboxRoot, validateSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
 import type { Probes } from "./probes.js";
 import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
+import { createGatewayClient, type GatewayClient } from "./gateway-client.js";
+import { streamModel } from "./model-bridge.js";
+import { InvokeState } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 
 /** A durable TurnEvent payload (the oneof) the supervisor sequences + sends. */
 export type TurnEventPayload = TurnEvent["kind"];
@@ -56,9 +59,18 @@ export interface ChildResult {
   outcome: Outcome;
   message?: string;
 }
+/** A child→supervisor RPC request (fd 4) — model/tool/cancel (HOR-395). */
+export type ChildRpcRequest =
+  | { type: "modelRequest"; requestId: string; body: unknown }
+  | { type: "toolCall"; requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string }
+  | { type: "cancel"; requestId: string };
 export interface Child {
   abort(): void;
   events: AsyncIterable<ChildEvent>;
+  /** child→supervisor RPC requests (fd 4) — model/tool calls (HOR-395). */
+  rpcRequests: AsyncIterable<ChildRpcRequest>;
+  /** Write a supervisor→child RPC frame (fd 5): modelChunk/modelEnd/toolResult/gatewayTools/cancel. */
+  rpcSend: (frame: unknown) => void;
   result: Promise<ChildResult>;
 }
 export type ChildFactory = (assignment: AssignTurn, sandbox: SandboxPaths, cwd: string) => Child;
@@ -86,6 +98,10 @@ export interface SupervisorDeps {
   probes: Probes;
   /** Transport factory for (re)connect. Defaults to createWorkTransport (mTLS). */
   transport?: () => Transport;
+  /** Tool-gateway client (ARCH-004). Defaults to createGatewayClient(cfg). */
+  gatewayClient?: GatewayClient;
+  /** Inference-gateway model stream (ARCH-010/011). Defaults to streamModel. */
+  modelStream?: typeof streamModel;
   /** Test hook: invoked each time the supervisor advertises a Ready credit. */
   onCreditAdvertised?: () => void;
 }
@@ -102,9 +118,13 @@ export class Supervisor {
   /** Unacked audit tail from a prior crash (WAL recover) or stream-loss, replayed + ACK-gated after Welcome. */
   private pendingReplay: PendingReplay[] = [];
   private readonly tokens: TokenDeltaForwarder;
+  private readonly gatewayClient: GatewayClient;
+  private readonly modelStream: typeof streamModel;
 
   constructor(private readonly d: SupervisorDeps) {
     this.tokens = new TokenDeltaForwarder(() => this.stream, d.cfg.tokenDelta.sendBufferBytes);
+    this.gatewayClient = d.gatewayClient ?? createGatewayClient(d.cfg);
+    this.modelStream = d.modelStream ?? streamModel;
     // Crash recovery: load unfinished turn WALs at startup (replayed as
     // after_terminal after the first Welcome — the CP already terminalized them
     // as worker-loss). The WAL is retained until the cumulative ACK.
@@ -263,12 +283,29 @@ export class Supervisor {
       const cwd = resolveWorkingDir(sandbox.root, at.sandbox?.workingDir || "home");
       const child = this.d.childFactory(at, sandbox, cwd);
       this.currentChild = child;
+      // Discover the effective gateway tools for this turn and pass the
+      // non-secret descriptors to the child (ARCH-006). Discovery failure fails
+      // the turn fail-closed — the child must not run with a stale/empty set.
+      const scope = { turnId: at.turnId, runId: at.runId };
+      let descriptors;
+      try {
+        descriptors = await this.gatewayClient.discover(scope);
+      } catch (err) {
+        throw new SandboxError(`gateway discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      child.rpcSend({ type: "gatewayTools", descriptors });
+      // Drain the child's model/tool RPC requests (fd 4) concurrently with the
+      // audit event stream (fd 3). Both close when the child exits.
+      const rpcDone = this.dispatchChildRpc(child, at).catch(() => {
+        /* errors surface as tool/model error frames; logged only as outcome */
+      });
       for await (const ev of child.events) {
         if (this.turn?.aborted) break;
         if (ev.kind === "event") this.sendChildEvent(ev.payload);
         else this.tokens.push(at.turnId, ev.contentIndex, ev.deltaType, ev.delta);
       }
       const result = await child.result;
+      await rpcDone;
       this.emitOutcome(result.outcome, result.message);
     } catch (err) {
       this.failTurn(err);
@@ -284,6 +321,109 @@ export class Supervisor {
       this.maybeAdvertiseCredit();
     } else {
       this.turn = null; // disrupted (stream loss / drain) — run() handles reconnect/exit
+    }
+  }
+
+  /**
+   * Dispatch the child's model/tool RPC requests (fd 4) to the authenticated
+   * gateway bridges (ARCH-004/010/011). Each request is validated against the
+   * active assignment: the model must equal the assigned model; the tool must
+   * be in the discovered effective set. The supervisor stamps durable caller
+   * context (run/turn); the child supplies only business arguments. Bodies are
+   * never logged or WAL'd. Cancellation propagates: a child `cancel` aborts
+   * the in-flight upstream call (ARCH-014 — cannot undo an effect already
+   * started; the gateway classifies per effect class on caller disconnect).
+   */
+  private async dispatchChildRpc(child: Child, at: AssignTurn): Promise<void> {
+    const scope = { turnId: at.turnId, runId: at.runId };
+    const controllers = new Map<string, AbortController>();
+    const assignedModel = at.model?.id ?? "";
+
+    for await (const req of child.rpcRequests) {
+      if (this.turn?.aborted) break;
+      if (req.type === "cancel") {
+        const ac = controllers.get(req.requestId);
+        if (ac) ac.abort();
+        continue;
+      }
+      if (req.type === "modelRequest") {
+        void this.handleModelRequest(child, req, assignedModel, at, controllers);
+        continue;
+      }
+      if (req.type === "toolCall") {
+        void this.handleToolCall(child, req, scope, controllers);
+        continue;
+      }
+    }
+    // Abort any still-in-flight upstream calls when the child exits/aborts.
+    for (const ac of controllers.values()) ac.abort();
+  }
+
+  /** Forward one model request to the inference gateway (ARCH-010/011). */
+  private async handleModelRequest(
+    child: Child,
+    req: { requestId: string; body: unknown },
+    assignedModel: string,
+    at: AssignTurn,
+    controllers: Map<string, AbortController>,
+  ): Promise<void> {
+    const ac = new AbortController();
+    controllers.set(req.requestId, ac);
+    try {
+      await this.modelStream(
+        { cfg: this.d.cfg },
+        { body: req.body },
+        assignedModel,
+        { runId: at.runId, turnId: at.turnId },
+        ac.signal,
+        {
+          onChunk: (data) => child.rpcSend({ type: "modelChunk", requestId: req.requestId, data }),
+          onEnd: (status, httpStatus, errorMessage) =>
+            child.rpcSend({ type: "modelEnd", requestId: req.requestId, status, ...(httpStatus !== undefined ? { httpStatus } : {}), ...(errorMessage !== undefined ? { errorMessage } : {}) }),
+        },
+      );
+    } catch (err) {
+      child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: err instanceof Error ? err.message : String(err) });
+    } finally {
+      controllers.delete(req.requestId);
+    }
+  }
+
+  /** Forward one gateway tool call (ARCH-004/014). */
+  private async handleToolCall(
+    child: Child,
+    req: { requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
+    scope: { turnId: string; runId: string },
+    controllers: Map<string, AbortController>,
+  ): Promise<void> {
+    const ac = new AbortController();
+    controllers.set(req.requestId, ac);
+    try {
+      const resp = await this.gatewayClient.invokeTool(
+        scope,
+        {
+          toolCallId: req.toolCallId,
+          toolName: req.toolName,
+          toolVersionDigest: req.toolVersionDigest,
+          argumentsJson: req.argumentsJson,
+          ...(req.idempotencyKey !== undefined ? { idempotencyKey: req.idempotencyKey } : {}),
+        },
+        ac.signal,
+      );
+      const resultJson = resp.resultJson.length ? new TextDecoder().decode(resp.resultJson) : undefined;
+      const isError = resp.state !== InvokeState.SUCCEEDED;
+      const errorMessage = resp.error ? resp.error.message : undefined;
+      child.rpcSend({
+        type: "toolResult",
+        requestId: req.requestId,
+        isError,
+        ...(resultJson !== undefined ? { resultJson } : {}),
+        ...(errorMessage !== undefined ? { errorMessage } : {}),
+      });
+    } catch (err) {
+      child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: err instanceof Error ? err.message : String(err) });
+    } finally {
+      controllers.delete(req.requestId);
     }
   }
 

@@ -1,8 +1,10 @@
-// Harness boot config (HOR-381). Infra-only — NO session/persona/model/tools at
-// boot (those are per-turn, delivered via the Work AssignTurn RPC). Loaded from
-// /etc/harness/config.yaml (ConfigMap-mounted by the AgentSandbox operator,
-// HOR-245). The harness holds NO real credentials; caller identity + real
-// gateway/tool credentials live in the per-sandbox egress proxy (HOR-244).
+// Harness boot config (HOR-381; HOR-395 gateway bridges). Infra-only — NO
+// session/persona/model/tools at boot (those are per-turn, delivered via the
+// Work AssignTurn RPC). Loaded from /etc/harness/config.yaml (ConfigMap-mounted
+// by the AgentSandbox operator, HOR-245). The harness holds NO customer
+// credentials; the supervisor authenticates to the tool + inference gateways
+// with its SPIFFE-bound worker mTLS cert (ARCH-010). The disposable child
+// receives neither endpoint nor credential — it only talks fd 4/fd 5.
 //
 // Cert material is re-read on each connection attempt so an idle reconnect can
 // consume rotated files. Startup fails on missing identity/TLS/endpoint/sandbox
@@ -30,8 +32,10 @@ export interface HarnessConfig {
   sandboxRoot: string; // e.g. /data/sandboxes
   /** Read-only extension/package paths (pool-bound; the overlay pi/ tree). */
   piDirs: string[]; // [/pi/product, /pi/client]
-  /** Local egress-proxy URL (model + tool traffic; the harness holds no creds). */
-  egressProxyUrl: string;
+  /** Tool gateway gRPC endpoint (GatewayService: discover/invoke/cancel). ARCH-010. */
+  toolGateway: { url: string; serverName: string };
+  /** Inference gateway HTTP/2 mTLS endpoint (/v1/chat/completions workload listener, HOR-398). ARCH-010. */
+  inferenceGateway: { url: string; serverName: string };
   /** WAL spool dir (emptyDir; durable audit events; supervisor-UID-owned, child-inaccessible). */
   walDir: string; // e.g. /var/harness/wal
   /** Plain-HTTP kubelet probes (/healthz + /readyz). */
@@ -67,7 +71,7 @@ export class ConfigError extends Error {
   }
 }
 
-const DEFAULTS: Omit<HarnessConfig, "controlPlane" | "worker" | "tls" | "sandboxRoot" | "egressProxyUrl" | "walDir"> = {
+const DEFAULTS: Omit<HarnessConfig, "controlPlane" | "worker" | "tls" | "sandboxRoot" | "toolGateway" | "inferenceGateway" | "walDir"> = {
   piDirs: ["/pi/product", "/pi/client"],
   probe: { port: 8081 },
   transport: { http2PingIntervalMs: 30_000, http2PingTimeoutMs: 10_000 },
@@ -99,7 +103,14 @@ export function loadConfig(
     ca: str(raw, "tls.ca", "tls.ca"),
   };
   const sandboxRoot = str(raw, "sandboxRoot", "sandboxRoot");
-  const egressProxyUrl = str(raw, "egressProxyUrl", "egressProxyUrl");
+  const toolGateway = {
+    url: str(raw, "toolGateway.url", "toolGateway.url"),
+    serverName: str(raw, "toolGateway.serverName", "toolGateway.serverName"),
+  };
+  const inferenceGateway = {
+    url: str(raw, "inferenceGateway.url", "inferenceGateway.url"),
+    serverName: str(raw, "inferenceGateway.serverName", "inferenceGateway.serverName"),
+  };
   const walDir = str(raw, "walDir", "walDir");
 
   const cfg: HarnessConfig = {
@@ -109,7 +120,8 @@ export function loadConfig(
     tls,
     sandboxRoot,
     piDirs: arr(raw, "piDirs") ?? DEFAULTS.piDirs,
-    egressProxyUrl,
+    toolGateway,
+    inferenceGateway,
     walDir,
     probe: { ...DEFAULTS.probe, ...obj(raw, "probe") },
     transport: { ...DEFAULTS.transport, ...numObj(raw, "transport") },
@@ -129,7 +141,10 @@ export function loadConfig(
   requireValue(cfg.tls.key, "tls.key");
   requireValue(cfg.tls.ca, "tls.ca");
   requireValue(cfg.sandboxRoot, "sandboxRoot");
-  requireValue(cfg.egressProxyUrl, "egressProxyUrl");
+  requireValue(cfg.toolGateway.url, "toolGateway.url");
+  requireValue(cfg.toolGateway.serverName, "toolGateway.serverName");
+  requireValue(cfg.inferenceGateway.url, "inferenceGateway.url");
+  requireValue(cfg.inferenceGateway.serverName, "inferenceGateway.serverName");
   requireValue(cfg.walDir, "walDir");
 
   // Numeric ranges (reject unsafe/unset-within-objects).

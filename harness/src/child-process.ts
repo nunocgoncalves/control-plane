@@ -23,19 +23,20 @@
 // testable on macOS (setpriv is Linux-only).
 
 import { type ChildProcess } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { fromJson, type JsonValue } from "@bufbuild/protobuf";
 import { TurnEventSchema, Outcome, type AssignTurn } from "./gen/iterabase/harness/v1/harness_pb.js";
 import { launchChild, type LaunchOptions } from "./launcher.js";
-import type { Child, ChildEvent, ChildResult, ChildFactory } from "./supervisor.js";
+import type { Child, ChildEvent, ChildResult, ChildFactory, ChildRpcRequest } from "./supervisor.js";
 import type { HarnessConfig } from "./config.js";
 import type { SandboxPaths } from "./sandbox.js";
 import { AsyncQueue } from "./async-queue.js";
-import { FrameReader, encodeFrame, parseChildFrame, writeFrame } from "./ipc.js";
+import { FrameReader, encodeFrame, parseChildFrame, parseChildRpcFrame, writeFrame, type ChildRpcFrame } from "./ipc.js";
 
 export type LaunchFn = (opts: LaunchOptions) => ChildProcess;
 
-/** stdio for the child: fd0 control (sup→child), fd1 stdout logs, fd2 stderr logs, fd3 frames (child→sup). */
-const CHILD_STDIO = ["pipe", "pipe", "pipe", "pipe"] as const;
+/** stdio for the child: fd0 control (sup→child), fd1 stdout, fd2 stderr, fd3 audit (child→sup), fd4 rpc requests (child→sup), fd5 rpc responses (sup→child). */
+const CHILD_STDIO = ["pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] as const;
 
 /**
  * Build a ChildFactory that spawns the child entry `script` via the launcher.
@@ -58,7 +59,6 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
         HARNESS_SANDBOX_ROOT: sandbox.root,
         HARNESS_SESSION_DIR: sandbox.session,
         HARNESS_WORKING_DIR: cwd,
-        HARNESS_EGRESS_PROXY_URL: cfg.egressProxyUrl,
         HARNESS_PI_DIRS: cfg.piDirs.join(":"),
         HARNESS_MODEL_MAX_ATTEMPTS: String(cfg.modelRetry.maxAttempts),
         HARNESS_LIVENESS_INTERVAL_MS: String(livenessMs),
@@ -81,6 +81,30 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
     // Supervisor → child control channel (fd 0). The assignment is the first frame.
     const control = proc.stdin;
     if (control) writeFrame(control, { type: "assignment", assignment: assignmentToJson(assignment) });
+
+    // Child → supervisor RPC channel (fd 4): model/tool/cancel requests (HOR-395).
+    const rpcRequests = new AsyncQueue<ChildRpcRequest>();
+    const stdio = proc.stdio as unknown as (Readable | Writable | null)[];
+    const rpcReqStream = stdio[4];
+    if (rpcReqStream) {
+      const rpcReader = new FrameReader((raw) => {
+        const f = parseChildRpcFrame(raw);
+        if (!f) return; // malformed — drop
+        rpcRequests.push(f as ChildRpcRequest);
+      });
+      (rpcReqStream as Readable).on("data", (chunk: Buffer) => rpcReader.feed(chunk));
+      (rpcReqStream as Readable).on("end", () => rpcReader.end());
+      (rpcReqStream as Readable).on("error", () => rpcReader.end());
+    }
+    // Supervisor → child RPC channel (fd 5): framed responses (HOR-395).
+    const rpcRespStream = stdio[5];
+    const rpcSend = (frame: unknown): void => {
+      try {
+        if (rpcRespStream) writeFrame(rpcRespStream as Writable, frame);
+      } catch {
+        /* fd closed (child gone) — the exit handler classifies the outcome */
+      }
+    };
 
     // Child → supervisor framed channel (fd 3).
     const frameStream = proc.stdio[3];
@@ -162,10 +186,12 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
 
     proc.on("error", (err) => {
       events.close();
+      rpcRequests.close();
       settle({ outcome: Outcome.FAILED, message: `spawn error: ${err.message}` });
     });
     proc.on("exit", (code, signal) => {
       events.close();
+      rpcRequests.close();
       if (killTimer) clearTimeout(killTimer);
       if (watchdog) clearInterval(watchdog);
       if (resultResolved) return;
@@ -187,6 +213,8 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
     return {
       abort: forceAbort,
       events,
+      rpcRequests,
+      rpcSend,
       result,
     };
   };
@@ -200,8 +228,9 @@ function assignmentToJson(at: AssignTurn): unknown {
     sandbox: at.sandbox ? { sandboxId: at.sandbox.sandboxId, uid: at.sandbox.uid, gid: at.sandbox.gid, workingDir: at.sandbox.workingDir } : null,
     persona: at.persona,
     model: at.model ? { id: at.model.id, api: at.model.api, contextWindow: at.model.contextWindow, maxOutputTokens: at.model.maxOutputTokens, thinkingLevel: at.model.thinkingLevel } : null,
-    toolAllowList: at.toolAllowList ? { all: at.toolAllowList.all, tools: at.toolAllowList.tools } : null,
+    workspaceTools: at.workspaceTools,
     scopeIdentityId: at.scopeIdentityId,
+    runId: at.runId,
     message: at.message,
     images: at.images.map((img) => ({ data: Buffer.from(img.data).toString("base64"), mimeType: img.mimeType })),
   };

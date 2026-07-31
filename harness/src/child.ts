@@ -1,11 +1,17 @@
-// The per-turn pi child entry (HOR-381). Run via the setpriv launcher under the
-// session UID/GID. Reads a framed `assignment` from fd 0, creates a fresh pi
-// AgentSession (resume-or-create by the EXACT assignment session.id from the
-// PVC session dir — never auto-detect), runs one turn, maps pi lifecycle
-// events → durable TurnEvent payloads + ephemeral TokenDeltas over the framed
-// fd-3 channel, emits a heartbeat for liveness, and writes a final `result`.
-// A framed `abort` on fd 0 aborts pi. The supervisor sequences + WAL's the
-// durable payloads; this process holds no state between turns.
+// The per-turn pi child entry (HOR-381; HOR-395 gateway bridges). Run via the
+// setpriv launcher under the session UID/GID. Reads a framed `assignment` from
+// fd 0, awaits the non-secret gateway-tool descriptors on fd 5, creates a
+// fresh pi AgentSession (resume-or-create by the EXACT assignment session.id
+// from the PVC session dir — never auto-detect), runs one turn, maps pi
+// lifecycle events → durable TurnEvent payloads + ephemeral TokenDeltas over
+// the framed fd-3 channel, emits a heartbeat for liveness, and writes a final
+// `result`. A framed `abort` on fd 0 aborts pi.
+//
+// The child holds NO gateway/inference credential and has NO direct network
+// route (ARCH-003/010). Model calls cross the custom `streamSimple` provider →
+// fd 4/fd 5 → supervisor → inference gateway (mTLS). Gateway tool calls cross
+// fd 4/fd 5 → supervisor → tool gateway (mTLS). The supervisor validates every
+// request against the active assignment (ARCH-004).
 //
 // Provider-SDK retries are disabled (settingsManager retry.provider.maxRetries
 // = 0) so there is exactly one observable retry layer — pi's own bounded
@@ -15,7 +21,9 @@ import { writeSync } from "node:fs";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createReadStream } from "node:fs";
 import { toJson, create } from "@bufbuild/protobuf";
+import { Type } from "typebox";
 import {
   AuthStorage,
   ModelRegistry,
@@ -25,13 +33,16 @@ import {
   createAgentSessionServices,
   createAgentSessionRuntime,
   AgentSessionRuntime,
+  defineTool,
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeResult,
   type ExtensionFactory,
   type ProviderConfig,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import {
   AssistantMessageSchema,
   CompactionFinishedSchema,
@@ -51,7 +62,9 @@ import {
   Outcome,
   type TurnEvent,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
-import { FrameReader, encodeFrame, parseSupervisorFrame } from "./ipc.js";
+import { FrameReader, encodeFrame, parseSupervisorFrame, type GatewayToolDescriptor } from "./ipc.js";
+import { ChildRpc } from "./child-rpc.js";
+import { buildOpenAIRequestBody } from "./openai-stream.js";
 
 const PROVIDER = "iterabase-inference";
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -65,9 +78,10 @@ interface AssignmentImage {
 interface Assignment {
   turnId: string;
   sessionId: string;
+  runId?: string;
   persona: string;
   model: { id: string; api: string; contextWindow: number; maxOutputTokens?: number; thinkingLevel?: string };
-  toolAllowList: { all: boolean; tools: string[] };
+  workspaceTools: boolean;
   message: string;
   images?: AssignmentImage[];
 }
@@ -141,11 +155,24 @@ async function main(): Promise<void> {
 
   const sessionDir = process.env.HARNESS_SESSION_DIR ?? "/data/session";
   const cwd = process.env.HARNESS_WORKING_DIR ?? sessionDir;
-  const egressProxyUrl = process.env.HARNESS_EGRESS_PROXY_URL ?? "";
   const piDirs = (process.env.HARNESS_PI_DIRS ?? "").split(":").filter(Boolean);
   const maxAttempts = Number(process.env.HARNESS_MODEL_MAX_ATTEMPTS ?? "3") || 3;
   const livenessMs = Number(process.env.HARNESS_LIVENESS_INTERVAL_MS ?? "5000") || 5000;
   mkdirSync(sessionDir, { recursive: true });
+
+  // The supervisor→child RPC channel (fd 5): non-secret gateway descriptors +
+  // model/tool responses. fd 4 (child→supervisor requests) is written via rpc.
+  // fd 5 is always present in production; guard so a missing fd (tests that
+  // only exercise the heartbeat path) does not crash the child.
+  const rpc = new ChildRpc({ write: (buf) => writeSync(4, buf) });
+  try {
+    const rpcStream = createReadStream("", { fd: 5 });
+    rpcStream.on("data", (chunk: Buffer | string) => rpc.feed(chunk));
+    rpcStream.on("end", () => rpc.close());
+    rpcStream.on("error", () => rpc.close());
+  } catch {
+    /* fd 5 unavailable — rpc will never resolve; the supervisor kills the child */
+  }
 
   // Emit an immediate heartbeat so the supervisor's watchdog sees liveness
   // without waiting one interval, then keep it warm for the turn.
@@ -167,7 +194,11 @@ async function main(): Promise<void> {
 
   let currentRuntime: AgentSessionRuntime | undefined;
   try {
-    currentRuntime = await createSession(assignment, sessionDir, cwd, egressProxyUrl, piDirs, maxAttempts);
+    // Await the supervisor's gateway-tool discovery before building the session
+    // (ARCH-006): the child registers pi tool stubs from the non-secret
+    // descriptors. An empty list is valid (workspace-only turn).
+    const descriptors = await rpc.awaitGatewayTools();
+    currentRuntime = await createSession(assignment, sessionDir, cwd, piDirs, maxAttempts, rpc, descriptors);
   } catch (err) {
     clearInterval(hb);
     emit({
@@ -320,17 +351,16 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
   if (!r.model || typeof r.model !== "object") return undefined;
   const m = r.model as Record<string, unknown>;
   if (typeof m.id !== "string" || typeof m.api !== "string" || typeof m.contextWindow !== "number") return undefined;
-  if (!r.toolAllowList || typeof r.toolAllowList !== "object") return undefined;
-  const t = r.toolAllowList as Record<string, unknown>;
-  if (typeof t.all !== "boolean" || !Array.isArray(t.tools) || t.tools.some((x) => typeof x !== "string")) return undefined;
+  if (typeof r.workspaceTools !== "boolean") return undefined;
   const a: Assignment = {
     turnId: r.turnId,
     sessionId: r.sessionId,
     persona: r.persona,
     model: { id: m.id, api: m.api, contextWindow: m.contextWindow },
-    toolAllowList: { all: t.all, tools: t.tools as string[] },
+    workspaceTools: r.workspaceTools,
     message: r.message,
   };
+  if (typeof r.runId === "string") a.runId = r.runId;
   if (typeof m.maxOutputTokens === "number") a.model.maxOutputTokens = m.maxOutputTokens;
   if (typeof m.thinkingLevel === "string") a.model.thinkingLevel = m.thinkingLevel;
   if (Array.isArray(r.images)) {
@@ -344,6 +374,43 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
     a.images = imgs;
   }
   return a;
+}
+
+/**
+ * Build a pi ToolDefinition stub for one gateway descriptor (ARCH-006). The
+ * stub forwards execute() over fd 4/fd 5 to the supervisor, which stamps
+ * durable caller context + idempotency and calls InvokeTool over mTLS
+ * (ARCH-004/014). The parameter schema is the descriptor's non-secret input
+ * schema so the model sees the real tool contract; the gateway re-validates
+ * arguments before the effect boundary (#7, ARCH-008).
+ */
+function gatewayToolStub(rpc: ChildRpc): (d: GatewayToolDescriptor) => ToolDefinition {
+  return (d) =>
+    defineTool({
+      name: d.name,
+      label: d.name,
+      description: d.description,
+      parameters: Type.Unsafe(d.inputSchema as never),
+      execute: async (toolCallId, params, signal) => {
+        const res = await rpc.invokeTool(
+          {
+            toolCallId,
+            toolName: d.name,
+            toolVersionDigest: d.digest,
+            argumentsJson: JSON.stringify(params),
+            idempotencyKey: toolCallId,
+          },
+          signal,
+        );
+        const text = res.isError
+          ? res.errorMessage ?? "tool error"
+          : res.resultJson ?? "";
+        return {
+          content: [{ type: "text", text }],
+          details: { isError: res.isError },
+        };
+      },
+    });
 }
 
 /** Validate + build pi image content from the assignment images (MIME + size checked). */
@@ -362,16 +429,22 @@ function buildImages(a: Assignment): { type: "image"; data: string; mimeType: st
 
 /**
  * Create the pi session: resume-or-create by the EXACT session.id; pi cwd =
- * validated working dir. Returns an owned `AgentSessionRuntime` so the caller
- * can run the async `session_shutdown` lifecycle via `dispose()` before exit.
+ * validated working dir. The custom `streamSimple` provider routes model
+ * calls over fd 4/fd 5 to the supervisor's inference-gateway bridge (no local
+ * endpoint, no credential — ARCH-010/011). Gateway tool stubs are registered
+ * from the non-secret descriptors (ARCH-006); workspace tools (read/write/
+ * edit/bash) are exposed only when workspaceTools=true (ARCH-016). Returns an
+ * owned `AgentSessionRuntime` so the caller can run the async
+ * `session_shutdown` lifecycle via `dispose()` before exit.
  */
 async function createSession(
   a: Assignment,
   sessionDir: string,
   cwd: string,
-  egressProxyUrl: string,
   piDirs: string[],
   maxAttempts: number,
+  rpc: ChildRpc,
+  descriptors: GatewayToolDescriptor[],
 ): Promise<AgentSessionRuntime> {
   if (!SESSION_ID_RE.test(a.sessionId)) throw new Error(`invalid session id: ${JSON.stringify(a.sessionId)}`);
 
@@ -380,9 +453,18 @@ async function createSession(
 
   const providerFactory: ExtensionFactory = (pi) => {
     const provider: ProviderConfig = {
-      baseUrl: egressProxyUrl,
-      apiKey: "placeholder",
+      // No baseUrl/apiKey — the child has no endpoint or credential. Model
+      // traffic crosses the streamSimple bridge → supervisor → inference
+      // gateway (mTLS). ARCH-010/011.
       api: a.model.api as unknown as ProviderConfig["api"],
+      streamSimple: (model, context: Context, options?: SimpleStreamOptions) => {
+        const body = buildOpenAIRequestBody(
+          model.id,
+          { systemPrompt: context.systemPrompt, messages: context.messages, tools: context.tools as { name: string; description: string; parameters: unknown }[] | undefined },
+          { reasoning: options?.reasoning, maxTokens: a.model.maxOutputTokens },
+        );
+        return rpc.streamModel(body, options?.signal);
+      },
       models: [
         {
           id: a.model.id,
@@ -404,7 +486,13 @@ async function createSession(
     retry: { enabled: true, maxRetries: maxAttempts, baseDelayMs: 1000, provider: { maxRetries: 0 } },
   });
 
-  const toolOpts = a.toolAllowList.all ? { noTools: "builtin" as const } : { tools: a.toolAllowList.tools };
+  // ARCH-016: workspaceTools=true exposes exactly the four built-in tools
+  // under session UID/GID; false exposes none. Gateway stubs are always added
+  // via customTools. No arbitrary local-tool catalogue, no per-turn widening.
+  const toolOpts = a.workspaceTools
+    ? { tools: ["read", "write", "edit", "bash"] as string[] }
+    : { noTools: "all" as const };
+  const customTools = descriptors.map(gatewayToolStub(rpc));
 
   // The runtime factory closes over the assignment-specific inputs (provider,
   // settings, tools, persona) and creates cwd-bound services + session. It is
@@ -440,6 +528,7 @@ async function createSession(
       sessionManager,
       model,
       ...toolOpts,
+      ...(customTools.length ? { customTools } : {}),
     });
     return {
       ...result,

@@ -1,9 +1,15 @@
-// The supervisor↔child IPC boundary (HOR-381).
+// The supervisor↔child IPC boundary (HOR-381; HOR-395 adds the dedicated
+// model + gateway-tool RPC channels).
 //
 // Trust boundary contract (approved spec): length-prefixed JSON over a TS
-// discriminated union with runtime validation, on a dedicated duplex channel
-// of inherited fds (fd 3 = supervisor→child, fd 4 = child→supervisor). stdout
-// and stderr are NOT the protocol channel — they are piped separately and
+// discriminated union with runtime validation, on dedicated duplex channels
+// of inherited fds:
+//   - fd 0  : supervisor → child  (control: assignment, abort)
+//   - fd 3  : child → supervisor (audit: event, tokenDelta, heartbeat, result)
+//   - fd 4  : child → supervisor (RPC: modelRequest, toolCall, cancel)   [HOR-395]
+//   - fd 5  : supervisor → child  (RPC: modelChunk, modelEnd, toolResult,
+//                                  gatewayTools, cancel)                 [HOR-395]
+// stdout and stderr are NOT a protocol channel — they are piped separately and
 // drained as tagged logs (child-process.ts). A stray/spoofed byte sequence
 // cannot masquerade as a frame: the 4-byte length prefix must describe a full,
 // valid JSON document matching the discriminated union, or the frame is
@@ -11,7 +17,9 @@
 // TurnEvent proto schema before it can touch the audit outbox).
 //
 // The supervisor never imports pi/extensions/tools; the child receives only its
-// assignment + non-secret constants over this channel.
+// assignment + non-secret descriptors + RPC responses over these channels.
+// Model/tool bodies cross fd 4/fd 5 ONLY — they never touch the `Work` audit
+// stream and are never logged (ARCH-011).
 
 /** Max single-frame body size (16 MiB). A length prefix beyond this is treated as stream corruption. */
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -42,7 +50,7 @@ export interface ResultFrame {
 }
 export type ChildFrame = EventFrame | TokenDeltaFrame | HeartbeatFrame | ResultFrame;
 
-// ---- Supervisor → Child ----
+// ---- Supervisor → Child (control: fd 0) ----
 
 export interface AssignmentFrame {
   type: "assignment";
@@ -52,6 +60,91 @@ export interface AbortFrame {
   type: "abort";
 }
 export type SupervisorFrame = AssignmentFrame | AbortFrame;
+
+// ---- Child → Supervisor RPC (fd 4) — HOR-395 ----
+//
+// The disposable child sends model/tool requests it cannot satisfy itself; the
+// trusted supervisor validates each against the active assignment (ARCH-004),
+// stamps durable caller context, and calls the authorized gateway over mTLS.
+// `requestId` is a child-generated opaque string that correlates responses on
+// fd 5. Model/tool bodies cross this channel ONLY — never the Work stream.
+
+export interface ModelRequestFrame {
+  type: "modelRequest";
+  requestId: string;
+  /** The OpenAI chat-completions request body (model/messages/tools/reasoning/max_tokens/stream:true). */
+  body: unknown;
+}
+export interface ToolCallFrame {
+  type: "toolCall";
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  toolVersionDigest: string;
+  argumentsJson: string;
+  idempotencyKey?: string;
+}
+export interface CancelRpcFrame {
+  type: "cancel";
+  requestId: string;
+}
+export type ChildRpcFrame = ModelRequestFrame | ToolCallFrame | CancelRpcFrame;
+
+// ---- Supervisor → Child RPC (fd 5) — HOR-395 ----
+//
+// `gatewayTools` is sent once after DiscoverEffectiveTools, before the child's
+// first model call; the child registers pi tool stubs from it. Model chunks are
+// raw OpenAI SSE `data:` payloads (the JSON object string, or "[DONE]"); the
+// child parses them into pi stream events (ARCH-010/011 — the supervisor stays
+// transport-oriented and does not own model semantics). `modelEnd` is the
+// authoritative terminal signal (ok/error/aborted).
+
+/** Non-secret gateway tool descriptor passed to the child (ARCH-006). */
+export interface GatewayToolDescriptor {
+  name: string;
+  version: string;
+  digest: string;
+  description: string;
+  /** JSON Schema for arguments (parsed JSON object). */
+  inputSchema: unknown;
+  effectClass: "read_only" | "idempotent_write" | "non_idempotent_write";
+  timeoutMs?: number;
+}
+export interface GatewayToolsFrame {
+  type: "gatewayTools";
+  descriptors: GatewayToolDescriptor[];
+}
+export interface ModelChunkFrame {
+  type: "modelChunk";
+  requestId: string;
+  /** One OpenAI SSE `data:` payload string (a JSON object, or "[DONE]"). */
+  data: string;
+}
+export interface ModelEndFrame {
+  type: "modelEnd";
+  requestId: string;
+  status: "ok" | "error" | "aborted";
+  httpStatus?: number;
+  errorMessage?: string;
+}
+export interface ToolResultFrame {
+  type: "toolResult";
+  requestId: string;
+  /** Committed result JSON string (when succeeded). */
+  resultJson?: string;
+  isError: boolean;
+  errorMessage?: string;
+}
+export interface SupervisorCancelFrame {
+  type: "cancel";
+  requestId: string;
+}
+export type SupervisorRpcFrame =
+  | GatewayToolsFrame
+  | ModelChunkFrame
+  | ModelEndFrame
+  | ToolResultFrame
+  | SupervisorCancelFrame;
 
 /**
  * Encode a frame as a 4-byte big-endian length prefix + UTF-8 JSON body.
@@ -113,6 +206,102 @@ export function parseSupervisorFrame(raw: unknown): SupervisorFrame | null {
       return { type: "assignment", assignment: r.assignment };
     case "abort":
       return { type: "abort" };
+    default:
+      return null;
+  }
+}
+
+/** Parse + validate a ChildRpcFrame (fd 4). Returns null for malformed/unknown. */
+export function parseChildRpcFrame(raw: unknown): ChildRpcFrame | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.requestId !== "string") return null;
+  switch (r.type) {
+    case "modelRequest":
+      if (r.body === undefined) return null;
+      return { type: "modelRequest", requestId: r.requestId, body: r.body };
+    case "toolCall": {
+      if (
+        typeof r.toolCallId !== "string" ||
+        typeof r.toolName !== "string" ||
+        typeof r.toolVersionDigest !== "string" ||
+        typeof r.argumentsJson !== "string"
+      )
+        return null;
+      const f: ToolCallFrame = {
+        type: "toolCall",
+        requestId: r.requestId,
+        toolCallId: r.toolCallId,
+        toolName: r.toolName,
+        toolVersionDigest: r.toolVersionDigest,
+        argumentsJson: r.argumentsJson,
+      };
+      if (typeof r.idempotencyKey === "string") f.idempotencyKey = r.idempotencyKey;
+      return f;
+    }
+    case "cancel":
+      return { type: "cancel", requestId: r.requestId };
+    default:
+      return null;
+  }
+}
+
+/** Parse + validate a SupervisorRpcFrame (fd 5). Returns null for malformed/unknown. */
+export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  switch (r.type) {
+    case "gatewayTools": {
+      if (!Array.isArray(r.descriptors)) return null;
+      const descriptors: GatewayToolDescriptor[] = [];
+      for (const d of r.descriptors) {
+        if (!d || typeof d !== "object") return null;
+        const dd = d as Record<string, unknown>;
+        if (
+          typeof dd.name !== "string" ||
+          typeof dd.version !== "string" ||
+          typeof dd.digest !== "string" ||
+          typeof dd.description !== "string" ||
+          dd.inputSchema === undefined ||
+          typeof dd.effectClass !== "string"
+        )
+          return null;
+        if (dd.effectClass !== "read_only" && dd.effectClass !== "idempotent_write" && dd.effectClass !== "non_idempotent_write")
+          return null;
+        const desc: GatewayToolDescriptor = {
+          name: dd.name,
+          version: dd.version,
+          digest: dd.digest,
+          description: dd.description,
+          inputSchema: dd.inputSchema,
+          effectClass: dd.effectClass,
+        };
+        if (typeof dd.timeoutMs === "number") desc.timeoutMs = dd.timeoutMs;
+        descriptors.push(desc);
+      }
+      return { type: "gatewayTools", descriptors };
+    }
+    case "modelChunk":
+      if (typeof r.requestId !== "string" || typeof r.data !== "string") return null;
+      return { type: "modelChunk", requestId: r.requestId, data: r.data };
+    case "modelEnd": {
+      if (typeof r.requestId !== "string") return null;
+      if (r.status !== "ok" && r.status !== "error" && r.status !== "aborted") return null;
+      const f: ModelEndFrame = { type: "modelEnd", requestId: r.requestId, status: r.status };
+      if (typeof r.httpStatus === "number") f.httpStatus = r.httpStatus;
+      if (typeof r.errorMessage === "string") f.errorMessage = r.errorMessage;
+      return f;
+    }
+    case "toolResult": {
+      if (typeof r.requestId !== "string" || typeof r.isError !== "boolean") return null;
+      const f: ToolResultFrame = { type: "toolResult", requestId: r.requestId, isError: r.isError };
+      if (typeof r.resultJson === "string") f.resultJson = r.resultJson;
+      if (typeof r.errorMessage === "string") f.errorMessage = r.errorMessage;
+      return f;
+    }
+    case "cancel":
+      if (typeof r.requestId !== "string") return null;
+      return { type: "cancel", requestId: r.requestId };
     default:
       return null;
   }
