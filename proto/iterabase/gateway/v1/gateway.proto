@@ -1,0 +1,389 @@
+syntax = "proto3";
+
+package iterabase.gateway.v1;
+
+// The control-plane Tool Gateway RPC contract (HOR-392).
+//
+// The tool gateway is the authorized boundary for customer-system and
+// externally side-effecting tool execution (ARCH-001..ARCH-018). It owns tool
+// registration, effective-tool discovery, credential-slot resolution, the
+// durable at-most-once invocation ledger, and invocation dispatch to trusted
+// runners. The disposable agent child never holds a customer credential and
+// never discovers tools directly; the trusted supervisor (or a control-plane
+// workflow-step caller) authenticates with its SPIFFE workload identity and the
+// gateway resolves scope from durable state (ARCH-004/010/012).
+//
+// Two services:
+//
+//   - RunnerService.RegisterRunner: a long-lived bidi stream over mTLS. Trusted
+//     tool runners connect outbound, self-register immutable tool descriptors,
+//     heart-beat availability, and receive invocations to execute. Runners
+//     expose NO inbound endpoint; invocation results return up the same stream
+//     (ARCH-015). A dropped stream marks that version unavailable for new
+//     attempts; pinned active attempts keep their pin and fail rather than
+//     substitute (ARCH-007).
+//
+//   - GatewayService: the caller-facing surface. DiscoverEffectiveTools returns
+//     only the descriptors permitted for the caller's active attempt/turn or
+//     workflow-step context (registry ∩ AgentPool grants ∩ workflow request ∩
+//     pool-level identity scope). InvokeTool is the ledger-gated path: the
+//     gateway commits an invocation row before the side-effect boundary, then
+//     dispatches over the runner stream (ARCH-014). CancelInvocation propagates
+//     cancellation but cannot claim to undo an effect already started.
+//
+// Transport: native gRPC over HTTP/2 + mTLS (a SPIFFE URI SAN binds the caller
+// identity, verified by the gateway). No HTTP/1.1 Connect fallback. Identity is
+// ALWAYS taken from the authenticated client cert; request fields carry durable
+// context (attempt/turn/step ids) the gateway validates against Postgres, never
+// trust as scope (ARCH-004).
+//
+// Ref: Tool Gateway and Lightweight Sandbox — Architecture Direction (Obsidian);
+// Linear HOR-392.
+
+option go_package = "github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1;gatewayv1";
+
+import "google/protobuf/duration.proto";
+
+// =============================================================================
+// RunnerService — the runner-facing bidi stream (ARCH-015).
+// =============================================================================
+
+service RunnerService {
+  // RegisterRunner is the one long-lived bidi stream per runner. Runner->CP:
+  // Register, Heartbeat, InvokeResult, InvokeError. CP->runner: Welcome,
+  // Invoke, Cancel, Ack. A runner may register multiple immutable tool
+  // versions; each (tool, version) resolves to an exact digest. Heartbeats
+  // drive availability; a stale lease excludes the version from new-attempt
+  // resolution without disturbing pinned active attempts.
+  rpc RegisterRunner(stream RunnerMessage) returns (stream RunnerControl);
+}
+
+// ---- Runner -> ControlPlane ----
+
+message RunnerMessage {
+  oneof kind {
+    Register register = 1;
+    Heartbeat heartbeat = 2;
+    InvokeResult invoke_result = 3;   // successful or failed execution
+    InvokeError invoke_error = 4;     // pre-execution / dispatch error
+  }
+}
+
+// Register is the first message and may be repeated to publish additional
+// immutable tool versions. Each Register carries one ToolDescriptor; a runner
+// that serves several tools sends several Register messages. The runner's
+// approved SPIFFE identity (URI SAN) and permitted tool namespace are verified
+// by the gateway before any registration is accepted (ARCH-015); an unapproved
+// identity terminates the stream with PermissionDenied.
+message Register {
+  ToolDescriptor descriptor = 1;
+  string runner_id = 2;   // stable runner instance id (within the approved namespace)
+}
+
+// Heartbeat renews the registration lease. Any runner message renews the lease;
+// a heartbeat is needed only after an otherwise silent interval. A stale lease
+// (no heartbeat within the lease timeout) excludes all of this runner's
+// versions from new-attempt resolution.
+message Heartbeat {
+  int64 timestamp_ms = 1;  // runner clock; gateway receipt is authoritative
+}
+
+// InvokeResult is the terminal result of an Invoke. state=succeeded carries the
+// structured result + artifact refs; state=failed carries a typed error. For a
+// non_idempotent_write that lost certainty before this result could be sent,
+// the gateway records outcome_unknown independently; this message reports what
+// the runner knows (ARCH-014).
+message InvokeResult {
+  string invocation_id = 1;
+  InvokeState state = 2;
+  // Result payload. Inline text/JSON only (bounded by the gateway's inline
+  // limit); larger outputs are artifact references resolved through the
+  // artifact service (HOR-399).
+  bytes result_json = 3;                       // structured result (JSON), when succeeded
+  repeated ArtifactRef artifact_output_refs = 4;  // produced artifacts
+  ErrorDetail error = 5;                       // when failed
+  int64 timestamp_ms = 6;
+}
+
+// InvokeError reports a dispatch/protocol error before execution began (e.g.
+// the runner could not validate args or the pinned version is no longer
+// loadable). It does NOT imply an external effect occurred; the gateway
+// classifies retry per the invocation's effect class (ARCH-014).
+message InvokeError {
+  string invocation_id = 1;
+  ErrorDetail error = 2;
+}
+
+// ---- ControlPlane -> Runner ----
+
+message RunnerControl {
+  oneof kind {
+    Welcome welcome = 1;
+    Invoke invoke = 2;
+    Cancel cancel = 3;
+    Ack ack = 4;
+  }
+}
+
+// Welcome is sent once after Register auth succeeds. A reconnection for the
+// same runner_id atomically fences the previous generation; any in-flight
+// invocation on the old stream is classified by the gateway (retry or
+// outcome_unknown) per its effect class.
+message Welcome {
+  string protocol_version = 1;
+  uint64 fencing_generation = 2;
+  int32 heartbeat_interval_ms = 3;
+  int32 lease_timeout_ms = 4;
+}
+
+// Invoke is one tool execution dispatched over the authenticated runner stream.
+// The gateway has already: resolved effective authorization, resolved
+// credential bindings to values (read from K8s Secrets via the in-cluster API),
+// validated arguments against the descriptor's input schema, and committed the
+// invocation ledger row in the dispatching state (ARCH-014/008). The runner
+// receives the pinned descriptor, arguments, the resolved CredentialContext
+// (short-lived; values live only in gateway memory + this invocation), and any
+// input artifact references to materialize.
+message Invoke {
+  string invocation_id = 1;
+  ToolDescriptor descriptor = 2;               // the exact pinned version/digest
+  bytes arguments_json = 3;                    // validated JSON arguments
+  string idempotency_key = 4;                  // caller-supplied; runner may propagate upstream
+  repeated ArtifactRef artifact_input_refs = 5;  // inputs to materialize (HOR-399 resolves bytes)
+  CredentialContext credential_context = 6;     // resolved credential values; never logged
+}
+
+// Cancel propagates cancellation to an in-flight invocation. Per ARCH-014 it
+// cannot claim to undo an effect already started; the runner should abort
+// upstream work and report the best-known state (succeeded/failed/outcome via
+// InvokeResult/InvokeError). Cancel is idempotent for the matching invocation.
+message Cancel {
+  string invocation_id = 1;
+  string reason = 2;  // human/audit
+}
+
+// Ack acknowledges receipt of a Register or Heartbeat. (Invoke results are
+// durable; they are not ACKed over this stream — the ledger commit is the
+// durable acknowledgment.)
+message Ack {
+  oneof kind {
+    string registered = 1;  // the tool name+version acknowledged
+    bool heartbeat = 2;     // heartbeat acknowledged
+  }
+}
+
+// =============================================================================
+// GatewayService — the caller-facing surface (supervisors + workflow-step callers).
+// =============================================================================
+
+service GatewayService {
+  // DiscoverEffectiveTools returns only the descriptors permitted for the
+  // caller's active attempt/turn or workflow-step context: registered healthy
+  // versions ∩ AgentPool grants ∩ workflow-requested tools ∩ pool-level
+  // identity scope (ARCH-006/016/018). The disposable child never calls this;
+  // the trusted supervisor does, after a turn is assigned, and passes the
+  // non-secret descriptors to the child as pi-compatible stubs.
+  rpc DiscoverEffectiveTools(DiscoverRequest) returns (DiscoverResponse);
+
+  // InvokeTool is the ledger-gated execution path (ARCH-014). The gateway
+  // commits an invocation row (uniquely keyed by attempt + caller scope +
+  // tool-call id + exact version digest + idempotency key) BEFORE dispatching
+  // over the runner stream. A duplicate completed invocation returns its
+  // committed result/artifact refs; a duplicate in progress reports the
+  // existing invocation; a possible effect with no committed result becomes
+  // outcome_unknown and is never automatically repeated.
+  rpc InvokeTool(InvokeRequest) returns (InvokeResponse);
+
+  // CancelInvocation propagates cancellation to an in-flight invocation. It
+  // cannot undo an effect already started (ARCH-014).
+  rpc CancelInvocation(CancelRequest) returns (CancelResponse);
+}
+
+// CallerScope identifies whether this call originates from an active turn
+// (supervisor) or an active workflow step (control-plane runtime). The gateway
+// resolves the pool from durable state: for a turn, from the supervisor's
+// SPIFFE identity cross-checked against the active turn; for a workflow step,
+// from the workflow's pool binding. The caller never supplies the pool.
+enum CallerScope {
+  CALLER_SCOPE_UNSPECIFIED = 0;
+  CALLER_SCOPE_TURN = 1;
+  CALLER_SCOPE_WORKFLOW_STEP = 2;
+}
+
+message DiscoverRequest {
+  string attempt_id = 1;          // the workflow attempt (version snapshot boundary, ARCH-007)
+  CallerScope caller_scope = 2;
+  string caller_scope_id = 3;     // turn_id when CALLER_SCOPE_TURN, run_step_id when CALLER_SCOPE_WORKFLOW_STEP
+}
+
+message DiscoverResponse {
+  repeated ToolDescriptor descriptors = 1;  // only the permitted, healthy, pinned versions
+}
+
+message InvokeRequest {
+  string attempt_id = 1;
+  CallerScope caller_scope = 2;
+  string caller_scope_id = 3;     // turn_id or run_step_id
+  string tool_call_id = 4;        // the LLM/workflow tool-call identity
+  string tool_name = 5;
+  string tool_version_digest = 6; // the pinned immutable version (ARCH-007)
+  bytes arguments_json = 7;       // business arguments only; never a secret/binding/tenant
+  string idempotency_key = 8;     // required for non_idempotent_write; recommended otherwise
+  repeated ArtifactRef artifact_input_refs = 9;
+}
+
+message InvokeResponse {
+  string invocation_id = 1;
+  InvokeState state = 2;                      // succeeded | failed | outcome_unknown | in_progress
+  bytes result_json = 3;                      // committed result (JSON), when succeeded
+  repeated ArtifactRef artifact_output_refs = 4;  // committed artifact references
+  ErrorDetail error = 5;                      // when failed/outcome_unknown
+  // When state=in_progress this is the existing invocation the duplicate
+  // attached to (ARCH-014: duplicates in progress attach to / report the
+  // existing invocation).
+  string existing_invocation_id = 6;
+}
+
+message CancelRequest {
+  string invocation_id = 1;
+  string reason = 2;
+}
+
+message CancelResponse {
+  InvokeState state = 1;  // best-known state after cancel propagation
+}
+
+// =============================================================================
+// Shared types
+// =============================================================================
+
+// ToolDescriptor is the dynamic description of one immutable tool version
+// (ARCH-006). A logical tool name may have multiple immutable versions
+// coexisting for pinned attempts (ARCH-007); the digest is the exact
+// implementation identity retained on every audit record.
+message ToolDescriptor {
+  string name = 1;                  // logical tool name within an approved namespace
+  string version = 2;               // immutable version string
+  string digest = 3;                // implementation content digest (the pin identity)
+  string description = 4;
+  bytes input_schema = 5;           // JSON Schema for arguments
+  EffectClass effect_class = 6;     // drives the retry/ledger policy (ARCH-014)
+  repeated CredentialSlot credential_slots = 7;  // logical slots the gateway binds to SecretRefs
+  ArtifactCapabilities artifact_capabilities = 8;
+  google.protobuf.Duration timeout = 9;          // per-invocation execution timeout
+  IdempotencyProof idempotency_proof = 10;       // required when effect_class = idempotent_write
+}
+
+// EffectClass classifies the external effect of a tool (ARCH-014). Drives
+// automatic retry policy: read_only may bounded-retry; idempotent_write may
+// retry only when the descriptor proves a stable strategy; non_idempotent_write
+// never auto-retries after execution begins.
+enum EffectClass {
+  EFFECT_CLASS_UNSPECIFIED = 0;
+  EFFECT_CLASS_READ_ONLY = 1;
+  EFFECT_CLASS_IDEMPOTENT_WRITE = 2;
+  EFFECT_CLASS_NON_IDEMPOTENT_WRITE = 3;
+}
+
+// CredentialSlot is a logical credential declaration in a tool manifest. The
+// gateway binds slots to K8s Secret references + non-secret resource
+// constraints via AgentPool (ARCH-008/018). The agent supplies business
+// arguments only and can never select a secret, binding, tenant, or token.
+message CredentialSlot {
+  string name = 1;                  // slot name the tool references
+  CredentialScheme scheme = 2;      // which Secret shape to bind
+  bytes binding_schema = 3;         // JSON Schema for the binding value (non-secret constraints)
+  bool required = 4;
+}
+
+enum CredentialScheme {
+  CREDENTIAL_SCHEME_UNSPECIFIED = 0;
+  CREDENTIAL_SCHEME_BEARER = 1;                // a single secret value (static token/key)
+  CREDENTIAL_SCHEME_OAUTH_CLIENT_CREDENTIALS = 2;  // client id + secret + token url + scope
+}
+
+// ArtifactCapabilities declares what the tool can read/produce as artifacts
+// (ARCH-013). Large inputs/outputs are artifact references, not inline bytes;
+// the gateway stores refs in the ledger and the artifact service (HOR-399)
+// owns immutable bytes.
+message ArtifactCapabilities {
+  bool reads_artifacts = 1;
+  bool writes_artifacts = 2;
+  repeated string accepted_mime_types = 3;  // for inputs the tool can materialize
+}
+
+// IdempotencyProof is required for effect_class = idempotent_write. It declares
+// the stable strategy that makes a retry safe: an upstream idempotency key the
+// runner propagates, and/or a deterministic resource identity. The gateway
+// allows automatic retry only when this proof is present and the runner reports
+// a retryable failure (ARCH-014).
+message IdempotencyProof {
+  string strategy = 1;              // upstream_key | deterministic_resource_id | ...
+  string description = 2;           // human-readable explanation
+  string upstream_key_header = 3;   // header/param the runner propagates, when applicable
+}
+
+// CredentialContext is the resolved credential-aware invocation context handed
+// to trusted tool code (ARCH-008). Values live only in gateway memory + the
+// runner's per-invocation context; they NEVER enter Postgres, logs, tool
+// results, or the sandbox. Each slot the descriptor declared is resolved here.
+message CredentialContext {
+  map<string, Credential> slots = 1;  // slot name -> resolved credential
+}
+
+// Credential is one resolved credential value. The scheme selects which fields
+// apply, mirroring CredentialSlot.scheme.
+message Credential {
+  CredentialScheme scheme = 1;
+  string bearer_value = 2;                       // CREDENTIAL_SCHEME_BEARER
+  string oauth_client_id = 3;                    // CREDENTIAL_SCHEME_OAUTH_CLIENT_CREDENTIALS
+  string oauth_client_secret = 4;                // CREDENTIAL_SCHEME_OAUTH_CLIENT_CREDENTIALS
+  string oauth_token_url = 5;                    // CREDENTIAL_SCHEME_OAUTH_CLIENT_CREDENTIALS
+  string oauth_scope = 6;                        // CREDENTIAL_SCHEME_OAUTH_CLIENT_CREDENTIALS
+  // Non-secret resource constraints bound to this slot (e.g. tenant, site,
+  // mailbox). Never a secret value.
+  bytes resource_constraints_json = 7;
+}
+
+// ArtifactRef references an immutable artifact owned by the artifact service
+// (HOR-399). The gateway carries refs, not bytes; the trusted supervisor
+// materializes only authorized input refs into the session workspace.
+message ArtifactRef {
+  string artifact_id = 1;          // durable artifact id (HOR-399)
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  string digest = 4;               // content digest for verification
+}
+
+// InvokeState is the lifecycle state of an invocation in the durable ledger
+// (ARCH-014). dispatching->running->succeeded|failed|outcome_unknown. in_progress
+// is the response to a duplicate caller while an invocation is still
+// dispatching/running.
+enum InvokeState {
+  INVOKE_STATE_UNSPECIFIED = 0;
+  INVOKE_STATE_DISPATCHING = 1;    // ledger committed, not yet dispatched
+  INVOKE_STATE_RUNNING = 2;        // dispatched over the runner stream
+  INVOKE_STATE_SUCCEEDED = 3;
+  INVOKE_STATE_FAILED = 4;
+  // A possible external effect occurred with no committed result and the effect
+  // class disallows automatic retry. Never automatically repeated.
+  INVOKE_STATE_OUTCOME_UNKNOWN = 5;
+  // Caller-facing only: a duplicate invocation is already dispatching/running.
+  INVOKE_STATE_IN_PROGRESS = 6;
+}
+
+// A stable error envelope (mirrors the harness ErrorDetail). details_json
+// carries source-specific diagnostics; it MUST NOT contain secret values.
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  Retryability retryability = 3;
+  string details_json = 4;
+}
+
+enum Retryability {
+  RETRYABILITY_UNSPECIFIED = 0;
+  RETRYABILITY_RETRYABLE = 1;
+  RETRYABILITY_NON_RETRYABLE = 2;
+  RETRYABILITY_UNKNOWN = 3;
+}

@@ -1,4 +1,4 @@
-# buf module for the harness RPC contract (HOR-351 / HOR-381 warm-worker).
+# buf module for the control-plane RPC contracts (harness HOR-351/381, gateway HOR-392).
 # Run `make proto` from the repo root (it cd's here and runs buf generate).
 version: v2
 modules:

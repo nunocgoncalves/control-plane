@@ -147,12 +147,14 @@ proto-tools: ## Install buf + protoc plugins (proto lint + codegen). buf: brew i
 	@PATH="$(LOCALBIN):$$PATH" $(BUF) --version
 
 .PHONY: proto
-proto: proto-tools ## Generate Go (internal/harnessrpc) + TS (harness/src/gen) stubs from proto/.
-	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint && PATH="$(LOCALBIN):$$PATH" $(BUF) generate
+proto: proto-tools ## Generate Go+TS stubs from proto/: harness -> internal/harnessrpc + harness/src/gen; gateway -> internal/gatewayrpc.
+	cd proto && PATH="$(LOCALBIN):$$PATH" $(BUF) lint \
+		&& PATH="$(LOCALBIN):$$PATH" $(BUF) generate --path iterabase/harness \
+		&& PATH="$(LOCALBIN):$$PATH" $(BUF) generate --template buf.gateway.gen.yaml --path iterabase/gateway
 
 .PHONY: proto-check
 proto-check: proto ## CI guard: proto lints clean and generated code is fresh (regenerate + diff).
-	@git diff --exit-code -- internal/harnessrpc harness/src/gen || { \
+	@git diff --exit-code -- internal/harnessrpc internal/gatewayrpc harness/src/gen || { \
 		echo "generated code is stale; run 'make proto' and commit"; exit 1; }
 
 .PHONY: harness-deps

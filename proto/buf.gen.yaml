@@ -1,7 +1,12 @@
-# Codegen for the harness RPC contract (HOR-351).
-# Generates:
+# Codegen for the harness RPC contract (HOR-351/381). Generates:
 #   - Go stubs   -> internal/harnessrpc/iterabase/harness/v1  (HOR-249 consumes)
 #   - TypeScript -> harness/src/gen/iterabase/harness/v1       (the harness server)
+#
+# paths=source_relative places each generated file next to its .proto source
+# under `out`. The Makefile `proto` target restricts this template to the
+# harness proto via `buf generate --path iterabase/harness` so the gateway
+# contract (buf.gateway.gen.yaml) is generated into its own tree.
+#
 # Local protoc plugins (install via `make proto-tools`). Run `make proto`.
 version: v2
 managed:
