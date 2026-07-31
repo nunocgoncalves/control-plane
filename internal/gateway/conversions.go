@@ -40,8 +40,7 @@ func effectClassFromProto(c v1.EffectClass) (EffectClass, error) {
 // callerScopeToProto maps a stored CallerScope to its proto enum. Used when
 // re-deriving a DiscoverRequest from a ledger row (cancel ownership).
 func callerScopeToProto(c CallerScope) v1.CallerScope {
-	switch c {
-	case CallerScopeWorkflowStep:
+	if c == CallerScopeWorkflowStep {
 		return v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP
 	}
 	return v1.CallerScope_CALLER_SCOPE_TURN
