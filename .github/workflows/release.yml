@@ -7,7 +7,7 @@ name: release
 #   - push of a v* tag -> :<semver> + :sha-<short> (+ GitHub release with SBOM)
 #
 # Two images:
-#   ghcr.io/nunocgoncalves/control-plane         (Go: manager + api)
+#   ghcr.io/nunocgoncalves/control-plane         (Go: manager + api + gateway)
 #   ghcr.io/nunocgoncalves/control-plane-harness (Node: the pi harness, HOR-351)
 #   ghcr.io/nunocgoncalves/control-plane-proxy   (Go: the per-sandbox egress proxy, HOR-244)
 on:

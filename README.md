@@ -40,7 +40,7 @@ Two Go images + one Node image:
 The `control-plane` image (manager + api + gateway) runs in the platform namespace;
 `control-plane-proxy` runs as a sidecar in AgentSandbox pods (less-trusted) and
 is self-contained (no control-plane packages). The harness image is Node
-(`harness/Dockerfile`). See `Dockerfile` (manager/api), `Dockerfile.proxy`
+(`harness/Dockerfile`). See `Dockerfile` (manager/api/gateway), `Dockerfile.proxy`
 (proxy), `harness/Dockerfile` (harness).
 
 `migrate` runs as an RBAC-less init container before `serve`/`manager` start.
@@ -71,7 +71,7 @@ config/             kubebuilder Kustomize — DEV/envtest only (prod = forge Hel
 proto/              harness RPC contract (buf) — HOR-351
 harness/            Node pi harness (the agent) — HOR-351; see harness/README.md
 internal/harnessrpc/ generated Go Connect stubs (HOR-249 consumes) — HOR-351
-Dockerfile          manager + api image (one image, two entrypoints)
+Dockerfile          manager + api + gateway image (one image, three entrypoints)
 Dockerfile.proxy    the egress proxy image (HOR-244)
 ```
 

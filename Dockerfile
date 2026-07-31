@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: compile both binaries (CGO-free) with version LDFLAGS.
+# Build stage: compile all three binaries (CGO-free) with version LDFLAGS.
 FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
@@ -16,12 +16,14 @@ ARG DATE=unknown
 ENV LDFLAGS="-X github.com/nunocgoncalves/control-plane/internal/version.version=${VERSION} -X github.com/nunocgoncalves/control-plane/internal/version.commit=${COMMIT} -X github.com/nunocgoncalves/control-plane/internal/version.date=${DATE}"
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/manager ./cmd/manager && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/api ./cmd/api
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/api ./cmd/api && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/gateway ./cmd/gateway
 
-# Runtime stage: one image, two binaries. Each Deployment selects its binary
-# via `command` (manager: ["/manager"]; api: ["/api", "serve"]).
+# Runtime stage: one image, three binaries. Each Deployment selects its binary
+# via `command` (manager: ["/manager"]; api: ["/api", "serve"]; gateway: ["/gateway", "serve"]).
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /out/manager /manager
 COPY --from=builder /out/api /api
+COPY --from=builder /out/gateway /gateway
 USER 65532:65532
