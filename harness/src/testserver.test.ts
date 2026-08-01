@@ -88,7 +88,6 @@ describe("HOR-381 gRPC+mTLS transport integration (Go testserver)", { timeout: 6
       tls: { cert: ready.cert, key: ready.key, ca: ready.ca },
       sandboxRoot: "",
       piDirs: [],
-      egressProxyUrl: "",
       walDir: "",
       probe: { port: 0 },
       transport: { http2PingIntervalMs: 30000, http2PingTimeoutMs: 10000 },

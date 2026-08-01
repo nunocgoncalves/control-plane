@@ -195,18 +195,6 @@ harness-isolation-test: ## Run the Linux sandbox isolation tests (setpriv launch
 	$(CONTAINER_TOOL) build -t $(HARNESS_ISOLATION_IMG) -f harness/isolation/Dockerfile harness/
 	$(CONTAINER_TOOL) run --rm $(HARNESS_ISOLATION_IMG)
 
-##@ Egress proxy (Go per-sandbox proxy — HOR-244)
-
-PROXY_IMG ?= control-plane-proxy:latest
-
-.PHONY: build-proxy
-build-proxy: ## Build the egress proxy binary (cmd/proxy, HOR-244).
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/proxy ./cmd/proxy
-
-.PHONY: proxy-image
-proxy-image: ## Build the egress proxy container image (HOR-244).
-	$(CONTAINER_TOOL) build -t $(PROXY_IMG) -f Dockerfile.proxy .
-
 ##@ Tooling
 
 .PHONY: install-hooks

@@ -88,7 +88,7 @@ describe("loadConfig (infra-only boot config)", () => {
     expect(() => loadConfig(writeCfg(VALID.replace("  cert: /etc/harness/tls/tls.crt", "")))).toThrow(ConfigError);
   });
 
-  it("rejects a missing sandbox root / egress / wal dir", () => {
+  it("rejects a missing sandbox root / gateway / wal dir", () => {
     expect(() => loadConfig(writeCfg(VALID.replace("sandboxRoot: /data/sandboxes", "")))).toThrow(ConfigError);
     expect(() => loadConfig(writeCfg(VALID.replace("  url: https://control-plane:8442", "")))).toThrow(ConfigError);
     expect(() => loadConfig(writeCfg(VALID.replace("  url: https://inference-gateway:8443", "")))).toThrow(ConfigError);

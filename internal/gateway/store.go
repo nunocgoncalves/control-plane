@@ -11,7 +11,7 @@
 // InvokeTool + CancelInvocation).
 //
 // This file is the Postgres store (schema `toolgateway`, migration 000011).
-// It mirrors the identity/permissions/catalog/egress/runtime stores: pgxpool +
+// It mirrors the identity/permissions/catalog/runtime stores: pgxpool +
 // ErrNotFound, soft-delete on operator-owned config tables, no pg_notify (the
 // gateway is the sole writer; runners push over streams). The gateway also
 // reads the `runtime` schema (workflow_runs/run_steps/turns/run_pool_assignments)

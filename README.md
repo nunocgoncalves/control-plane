@@ -1,9 +1,8 @@
 # control-plane
 
 The Horizonshift/Iterabase control plane: a Go Kubernetes operator + HTTP API
-that provides identity, per-caller permissions, credential-safe egress,
-sandbox reconciliation, a durable turn runtime, and the model catalog the
-inference-gateway consumes.
+that provides identity, per-caller permissions, sandbox reconciliation,
+a durable turn runtime, and the model catalog the inference-gateway consumes.
 
 Per-customer, fully isolated, self-hosted. See the Platform Direction doc
 (Obsidian: *Horizonshift Platform Direction*) for the full architecture; this
@@ -20,11 +19,12 @@ issuance, and the admin bootstrap. HOR-243 adds the permission engine: the
 + the `effective_catalog` view). HOR-246 adds the durable turn runtime: the
 `runtime` schema + store (workflow_run/step/turn state machines + append-only
 event/audit log) — the data layer HOR-249 (orchestration) and HOR-252 (workflow
-definitions) consume. HOR-244 adds the credential source + per-sandbox egress
-proxy: the `EgressRoute` CRD + `egress` schema/`effective_routes` view +
-`internal/egress.Resolve` + a separate proxy image (a credentialed reverse
-proxy — the single egress point for sandbox model + tool traffic; agents never
-hold creds). Sandbox reconciliation (HOR-245) lands in its own ticket.
+definitions) consume. HOR-244 added a credential source + per-sandbox egress
+proxy; ARCH-009 (HOR-245) supersedes and removes it — customer-system actions
+move to the tool gateway (ARCH-008) and private-inference auth to supervisor
+mTLS (ARCH-010); the `EgressRoute` CRD, `egress` schema, proxy image/sidecar,
+and `internal/egress`/`internal/proxy` packages are deleted. Sandbox
+reconciliation / the AgentPool CRD + operator (HOR-245) lands in its own ticket.
 
 ## Binaries
 
@@ -35,13 +35,10 @@ Two Go images + one Node image:
 | `manager` | `cmd/manager` | `control-plane` | controller-runtime operator: reconcilers, webhooks, probes, metrics |
 | `api` | `cmd/api` | `control-plane` | HTTP API (chi) + durable runtime (later); subcommands `serve`, `migrate up`, `migrate down`, `bootstrap` |
 | `gateway` | `cmd/gateway` | `control-plane` | tool gateway gRPC server (HOR-392): mTLS `RunnerService` + `GatewayService` |
-| `proxy` | `cmd/proxy` | `control-plane-proxy` | per-sandbox egress proxy (HOR-244): credentialed reverse proxy, single egress point for sandbox model + tool traffic |
 
-The `control-plane` image (manager + api + gateway) runs in the platform namespace;
-`control-plane-proxy` runs as a sidecar in AgentSandbox pods (less-trusted) and
-is self-contained (no control-plane packages). The harness image is Node
-(`harness/Dockerfile`). See `Dockerfile` (manager/api/gateway), `Dockerfile.proxy`
-(proxy), `harness/Dockerfile` (harness).
+The `control-plane` image (manager + api + gateway) runs in the platform
+namespace. The harness image is Node (`harness/Dockerfile`). See `Dockerfile`
+(manager/api/gateway) and `harness/Dockerfile` (harness).
 
 `migrate` runs as an RBAC-less init container before `serve`/`manager` start.
 
@@ -50,19 +47,16 @@ is self-contained (no control-plane packages). The harness image is Node
 ```
 cmd/manager/        K8s operator (controller-runtime)
 cmd/api/            HTTP API + migrate/bootstrap subcommands
-cmd/proxy/          per-sandbox egress proxy (HOR-244) — the credentialed reverse proxy
-api/v1alpha1/       CRD types (IdentityMapping, PermissionPolicy, ModelBackend, Model, EgressRoute); group platform.iterabase.com
+api/v1alpha1/       CRD types (IdentityMapping, PermissionPolicy, ModelBackend, Model); group platform.iterabase.com
 internal/config/    YAML + env config (api) + DatabaseFromEnv (manager)
 internal/database/  pgx pool + embedded golang-migrate migrations
 internal/identity/  identity store, API keys, JWT/JWKS issuer, resolver
 internal/permissions/ permission store + effective_capabilities view (HOR-243)
 internal/catalog/   model catalog store (backends + models) + effective_catalog view (HOR-306/268)
-internal/egress/    egress credential store + effective_routes view + Resolve + BuildProxyConfig (HOR-244)
 internal/gateway/   tool gateway: registry, authorization, credential resolution, durable invocation ledger (HOR-392)
 internal/spiffe/    shared SPIFFE/mTLS identity verifier (HOR-392; reused by HOR-249)
-internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permissionpolicy, modelbackend, model, egressroute
+internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permissionpolicy, modelbackend, model
 internal/runtime/   durable turn runtime store (run/step/turn SM + event log) — HOR-246
-internal/proxy/     the per-sandbox egress proxy (config, routing, auth inject, OAuth, hot-reload) — HOR-244
 internal/server/    chi HTTP routes (health, jwks, token, admin CRUD)
 internal/logging/   shared slog logger + logr bridge
 internal/version/   build-time version metadata
@@ -72,14 +66,12 @@ proto/              harness RPC contract (buf) — HOR-351
 harness/            Node pi harness (the agent) — HOR-351; see harness/README.md
 internal/harnessrpc/ generated Go Connect stubs (HOR-249 consumes) — HOR-351
 Dockerfile          manager + api + gateway image (one image, three entrypoints)
-Dockerfile.proxy    the egress proxy image (HOR-244)
 ```
 
 ## Develop
 
 ```bash
 make build              # build bin/manager + bin/api + bin/gateway
-make build-proxy        # build bin/proxy (egress proxy, HOR-244)
 make run-manager        # run the operator locally
 make run-gateway        # run the tool gateway (serve); needs DATABASE_URL + mTLS certs
 make migrate-up         # apply DB migrations
@@ -102,9 +94,9 @@ Postgres is the system of record. The initial migration (`000001_init_schemas`)
 creates four schema namespaces — `identity`, `permissions`, `usage`, `ai_data` —
 plus the `pgvector` extension. `000002_identity` (HOR-242) adds the identity
 store: `identities`, `external_mappings`, `local_users`, `api_keys`.
-permissions → HOR-243, durable turns/events → HOR-246, egress credential
-source → HOR-244 (`egress` schema: `credentials` + `effective_routes` view);
-`usage`/`ai_data` content is post-v1. Requires a pgvector-enabled Postgres
+permissions → HOR-243, durable turns/events → HOR-246; `usage`/`ai_data`
+content is post-v1. The `egress` schema (HOR-244) is dropped by 000012 under
+ARCH-009 (HOR-245). Requires a pgvector-enabled Postgres
 image (tests use `pgvector/pgvector:pg16`).
 
 ## Identity (HOR-242)
@@ -159,41 +151,6 @@ Admin debug endpoint (reads the same view):
 |---|---|---|---|
 | GET | `/v1/permissions/identities/{id}` | `scope=admin` | effective capabilities for an identity (404 if none) |
 
-## Egress credential source (HOR-244)
-
-The per-sandbox egress proxy is the **data-scope enforcement boundary**
-(credentials-as-scope): the agent never holds credentials; the proxy injects
-the real credential per route. It is the single egress point for an
-AgentSandbox pod's model + tool traffic.
-
-- **`EgressRoute` CRD → `egress` schema → `effective_routes` view** (broad-default:
-  every active identity gets every route; `subject` stored, not enforced in v1).
-  The reconciler materializes CRs into Postgres (Git→DB bridge), mirroring
-  identity/permissions/catalog.
-- **`internal/egress.Resolve(scopeIdentityID)`** returns the effective tool routes
-  + the K8s Secret refs to mount; `egress.BuildProxyConfig` assembles the
-  proxy's `ProxyConfig` from a resolve result + the platform model route. The
-  AgentSandbox operator (HOR-245) calls these at provisioning.
-- **The proxy** (`cmd/proxy` / `internal/proxy`, separate `control-plane-proxy`
-  image) is DB-less and identity-agnostic at runtime: reverse-proxy path-based
-  routes (model `/v1` built-in → inference-gateway; tools `/upstreams/<id>/…`),
-  TLS on the localhost leg, strips inbound auth + injects the route's real cred
-  (static `bearer` from a mounted Secret, or `oauthClientCredentials` it acquires
-  + refreshes), opaque bodies, hot-reload of the mounted ConfigMap.
-- **Model route is internal-trusted** (shared `agent-egress` SA gateway key, Path
-  1); the gateway's per-identity enforcement (delegated JWT / Path 2) is for
-  **direct inference-product callers only** — agent model egress is owned by the
-  control-plane (`scope_identity_id` + `runtime.events`), not the gateway.
-- **Enforcement (v1):** credential-based (primary) + the tool set as action-scope
-  (built-in coding tools off; only overlay tools → no arbitrary-HTTP tool → the
-  network-egress gap is moot). Pod security + in-cluster NetworkPolicy (gateway
-  + kube-dns) are hygiene (HOR-245). Prompt-injection detection + action-scoping
-  are a separate follow-up (HOR-379); external-egress FQDN pinning (Cilium/
-  egress-gateway) is deferred until coding agents / untrusted tools.
-
-The credential **value** never lives in Postgres — only the K8s Secret
-reference; the value stays in a Secret mounted into the proxy.
-
 ## Tool gateway (HOR-392)
 
 The tool gateway is the authorized boundary for customer-system and externally
@@ -234,7 +191,8 @@ Several `toolgateway` tables (`pools`, `pool_grants`, `credential_bindings`,
 populated by later tickets via the Git→DB bridge: AgentPool CRD (HOR-245),
 Workflow definitions (HOR-252), the Node runner materializer (HOR-397). The
 real Node 24 runner is HOR-397; the supervisor IPC client is HOR-395; concrete
-Graph tools are HOR-358. EgressRoute/proxy removal (ARCH-009) is HOR-245.
+Graph tools are HOR-358. AgentPool CRD/operator + EgressRoute/proxy removal
+(ARCH-009) is HOR-245.
 
 ## Model backends (HOR-306/388)
 
@@ -271,10 +229,9 @@ overlays). Multi-replica TP/PP and SGLang are deferred (HOR-323 / deepen).
 ## CRD landscape
 
 All CRDs use group `platform.iterabase.com` / `v1alpha1`, reconciled by this
-operator: `AgentSandbox` (HOR-245), `ModelBackend` (HOR-306), `Model`
+operator: `AgentPool` (HOR-245), `ModelBackend` (HOR-306), `Model`
 (HOR-268), `IdentityMapping` (HOR-242, **defined here**), `PermissionPolicy`
-(HOR-243, **defined here**), `EgressRoute` (HOR-244, **defined here**), `Tool`
-(HOR-271). The others land with their tickets.
+(HOR-243, **defined here**), `Tool` (HOR-271). The others land with their tickets.
 
 ## Git workflow
 

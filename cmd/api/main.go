@@ -89,7 +89,7 @@ func runServeCmd(cfg *config.Config, logger *slog.Logger) error {
 // runServe runs the HTTP API until ctx is canceled (SIGINT/SIGTERM in main,
 // a test context in tests). It serves HTTPS when cfg.API.TLSCertFile +
 // TLSKeyFile are both set (cert-manager leaf, internal issuer), else plain
-// HTTP — mirroring the egress proxy's tls opt-in pattern.
+// HTTP — tls opt-in (cert-manager leaf, internal issuer).
 func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	pool, err := database.Connect(ctx, cfg.Database)
 	if err != nil {
