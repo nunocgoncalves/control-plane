@@ -304,8 +304,12 @@ function validateOpenAIChunk(raw: unknown): OpenAIChunk {
     throw new Error("OpenAI SSE payload is not an object");
   }
   const c = raw as Record<string, unknown>;
-  if (c.usage !== undefined) {
-    if (typeof c.usage !== "object" || c.usage === null || Array.isArray(c.usage)) {
+  // `usage` is nullable: with `stream_options.include_usage=true` every
+  // non-final chunk carries `usage: null` (the pinned pi-ai provider treats
+  // a falsy `chunk.usage` as absent). `null` is therefore valid here; only a
+  // present, non-null, non-object value is a shape violation.
+  if (c.usage !== undefined && c.usage !== null) {
+    if (typeof c.usage !== "object" || Array.isArray(c.usage)) {
       throw new Error("OpenAI usage is not an object");
     }
     const u = c.usage as Record<string, unknown>;
@@ -330,8 +334,13 @@ function validateOpenAIChunk(raw: unknown): OpenAIChunk {
       if (ch.delta !== undefined) {
         if (typeof ch.delta !== "object" || ch.delta === null || Array.isArray(ch.delta)) throw new Error("OpenAI delta is not an object");
         const d = ch.delta as Record<string, unknown>;
-        if (d.content !== undefined && typeof d.content !== "string") throw new Error("delta.content is not a string");
-        if (d.reasoning_content !== undefined && typeof d.reasoning_content !== "string") throw new Error("delta.reasoning_content is not a string");
+        // `delta.content`/`delta.reasoning_content` are nullable: the OpenAI
+        // streaming contract (and the pinned pi-ai provider, which guards with
+        // `!== null && !== undefined`) emits `null` in chunks that carry no
+        // text (e.g. role-only, tool-call, or usage frames). `null` is valid;
+        // only a present, non-null, non-string value is a shape violation.
+        if (d.content !== undefined && d.content !== null && typeof d.content !== "string") throw new Error("delta.content is not a string");
+        if (d.reasoning_content !== undefined && d.reasoning_content !== null && typeof d.reasoning_content !== "string") throw new Error("delta.reasoning_content is not a string");
         if (d.tool_calls !== undefined) {
           if (!Array.isArray(d.tool_calls)) throw new Error("delta.tool_calls is not an array");
           for (const tc of d.tool_calls) {

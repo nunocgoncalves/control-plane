@@ -153,6 +153,56 @@ describe("OpenAIStreamAccumulator", () => {
     // The empty/usage-only chunks produced no content events beyond the one text delta.
     expect(events.filter((e) => (e as { type: string }).type === "text_delta")).toHaveLength(1);
   });
+
+  it("accepts realistic include_usage chunks (usage:null on non-final, content:null, nullable delta fields)", () => {
+    // Mirrors a real Chat Completions stream with stream_options.include_usage
+    // = true: every non-final chunk carries `usage: null`, the first (role)
+    // chunk and tool-call/usage frames carry `delta.content: null`, and only
+    // the terminal chunk carries real usage. The validator must not latch a
+    // protocol error on any of these (regression for the over-strict validator).
+    const acc = new OpenAIStreamAccumulator("m1", "iterabase-inference");
+    const events = feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { role: "assistant", content: null }, finish_reason: null }], usage: null }),
+      JSON.stringify({ choices: [{ delta: { content: "Hello" }, finish_reason: null }], usage: null }),
+      JSON.stringify({ choices: [{ delta: { content: " world" }, finish_reason: null }], usage: null }),
+      JSON.stringify({ choices: [{ delta: { content: null, reasoning_content: null }, finish_reason: null }], usage: null }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 1 } } }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("done");
+    // Two real text deltas accumulated; the null-content frames produced none.
+    expect(events.filter((e) => (e as { type: string }).type === "text_delta")).toHaveLength(2);
+    if (ev.type === "done") {
+      expect(ev.message.usage.input).toBe(5);
+      expect(ev.message.usage.output).toBe(2);
+      expect(ev.message.usage.cacheRead).toBe(1);
+    }
+  });
+
+  it("still rejects a wrong-typed (non-null) content as a protocol error", () => {
+    // `null` is valid; a number is still a shape violation.
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { content: "hi" } }] }),
+      JSON.stringify({ choices: [{ delta: { content: 42 } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/content is not a string/i);
+  });
+
+  it("still rejects a wrong-typed (non-null) usage as a protocol error", () => {
+    // `usage: null` is valid; `usage: "x"` is still a shape violation.
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { content: "hi" } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: "not-an-object" }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/usage is not an object/i);
+  });
 });
 
 describe("buildOpenAIRequestBody", () => {
