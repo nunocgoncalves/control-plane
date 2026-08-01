@@ -19,12 +19,12 @@ issuance, and the admin bootstrap. HOR-243 adds the permission engine: the
 + the `effective_catalog` view). HOR-246 adds the durable turn runtime: the
 `runtime` schema + store (workflow_run/step/turn state machines + append-only
 event/audit log) — the data layer HOR-249 (orchestration) and HOR-252 (workflow
-definitions) consume. HOR-244 added a credential source + per-sandbox egress
-proxy; ARCH-009 (HOR-245) supersedes and removes it — customer-system actions
-move to the tool gateway (ARCH-008) and private-inference auth to supervisor
-mTLS (ARCH-010); the `EgressRoute` CRD, `egress` schema, proxy image/sidecar,
-and `internal/egress`/`internal/proxy` packages are deleted. Sandbox
-reconciliation / the AgentPool CRD + operator (HOR-245) lands in its own ticket.
+definitions) consume. HOR-245 adds the AgentPool CRD/operator: isolated
+warm-worker pods (SPIFFE certs via the cert-manager CSI driver, shared RWX
+sandbox PVC, deny-by-default NetworkPolicy, deny-by-default workspace-tool
+switch, maximum gateway grants + credential-slot bindings) and removes the
+superseded per-sandbox egress proxy (ARCH-009). Sandbox reconciliation (HOR-245)
+lands in its own ticket.
 
 ## Binaries
 
@@ -225,6 +225,43 @@ its upstream image verbatim and overlays any patches as file artifacts
 `config/samples/platform_v1alpha1_modelbackend_dsv4flash_b12x.yaml` for a full
 B12X/SM120 example (DeepSeek-V4-Flash NVFP4, TP=2, MTP, 256k context, patch
 overlays). Multi-replica TP/PP and SGLang are deferred (HOR-323 / deepen).
+
+## Agent pools (HOR-245)
+
+An `AgentPool` is the deployable workflow security/integration boundary
+(ARCH-018): it provisions a bounded set of isolated warm-worker pods and
+declares the maximum gateway capability grants + logical credential-slot
+bindings for work dispatched to the pool. No separate Tool/EgressRoute/
+IntegrationBinding CRD exists in v1.
+
+The operator reconciles, per pool: a shared **RWX sandbox PVC** (per-session
+`0700` subdirs owned by the session UID/GID), a **deny-by-default
+NetworkPolicy** (`denied` = kube-dns + the three gateways; `internet` =
+per-pool opt-in for non-cluster egress — customer-system credentialed access
+still routes through the gateway), a **per-pod config ConfigMap** (rendered
+harness boot config), and the **warm-worker pods**.
+
+**Per-pod SPIFFE certs** are issued by the **cert-manager CSI driver**
+(`csi.cert-manager.io`) annotated on each pod with URI SAN
+`spiffe://<td>/pools/<pool-uid>/workers/<pod-name>`; the operator never holds
+the CA key (cert-manager owns the CA in `platform-ca`, backed by a
+`ClusterIssuer`). Forge prerequisites: cert-manager + cert-manager-csi-driver +
+the CA `Certificate`/`ClusterIssuer`. The supervisor runs as root (UID 0, PSS
+`baseline`) to read the CSI driver's root-owned `0600` key and launch the
+per-turn child as the session UID via `setpriv` (CAP_SETUID/SETGID, which PSS
+`restricted` forbids — hence `baseline`); the child (dropped groups,
+`no_new_privs`) cannot read the key.
+
+`spec.workspaceTools` is the deny-by-default local-tool switch (ARCH-016):
+`false` exposes none; `true` exposes exactly `read`/`write`/`edit`/`bash`.
+`spec.gatewayGrants`/`credentialBindings`/`resourceConstraints` declare the
+maximum gateway permissions and slot→Secret bindings (values never in the CRD);
+semantic tool-registry validation is the gateway's job (HOR-392/397). Dispatch,
+warm-pool scaling, and the Work server's worker-identity/generation fencing are
+HOR-249; `worker_id` = pod name (stable slot), recorded as an amendment to the
+HOR-381/249 identity contract. Real-cluster PSS/CSI/RWX/isolation validation is
+the ticket's stated real-cluster gate (envtest covers assembly + structural
+validation).
 
 ## CRD landscape
 

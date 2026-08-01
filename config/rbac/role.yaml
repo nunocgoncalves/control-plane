@@ -7,6 +7,9 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - persistentvolumeclaims
+  - pods
   - services
   verbs:
   - create
@@ -15,6 +18,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - apps
@@ -29,8 +40,21 @@ rules:
   - update
   - watch
 - apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - platform.iterabase.com
   resources:
+  - agentpools
   - identitymappings
   - modelbackends
   - models
@@ -46,6 +70,7 @@ rules:
 - apiGroups:
   - platform.iterabase.com
   resources:
+  - agentpools/finalizers
   - identitymappings/finalizers
   - modelbackends/finalizers
   - models/finalizers
@@ -55,6 +80,7 @@ rules:
 - apiGroups:
   - platform.iterabase.com
   resources:
+  - agentpools/status
   - identitymappings/status
   - modelbackends/status
   - models/status

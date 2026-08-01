@@ -1,0 +1,464 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: agentpools.platform.iterabase.com
+spec:
+  group: platform.iterabase.com
+  names:
+    kind: AgentPool
+    listKind: AgentPoolList
+    plural: agentpools
+    shortNames:
+    - ap
+    singular: agentpool
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AgentPool is the deployable workflow security/integration boundary (ARCH-018):
+          it provisions isolated warm-worker pods and declares the maximum gateway
+          capability grants + logical credential-slot bindings for work dispatched to
+          the pool. No separate Tool/EgressRoute/IntegrationBinding CRD exists in v1.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AgentPoolSpec defines the desired state of an AgentPool: a bounded set of
+              isolated warm-worker pods that execute Platform-v1 turns with the approved
+              supervisor/child model, fixed local-workspace boundary, and maximum gateway
+              permissions — without proxy sidecars or customer credentials in the sandbox
+              (ARCH-003/009/010/016/018). The operator provisions the RWX sandbox PVC,
+              per-pod SPIFFE certs (via the cert-manager CSI driver), the rendered harness
+              boot config, and a deny-by-default NetworkPolicy. HOR-249 owns dispatch and
+              the warm-pool scaling/credit protocol; HOR-245 only maintains a static
+              `replicas` warm set.
+            properties:
+              credentialBindings:
+                description: |-
+                  credentialBindings bind logical credential slots (declared by runner tool
+                  manifests, ARCH-008/018) to K8s Secret references. The agent supplies
+                  business arguments only and cannot select a secret; the gateway resolves
+                  the binding at invocation. Secret VALUES never enter the CRD or Postgres —
+                  only the reference. The operator validates the referenced Secret exists.
+                items:
+                  description: CredentialBinding binds a logical credential slot to
+                    a K8s Secret key.
+                  properties:
+                    secretRef:
+                      description: |-
+                        secretRef names the K8s Secret + key holding the credential VALUE. The
+                        value never enters the CRD or Postgres. The operator validates the Secret
+                        exists.
+                      properties:
+                        key:
+                          description: key is the key within the Secret.
+                          type: string
+                        name:
+                          description: name is the Kubernetes Secret name.
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                    slot:
+                      description: |-
+                        slot is the logical credential slot name declared by a runner tool
+                        manifest (ARCH-008). The gateway resolves it at invocation.
+                      type: string
+                  required:
+                  - secretRef
+                  - slot
+                  type: object
+                type: array
+              gatewayGrants:
+                description: |-
+                  gatewayGrants are the maximum gateway capability permissions available
+                  to work dispatched to this pool (ARCH-018). A turn/workflow cannot widen
+                  these. The gateway intersects deployed registry availability, these pool
+                  grants, workflow-requested capabilities, and durable customer/identity
+                  policy at discovery (HOR-392). Semantic validation that a granted tool is
+                  registered is the gateway's responsibility (HOR-392/397); the operator
+                  validates structure only (required fields, no duplicate tools).
+                items:
+                  description: GatewayGrant is one maximum gateway capability permission
+                    (ARCH-018).
+                  properties:
+                    permissions:
+                      description: |-
+                        permissions are the maximum permissions granted for this tool. A turn
+                        cannot widen them. Must be non-empty; the gateway intersects with
+                        workflow/customer policy at discovery.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    tool:
+                      description: tool is the logical gateway tool/capability name
+                        (e.g. "graph.read").
+                      type: string
+                  required:
+                  - permissions
+                  - tool
+                  type: object
+                type: array
+              gateways:
+                description: |-
+                  gateways are the supervisor's platform endpoints (ARCH-010 — separate
+                  domain gateways, one worker SPIFFE cert). The disposable child receives
+                  none of these; it only talks the supervisor over fd 4/fd 5.
+                properties:
+                  controlPlane:
+                    description: controlPlane is the Work bidi-stream gRPC server
+                      (HOR-249).
+                    properties:
+                      serverName:
+                        description: serverName is the expected server certificate
+                          SAN.
+                        type: string
+                      url:
+                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        pattern: ^https://
+                        type: string
+                    required:
+                    - serverName
+                    - url
+                    type: object
+                  inferenceGateway:
+                    description: |-
+                      inferenceGateway is the /v1/chat/completions workload mTLS listener
+                      (HOR-398).
+                    properties:
+                      serverName:
+                        description: serverName is the expected server certificate
+                          SAN.
+                        type: string
+                      url:
+                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        pattern: ^https://
+                        type: string
+                    required:
+                    - serverName
+                    - url
+                    type: object
+                  toolGateway:
+                    description: toolGateway is the GatewayService gRPC endpoint (HOR-392).
+                    properties:
+                      serverName:
+                        description: serverName is the expected server certificate
+                          SAN.
+                        type: string
+                      url:
+                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        pattern: ^https://
+                        type: string
+                    required:
+                    - serverName
+                    - url
+                    type: object
+                required:
+                - controlPlane
+                - inferenceGateway
+                - toolGateway
+                type: object
+              identity:
+                description: |-
+                  identity configures the worker SPIFFE/mTLS identity. Per-pod leaf certs
+                  are issued by the cert-manager CSI driver (annotated on each pod) with
+                  URI SAN spiffe://<trustDomain>/pools/<pool-uid>/workers/<pod-name>; the
+                  operator never holds the CA key (cert-manager owns the CA). Servers
+                  (gateway/inference/future Work server) trust caSecretRef's cert as
+                  ClientCAs. The child UID cannot read the key (fsGroup + dropped groups).
+                properties:
+                  caSecretRef:
+                    description: |-
+                      caSecretRef names the K8s Secret holding the platform CA (cert+key),
+                      issued by cert-manager. The cert-manager CSI driver uses a ClusterIssuer
+                      backed by this CA to mint per-pod leaf certs; the operator never reads
+                      the CA key. Servers trust this CA's cert as ClientCAs.
+                    properties:
+                      name:
+                        description: name is the Kubernetes Secret name.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  certMountPath:
+                    description: |-
+                      certMountPath is where the CSI driver materialises tls.crt/tls.key/ca.crt
+                      in the supervisor. Defaults to "/etc/harness/tls". Mounted readOnly; the
+                      key is child-inaccessible via fsGroup + dropped supplementary groups.
+                    type: string
+                  trustDomain:
+                    description: trustDomain is the SPIFFE trust domain. Defaults
+                      to "iterabase.local".
+                    type: string
+                required:
+                - caSecretRef
+                type: object
+              networkPolicy:
+                description: |-
+                  networkPolicy configures the worker pod NetworkPolicy (ARCH-003). Egress
+                  is deny-by-default; `denied` (default) allows only kube-dns + the three
+                  gateways + kube API; `internet` additionally allows outbound to
+                  non-cluster Internet (per-pool operator opt-in for e.g. coding agents
+                  fetching packages). Customer-system credentialed access still routes
+                  through the gateway regardless — the sandbox never holds customer creds.
+                properties:
+                  egress:
+                    description: |-
+                      egress selects the egress mode. `denied` (default) allows only kube-dns +
+                      the three gateways + kube API; `internet` additionally allows outbound to
+                      non-cluster Internet (per-pool operator opt-in). Customer-system
+                      credentialed access still routes through the gateway regardless.
+                    enum:
+                    - denied
+                    - internet
+                    type: string
+                type: object
+              piDirs:
+                description: |-
+                  piDirs are the read-only overlay paths mounted into the worker (skills +
+                  the built-in model/gateway bridges). Arbitrary sandbox-local tool
+                  extensions are removed (ARCH-016); authored skills remain. Defaults to
+                  ["/pi/product", "/pi/client"].
+                items:
+                  type: string
+                type: array
+              podSecurity:
+                description: |-
+                  podSecurity is the target Pod Security Standard level the rendered worker
+                  pod satisfies. Must be `baseline`: the per-turn child UID/GID launcher
+                  (HOR-381 setpriv) requires CAP_SETUID/CAP_SETGID on the supervisor, which
+                  PSS `restricted` forbids. The operator validates the rendered pod meets
+                  this level.
+                enum:
+                - baseline
+                type: string
+              poolScopeIdentityId:
+                description: |-
+                  poolScopeIdentityId is an optional pool-level scope identity for
+                  defense-in-depth: the supervisor validates AssignTurn's scope_identity_id
+                  against it. Maps to the harness boot config's poolScopeIdentityId.
+                type: string
+              probe:
+                description: probe is the plain-HTTP kubelet probe port (/healthz
+                  + /readyz).
+                properties:
+                  port:
+                    description: port is the plain-HTTP probe port (/healthz + /readyz).
+                      Defaults to 8081.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
+              replicas:
+                description: |-
+                  replicas is the bounded warm-worker pod count the operator maintains. v1
+                  reconciles a static set of named pods (<pool>-worker-<i>); dynamic
+                  scale-out/credit-based dispatch is HOR-249.
+                format: int32
+                minimum: 0
+                type: integer
+              resourceConstraints:
+                description: |-
+                  resourceConstraints are non-secret resource scopes/constraints bound at
+                  the pool level (ARCH-018), e.g. a tenant/site/drive the pool is scoped to.
+                items:
+                  description: ResourceConstraint is a non-secret pool-level resource
+                    scope (ARCH-018).
+                  properties:
+                    resource:
+                      description: resource is the logical resource name (e.g. "site",
+                        "tenant").
+                      type: string
+                    value:
+                      description: value is the non-secret resource value (e.g. "walter").
+                      type: string
+                  required:
+                  - resource
+                  - value
+                  type: object
+                type: array
+              resources:
+                description: |-
+                  resources are the worker pod's resource requirements (supervisor + child
+                  share the pod). Applied to the supervisor container.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              sandbox:
+                description: |-
+                  sandbox configures the shared RWX PVC that backs per-session sandboxes.
+                  Each session gets a 0700 subdir owned by its stable session UID/GID
+                  (provisioning/ownership enforced by the supervisor, HOR-381); the pool
+                  PVC request is the per-pool storage quota.
+                properties:
+                  accessMode:
+                    description: |-
+                      accessMode must be ReadWriteMany (the warm pool shares one PVC; per-turn
+                      children of different sessions run concurrently across pods).
+                    enum:
+                    - ReadWriteMany
+                    type: string
+                  mountPath:
+                    description: |-
+                      mountPath is where the PVC is mounted in the worker. Defaults to
+                      "/data/sandboxes". Per-session subdirs are created beneath this by the
+                      supervisor (HOR-381).
+                    type: string
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: size is the PVC request (the per-pool storage quota).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: |-
+                      storageClassName is the RWX-capable StorageClass. The operator validates
+                      it exists and supports ReadWriteMany.
+                    type: string
+                required:
+                - accessMode
+                - size
+                - storageClassName
+                type: object
+              terminationGracePeriodSeconds:
+                description: |-
+                  terminationGracePeriodSeconds is the pod termination grace, sized to let
+                  the supervisor abort/kill the child and flush the audit WAL (HOR-381).
+                  Defaults to 30.
+                format: int64
+                minimum: 1
+                type: integer
+              walDir:
+                description: |-
+                  walDir is the supervisor's WAL spool directory (an emptyDir). Defaults to
+                  "/var/harness/wal".
+                type: string
+              workerImage:
+                description: |-
+                  workerImage is the harness container image (HOR-351/381): the trusted
+                  supervisor + the per-turn pi child. Never baked with customer data or
+                  credentials.
+                type: string
+              workspaceTools:
+                description: |-
+                  workspaceTools is the deny-by-default local-workspace tool switch
+                  (ARCH-016). false (default) exposes no local tools (normal operational
+                  workflow mode); true exposes exactly pi's built-in read/write/edit/bash as
+                  one capability set. No wildcard, custom package, partial selection, or
+                  per-turn widening. These tools retain session UID/GID isolation and no
+                  arbitrary customer-system access.
+                type: boolean
+            required:
+            - gateways
+            - identity
+            - podSecurity
+            - replicas
+            - sandbox
+            - workerImage
+            type: object
+          status:
+            description: AgentPoolStatus is the observed state reported by the reconciler.
+            properties:
+              message:
+                description: message surfaces the last reconciliation error or notice.
+                  Empty on success.
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation most recently reconciled.
+                format: int64
+                type: integer
+              ready:
+                description: |-
+                  ready is true once the warm-worker pods + PVC + NetworkPolicy are
+                  reconciled and at least one pod is Ready (envtest has no kubelet, so this
+                  stays false there — real readiness is validated on-cluster).
+                type: boolean
+              readyReplicas:
+                description: readyReplicas is the number of warm-worker pods reporting
+                  Ready.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,77 @@
+apiVersion: platform.iterabase.com/v1alpha1
+kind: AgentPool
+metadata:
+  name: walter-pool
+  namespace: platform
+spec:
+  # replicas is the bounded warm-worker pod count the operator maintains.
+  # v1 reconciles a static set (<pool>-worker-<i>); scaling is HOR-249.
+  replicas: 2
+  # workerImage is the harness image (HOR-351/381): supervisor + per-turn child.
+  workerImage: control-plane-harness:latest
+  terminationGracePeriodSeconds: 30
+  podSecurity: baseline  # CAP_SETUID/SETGID for the per-turn UID launcher (HOR-381)
+
+  # Per-pod SPIFFE leaf certs are issued by the cert-manager CSI driver
+  # (annotated on each pod) with URI SAN
+  # spiffe://<trustDomain>/pools/<pool-uid>/workers/<pod-name>. The operator
+  # never holds the CA key; cert-manager owns the CA in platform-ca.
+  identity:
+    trustDomain: iterabase.local
+    caSecretRef:
+      name: platform-ca
+    certMountPath: /etc/harness/tls
+
+  # Shared RWX sandbox PVC. Per-session subdirs are 0700 owned by the session
+  # UID/GID (provisioning by the supervisor, HOR-381). The PVC request is the
+  # per-pool storage quota.
+  sandbox:
+    storageClassName: rwx-fast
+    accessMode: ReadWriteMany
+    size: 100Gi
+    mountPath: /data/sandboxes
+
+  # Supervisor platform endpoints (ARCH-010). The child receives none.
+  gateways:
+    controlPlane:
+      url: https://control-plane.platform.svc:8443
+      serverName: control-plane
+    toolGateway:
+      url: https://gateway.platform.svc:8443
+      serverName: tool-gateway
+    inferenceGateway:
+      url: https://inference-gateway.platform.svc:8443
+      serverName: inference-gateway
+
+  # ARCH-003 deny-by-default egress. `denied` = kube-dns + the three gateways
+  # only; `internet` additionally allows non-cluster Internet (per-pool opt-in
+  # for e.g. coding agents). Customer-system credentialed access always routes
+  # through the gateway regardless — the sandbox holds no customer creds.
+  networkPolicy:
+    egress: denied
+
+  # ARCH-016: deny-by-default local-workspace tools. true exposes exactly
+  # read/write/edit/bash; false exposes none.
+  workspaceTools: false
+
+  # ARCH-018: maximum gateway capability grants (a turn cannot widen these).
+  gatewayGrants:
+    - tool: graph.read
+      permissions: [read]
+    - tool: graph.mail.send
+      permissions: [send]
+
+  # ARCH-008/018: logical credential slots -> K8s Secret refs. VALUES never
+  # enter the CRD; the gateway resolves them at invocation.
+  credentialBindings:
+    - slot: graphToken
+      secretRef: { name: graph-creds, key: token }
+
+  # ARCH-018: non-secret pool-level resource scopes.
+  resourceConstraints:
+    - resource: site
+      value: walter
+
+  piDirs: [/pi/product, /pi/client]
+  walDir: /var/harness/wal
+  probe: { port: 8081 }
