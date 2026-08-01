@@ -93,6 +93,11 @@ export class OpenAIStreamAccumulator {
    * would be reported as a successful `done` (HOR-395: upstream behavior must
    * not corrupt protocol channels). */
   private sawTerminal = false;
+  /** Latched on a malformed/invalid SSE payload. HOR-395 requires upstream
+   * corruption not be silently swallowed: once latched, `finish("ok")` fails
+   * even if a later valid terminal arrives (a corrupt stream is a model
+   * failure, not success). */
+  private protocolError: string | null = null;
 
   constructor(modelId = "", provider = "iterabase-inference") {
     this.modelId = modelId;
@@ -134,7 +139,10 @@ export class OpenAIStreamAccumulator {
     try {
       chunk = JSON.parse(data) as OpenAIChunk;
     } catch {
-      return []; // malformed chunk — drop; a missing terminal is caught by finish()
+      // Malformed SSE payload — latch a protocol error. A later valid terminal
+      // must NOT turn a corrupt stream into a successful `done` (HOR-395).
+      this.protocolError = "malformed OpenAI SSE payload";
+      return [];
     }
     const events: AssistantMessageEvent[] = [];
     const choice = chunk.choices?.[0];
@@ -218,6 +226,13 @@ export class OpenAIStreamAccumulator {
       const msg = this.message("error", errorMessage);
       return { type: "error", reason: "error", error: msg };
     }
+    // A latched protocol error (malformed payload) is a model failure even if a
+    // later valid terminal arrived — upstream corruption must not be reported
+    // as success (HOR-395).
+    if (this.protocolError) {
+      const msg = this.message("error", errorMessage ?? this.protocolError);
+      return { type: "error", reason: "error", error: msg };
+    }
     // A successful terminal requires a valid OpenAI finish_reason/[DONE]. A
     // truncated or malformed HTTP-200 stream (no terminal) is a model failure.
     if (!this.sawTerminal) {
@@ -234,12 +249,16 @@ export class OpenAIStreamAccumulator {
   }
 
   private message(stopReason: StopReason, errorMessage?: string): AssistantMessage {
+    // Preserve the assigned model metadata on the terminal message too — pi's
+    // agent loop replaces `partialMessage` with this final message, so a
+    // hard-coded `model: ""` would clobber the correctly initialized `start`
+    // partial (HOR-395 / pi stream contract).
     return {
       role: "assistant",
       content: this.content,
       api: "openai-completions" as never,
-      provider: "iterabase-inference" as never,
-      model: "",
+      provider: this.provider as never,
+      model: this.modelId,
       usage: this.usage,
       stopReason,
       errorMessage,
@@ -281,17 +300,21 @@ export function buildOpenAIRequestBody(
 ): unknown {
   const messages: unknown[] = [];
   if (context.systemPrompt) messages.push({ role: "system", content: context.systemPrompt });
-  for (const m of context.messages) {
+  // Tool-result image blocks are emitted as a follow-up `user` message with
+  // `image_url` data URIs, mirroring pi's pinned OpenAI-completions provider
+  // (which groups consecutive tool results and attaches their images as a
+  // user turn). HOR-395 keeps existing per-turn image behavior intact.
+  const modelSupportsImages = true; // assignedModel.input includes "image"
+  for (let i = 0; i < context.messages.length; i++) {
+    const m = context.messages[i];
     if (m.role === "user") {
       messages.push({ role: "user", content: piUserContentToOpenAI(m.content) });
-    } else if (m.role === "assistant") {
-      const content = m.content
-        .filter((c) => c.type === "text" || c.type === "thinking")
-        .map((c) => (c.type === "thinking" ? { role: "assistant" } : { role: "assistant", content: c.text }))
-        .filter((_, i, a) => i === a.length - 1 || a[i] !== undefined);
+      continue;
+    }
+    if (m.role === "assistant") {
       // Emit assistant text content + any tool_calls.
       const textParts = m.content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("");
-      const toolCalls = m.content.filter((c) => c.type === "toolCall").map((c, i) => ({
+      const toolCalls = m.content.filter((c) => c.type === "toolCall").map((c) => ({
         id: (c as ToolCall).id,
         type: "function",
         function: { name: (c as ToolCall).name, arguments: JSON.stringify((c as ToolCall).arguments) },
@@ -299,15 +322,35 @@ export function buildOpenAIRequestBody(
       const entry: Record<string, unknown> = { role: "assistant" };
       if (textParts) entry.content = textParts;
       if (toolCalls.length) entry.tool_calls = toolCalls;
-      void content;
       messages.push(entry);
-    } else {
-      // toolResult
-      const tr = m as Extract<Message, { role: "toolResult" }>;
+      continue;
+    }
+    // toolResult — group consecutive tool results so their images are attached
+    // as one follow-up user message (pinned-provider semantics).
+    const imageBlocks: { type: "image_url"; image_url: { url: string } }[] = [];
+    let j = i;
+    for (; j < context.messages.length && context.messages[j].role === "toolResult"; j++) {
+      const tr = context.messages[j] as Extract<Message, { role: "toolResult" }>;
+      const textResult = tr.content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("");
+      const hasImages = tr.content.some((c) => c.type === "image");
+      const hasText = textResult.length > 0;
+      // Always send a tool message with text (placeholder if only images),
+      // matching the pinned provider.
+      const content = hasText ? textResult : hasImages ? "(see attached image)" : "(no tool output)";
+      messages.push({ role: "tool", tool_call_id: tr.toolCallId, content });
+      if (modelSupportsImages) {
+        for (const c of tr.content) {
+          if (c.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string") {
+            imageBlocks.push({ type: "image_url", image_url: { url: `data:${c.mimeType};base64,${c.data}` } });
+          }
+        }
+      }
+    }
+    i = j - 1;
+    if (imageBlocks.length > 0) {
       messages.push({
-        role: "tool",
-        tool_call_id: tr.toolCallId,
-        content: tr.content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join(""),
+        role: "user",
+        content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...imageBlocks],
       });
     }
   }

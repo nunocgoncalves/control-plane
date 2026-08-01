@@ -87,19 +87,30 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
     const stdio = proc.stdio as unknown as (Readable | Writable | null)[];
     const rpcReqStream = stdio[4];
     if (rpcReqStream) {
-      const rpcReader = new FrameReader((raw) => {
-        const f = parseChildRpcFrame(raw);
-        if (!f) {
-          // A malformed RPC request frame is stream corruption, not a
-          // droppable audit frame. The child is now waiting on a response
-          // that will never come, so terminate the turn fail-closed (HOR-395:
-          // runtime validation must be bounded fail-closed, not a silent drop).
-          settle({ outcome: Outcome.FAILED, message: "invalid child RPC frame on fd 4" });
+      const rpcReader = new FrameReader(
+        (raw) => {
+          const f = parseChildRpcFrame(raw);
+          if (!f) {
+            // A malformed RPC request frame is stream corruption, not a
+            // droppable audit frame. The child is now waiting on a response
+            // that will never come, so terminate the turn fail-closed (HOR-395:
+            // runtime validation must be bounded fail-closed, not a silent drop).
+            settle({ outcome: Outcome.FAILED, message: "invalid child RPC frame on fd 4" });
+            forceAbort();
+            return;
+          }
+          rpcRequests.push(f as ChildRpcRequest);
+        },
+        // Strict mode for fd 4 (HOR-395 bounded fail-closed): framing/JSON/
+        // truncation errors are NOT silently dropped here, because a dropped
+        // request frame would leave the child waiting forever on a response
+        // that never comes while its heartbeat stays healthy. Report every
+        // such error to the turn failure + abort path.
+        (reason) => {
+          settle({ outcome: Outcome.FAILED, message: `invalid child RPC frame on fd 4: ${reason}` });
           forceAbort();
-          return;
-        }
-        rpcRequests.push(f as ChildRpcRequest);
-      });
+        },
+      );
       (rpcReqStream as Readable).on("data", (chunk: Buffer) => rpcReader.feed(chunk));
       (rpcReqStream as Readable).on("end", () => rpcReader.end());
       (rpcReqStream as Readable).on("error", () => rpcReader.end());

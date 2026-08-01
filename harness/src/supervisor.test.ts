@@ -495,6 +495,58 @@ describe("Supervisor RPC dispatch (HOR-395)", () => {
     expect(toolResult?.errorMessage).toContain("not permitted");
     expect(invoked).toBe(false);
   }, 5_000);
+
+  it("rejects a duplicate active requestId fail-closed (bounded in-flight, unambiguous cancellation)", async () => {
+    let assignTurnSent = false;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, { kind: { case: "welcome", value: create(WelcomeSchema, { fencingGeneration: 1n }) } as never });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn("sess-a");
+            }
+          }
+        },
+      });
+    });
+    // Two toolCalls with the SAME requestId; the first is kept in-flight by a
+    // gateway whose invokeTool never resolves, so the second must be rejected
+    // as a duplicate instead of launching a second upstream call.
+    const q = new Q<ChildEvent>();
+    q.close();
+    const rpcQ = new Q<import("./supervisor.js").ChildRpcRequest>();
+    rpcQ.push({ type: "toolCall", requestId: "dup", toolCallId: "tc-1", toolName: "graph.read", toolVersionDigest: "sha256:xyz", argumentsJson: "{}", idempotencyKey: "tc-1" });
+    rpcQ.push({ type: "toolCall", requestId: "dup", toolCallId: "tc-2", toolName: "graph.read", toolVersionDigest: "sha256:xyz", argumentsJson: "{}", idempotencyKey: "tc-2" });
+    rpcQ.close();
+    const sent: unknown[] = [];
+    const child: Child & { sent: unknown[] } = { abort: () => {}, events: q, rpcRequests: rpcQ, rpcSend: (f) => sent.push(f), result: new Promise<ChildResult>(() => {}), sent } as Child & { sent: unknown[] };
+    let invokeCount = 0;
+    const sup = new Supervisor({
+      cfg: makeCfg(sandboxParent, walDir),
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: () => child,
+      probes,
+      transport: () => transport,
+      gatewayClient: {
+        discover: async () => [{ name: "graph.read", version: "1", digest: "sha256:xyz", description: "", inputSchema: {}, effectClass: "read_only" as const }],
+        invokeTool: async () => { invokeCount += 1; return new Promise(() => {}); }, // never resolves
+        cancelInvocation: async () => ({ state: 0 }),
+        resetTransport: () => {},
+      },
+      modelStream: fakeModelStream(),
+    });
+    const runP = sup.run();
+    await new Promise((r) => setTimeout(r, 200));
+    await sup.drain();
+    await runP.catch(() => {});
+    const dupResult = sent.find((f) => (f as { type?: string; errorMessage?: string }).type === "toolResult" && (f as { errorMessage?: string }).errorMessage?.includes("duplicate")) as { isError: boolean; errorMessage?: string } | undefined;
+    expect(dupResult).toBeDefined();
+    expect(dupResult?.isError).toBe(true);
+    // Only the first request launched an upstream call; the duplicate did not.
+    expect(invokeCount).toBe(1);
+  }, 5_000);
 });
 /** A no-op model stream (tests that don't exercise model calls). */
 function fakeModelStream(): typeof import("./model-bridge.js").streamModel {

@@ -73,6 +73,27 @@ describe("OpenAIStreamAccumulator", () => {
     );
   });
 
+  it("preserves assigned model metadata on the terminal done/error message", () => {
+    const acc = new OpenAIStreamAccumulator("m1", "iterabase-inference");
+    feedAll(acc, [JSON.stringify({ choices: [{ delta: { content: "hi" } }] }), JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })]);
+    const done = acc.finish("ok");
+    expect(done.type).toBe("done");
+    if (done.type === "done") {
+      expect(done.message.model).toBe("m1");
+      expect(done.message.provider).toBe("iterabase-inference");
+    }
+    // Error terminal must also carry the assigned model (it replaces the
+    // partial in pi's agent loop).
+    const acc2 = new OpenAIStreamAccumulator("m2", "iterabase-inference");
+    feedAll(acc2, [JSON.stringify({ choices: [{ delta: { content: "x" } }] })]);
+    const err = acc2.finish("error", "upstream 500");
+    expect(err.type).toBe("error");
+    if (err.type === "error") {
+      expect(err.error.model).toBe("m2");
+      expect(err.error.provider).toBe("iterabase-inference");
+    }
+  });
+
   it("finishes as an error when the stream ends without a terminal signal (truncation)", () => {
     const acc = new OpenAIStreamAccumulator();
     feedAll(acc, [JSON.stringify({ choices: [{ delta: { content: "partial" } }] })]);
@@ -80,6 +101,18 @@ describe("OpenAIStreamAccumulator", () => {
     const ev = acc.finish("ok");
     expect(ev.type).toBe("error");
     expect(ev.type === "error" && ev.error.errorMessage).toMatch(/terminal/);
+  });
+
+  it("latches a malformed payload as a protocol error even if a later terminal arrives", () => {
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { content: "hi" } }] }),
+      "not-json",
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/malformed/);
   });
 });
 
@@ -126,5 +159,52 @@ describe("buildOpenAIRequestBody", () => {
     expect(Array.isArray(content)).toBe(true);
     expect(content[0]).toEqual({ type: "text", text: "what is this?" });
     expect(content[1]).toEqual({ type: "image_url", image_url: { url: "data:image/png;base64,AAABBB==" } });
+  });
+
+  it("preserves tool-result image blocks as a follow-up user message (pinned-provider semantics)", () => {
+    const body = buildOpenAIRequestBody(
+      "m1",
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "tc-1",
+            toolName: "screenshot",
+            content: [
+              { type: "text", text: "captured" },
+              { type: "image", data: "QkFTRTY0==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+      undefined,
+    ) as Record<string, unknown>;
+    const messages = body.messages as { role: string; content: unknown; tool_call_id?: string }[];
+    // The tool message carries the text.
+    const toolMsg = messages.find((m) => m.role === "tool");
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg?.tool_call_id).toBe("tc-1");
+    expect(toolMsg?.content).toBe("captured");
+    // A follow-up user message carries the image as an image_url data URI.
+    const userMsg = messages.find((m) => m.role === "user");
+    expect(userMsg).toBeDefined();
+    const parts = userMsg?.content as { type: string; text?: string; image_url?: { url: string } }[];
+    expect(parts[0]).toEqual({ type: "text", text: "Attached image(s) from tool result:" });
+    expect(parts[1]).toEqual({ type: "image_url", image_url: { url: "data:image/png;base64,QkFTRTY0==" } });
+  });
+
+  it("uses an image placeholder when a tool result has only images", () => {
+    const body = buildOpenAIRequestBody(
+      "m1",
+      {
+        messages: [
+          { role: "toolResult", toolCallId: "tc-1", toolName: "snap", content: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
+        ],
+      },
+      undefined,
+    ) as Record<string, unknown>;
+    const messages = body.messages as { role: string; content: unknown }[];
+    const toolMsg = messages.find((m) => m.role === "tool");
+    expect(toolMsg?.content).toBe("(see attached image)");
   });
 });

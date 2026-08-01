@@ -364,7 +364,6 @@ export class Supervisor {
    */
   private async dispatchChildRpc(child: Child, at: AssignTurn, descriptors: GatewayToolDescriptor[]): Promise<void> {
     const scope = { turnId: at.turnId, runId: at.runId };
-    const controllers = new Map<string, AbortController>();
     const assignedModel = at.model?.id ?? "";
     // The effective gateway tools discovered for this turn (ARCH-006). The
     // supervisor rejects a toolCall whose name is not in this set BEFORE
@@ -373,10 +372,15 @@ export class Supervisor {
     // re-validates scope + version pin upstream.
     const discovered = new Map<string, GatewayToolDescriptor>();
     for (const d of descriptors) discovered.set(d.name, d);
-    // Bounded in-flight RPC work (HOR-395): a runaway child cannot open an
-    // unbounded number of concurrent upstream model/tool calls. Overflow is
-    // fail-closed — the request gets an error terminal instead of queuing.
-    const inflight = new Set<string>();
+    // Bounded in-flight RPC work (HOR-395): a runaway/compromised child cannot
+    // open an unbounded number of concurrent upstream model/tool calls. The cap
+    // counts every launched operation independently of the child-controlled
+    // `requestId` (a duplicate id cannot shrink the count to bypass the cap).
+    // Duplicate active ids are rejected fail-closed so cancellation correlation
+    // stays unambiguous (`controllers.set` never overwrites a live controller).
+    // Overflow is fail-closed — the request gets an error terminal.
+    const controllers = new Map<string, AbortController>();
+    let inflight = 0;
     const MAX_INFLIGHT_RPC = 8;
 
     for await (const req of child.rpcRequests) {
@@ -386,7 +390,18 @@ export class Supervisor {
         if (ac) ac.abort();
         continue;
       }
-      if (inflight.size >= MAX_INFLIGHT_RPC) {
+      // Duplicate active requestId = protocol violation (the child reused an id
+      // that is still in flight). Reject fail-closed without launching, so the
+      // in-flight cap counts real work and cancellation stays unambiguous.
+      if (controllers.has(req.requestId)) {
+        if (req.type === "modelRequest") {
+          child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: "duplicate request id" });
+        } else {
+          child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "duplicate request id" });
+        }
+        continue;
+      }
+      if (inflight >= MAX_INFLIGHT_RPC) {
         // Fail-closed overflow: bound queued/in-flight work.
         if (req.type === "modelRequest") {
           child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: "too many in-flight model/tool requests" });
@@ -395,8 +410,8 @@ export class Supervisor {
         }
         continue;
       }
-      inflight.add(req.requestId);
-      const done = (): void => { inflight.delete(req.requestId); };
+      inflight += 1;
+      const done = (): void => { inflight -= 1; };
       if (req.type === "modelRequest") {
         void this.handleModelRequest(child, req, assignedModel, at, controllers, done);
         continue;

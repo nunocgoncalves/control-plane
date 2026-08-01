@@ -311,20 +311,34 @@ export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null
 
 /**
  * A buffered length-prefixed frame reader. Feed raw bytes via `feed()`; complete
- * frames are pushed to `onFrame`. Resyncs past a too-large/corrupt length
- * prefix by dropping it (the next 4 bytes are re-read as a fresh prefix).
+ * frames are pushed to `onFrame`. By default it is lenient: a too-large/corrupt
+ * length prefix is dropped (resync), malformed JSON is dropped, and a trailing
+ * partial frame at `end()` is discarded. For strict channels (e.g. the fd-4
+ * RPC channel, where a dropped request frame would leave the child waiting
+ * forever), pass `onError`: every framing/JSON/truncation error is reported to
+ * it and the reader stops, so the caller can fail closed (HOR-395).
  */
 export class FrameReader {
   private buf: Buffer = Buffer.alloc(0);
-  constructor(private readonly onFrame: (json: unknown) => void) {}
+  private stopped = false;
+  constructor(
+    private readonly onFrame: (json: unknown) => void,
+    private readonly onError?: (reason: string) => void,
+  ) {}
 
   feed(chunk: Buffer | string): void {
+    if (this.stopped) return;
     this.buf = Buffer.concat([this.buf, typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk]);
     // Decode as many complete frames as are available.
     while (this.buf.length >= 4) {
       const len = this.buf.readUInt32BE(0);
       if (len > MAX_FRAME_BYTES) {
-        // Corrupt length prefix — drop it and continue (resync).
+        // Corrupt length prefix.
+        if (this.onError) {
+          this.fail(`frame length prefix ${len} exceeds MAX_FRAME_BYTES`);
+          return;
+        }
+        // Lenient: drop the prefix and resync.
         this.buf = this.buf.subarray(4);
         continue;
       }
@@ -335,13 +349,31 @@ export class FrameReader {
       try {
         parsed = JSON.parse(body.toString("utf8"));
       } catch {
-        continue; // malformed JSON — drop the frame
+        // Malformed JSON body.
+        if (this.onError) {
+          this.fail("frame body is not valid JSON");
+          return;
+        }
+        continue; // lenient: drop the frame
       }
       this.onFrame(parsed);
     }
   }
 
   end(): void {
+    if (this.stopped) return;
+    if (this.buf.length > 0 && this.onError) {
+      // A trailing partial frame is truncation on a strict channel.
+      this.fail("truncated frame at end of stream");
+      return;
+    }
     this.buf = Buffer.alloc(0);
+  }
+
+  /** Report a framing/JSON/truncation error on a strict channel and stop. */
+  private fail(reason: string): void {
+    this.stopped = true;
+    this.buf = Buffer.alloc(0);
+    this.onError?.(reason);
   }
 }

@@ -72,3 +72,48 @@ describe("RPC frame round-trip via FrameReader", () => {
     expect(parseChildRpcFrame(got)?.type).toBe("modelRequest");
   });
 });
+
+describe("FrameReader strict mode (fd-4 fail-closed, HOR-395)", () => {
+  it("reports malformed JSON to onError and stops (does not silently drop)", () => {
+    const errors: string[] = [];
+    const frames: unknown[] = [];
+    const r = new FrameReader((raw) => frames.push(raw), (reason) => errors.push(reason));
+    // A valid frame followed by a frame whose body is not valid JSON.
+    r.feed(encodeFrame({ type: "cancel", requestId: "r1" }));
+    const bad = Buffer.concat([Buffer.from([0, 0, 0, 4]), Buffer.from("nope", "utf8")]);
+    r.feed(bad);
+    expect(frames).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/JSON/);
+  });
+
+  it("reports an oversized length prefix to onError", () => {
+    const errors: string[] = [];
+    const r = new FrameReader(() => {}, (reason) => errors.push(reason));
+    const huge = Buffer.alloc(4);
+    huge.writeUInt32BE(0xffffffff, 0);
+    r.feed(huge);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/MAX_FRAME_BYTES/);
+  });
+
+  it("reports a truncated trailing frame on end()", () => {
+    const errors: string[] = [];
+    const r = new FrameReader(() => {}, (reason) => errors.push(reason));
+    // A length prefix announcing 10 bytes, but only 3 arrive before end.
+    const partial = Buffer.concat([Buffer.from([0, 0, 0, 10]), Buffer.from("abc", "utf8")]);
+    r.feed(partial);
+    expect(errors).toHaveLength(0);
+    r.end();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/truncated/);
+  });
+
+  it("stays lenient (no onError): drops malformed JSON without failing", () => {
+    const frames: unknown[] = [];
+    const r = new FrameReader((raw) => frames.push(raw));
+    r.feed(Buffer.concat([Buffer.from([0, 0, 0, 4]), Buffer.from("nope", "utf8")]));
+    r.feed(encodeFrame({ type: "cancel", requestId: "r1" }));
+    expect(frames).toHaveLength(1);
+  });
+});
