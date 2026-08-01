@@ -114,6 +114,45 @@ describe("OpenAIStreamAccumulator", () => {
     expect(ev.type).toBe("error");
     expect(ev.type === "error" && ev.error.errorMessage).toMatch(/malformed/);
   });
+
+  it("latches a wrong-shaped chunk (non-string content) as a protocol error even if a later terminal arrives", () => {
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { content: "hi" } }] }),
+      // Syntactically valid JSON, but `content` is a number, not a string.
+      JSON.stringify({ choices: [{ delta: { content: 42 } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/content is not a string/i);
+  });
+
+  it("latches a wrong-shaped tool_call (missing/non-numeric index) as a protocol error", () => {
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: "call_1", type: "function", function: { name: "t", arguments: "" } }] } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ]);
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/index/i);
+  });
+
+  it("accepts an empty/usage-only chunk without latching (legitimate keepalive)", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const events = feedAll(acc, [
+      JSON.stringify({ choices: [{ delta: { content: "hi" } }] }),
+      JSON.stringify({}), // empty keepalive — valid, no events, no latch
+      JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }), // usage-only — valid
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+    ]);
+    // No protocol error; finish succeeds.
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("done");
+    // The empty/usage-only chunks produced no content events beyond the one text delta.
+    expect(events.filter((e) => (e as { type: string }).type === "text_delta")).toHaveLength(1);
+  });
 });
 
 describe("buildOpenAIRequestBody", () => {

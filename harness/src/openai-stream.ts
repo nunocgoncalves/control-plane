@@ -137,11 +137,20 @@ export class OpenAIStreamAccumulator {
     }
     let chunk: OpenAIChunk;
     try {
-      chunk = JSON.parse(data) as OpenAIChunk;
-    } catch {
-      // Malformed SSE payload — latch a protocol error. A later valid terminal
-      // must NOT turn a corrupt stream into a successful `done` (HOR-395).
-      this.protocolError = "malformed OpenAI SSE payload";
+      // Runtime-shape-validate the parsed payload (HOR-395: upstream behavior
+      // must not corrupt protocol channels). Only `JSON.parse` failures used
+      // to latch a protocol error; a syntactically valid but wrong-shaped
+      // payload (e.g. `{"choices":[{"delta":{"content":42}}]}`) was accepted
+      // and emitted a non-string delta, while `{}`/usage-only chunks were
+      // silently dropped. Now every field type is validated; a shape violation
+      // latches `protocolError` so `finish("ok")` fails even if a later valid
+      // terminal arrives. An empty or usage-only chunk validates trivially and
+      // produces no events (legitimate OpenAI keepalive/usage frame).
+      chunk = validateOpenAIChunk(JSON.parse(data));
+    } catch (err) {
+      // Malformed/invalid SSE payload — latch a protocol error. A later valid
+      // terminal must NOT turn a corrupt stream into a successful `done` (HOR-395).
+      this.protocolError = err instanceof Error ? `malformed OpenAI SSE payload: ${err.message}` : "malformed OpenAI SSE payload";
       return [];
     }
     const events: AssistantMessageEvent[] = [];
@@ -281,6 +290,68 @@ function mapStop(fr: string): StopReason {
     default:
       return "stop";
   }
+}
+
+/**
+ * Runtime-shape-validate a parsed OpenAI SSE payload. Returns the validated
+ * chunk, or throws on a shape violation (the caller latches a protocol error
+ * so `finish("ok")` fails — HOR-395: upstream corruption must not be reported
+ * as success). An empty object or a usage-only chunk validates trivially and
+ * yields no events (a legitimate OpenAI keepalive/usage frame).
+ */
+function validateOpenAIChunk(raw: unknown): OpenAIChunk {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("OpenAI SSE payload is not an object");
+  }
+  const c = raw as Record<string, unknown>;
+  if (c.usage !== undefined) {
+    if (typeof c.usage !== "object" || c.usage === null || Array.isArray(c.usage)) {
+      throw new Error("OpenAI usage is not an object");
+    }
+    const u = c.usage as Record<string, unknown>;
+    if (u.prompt_tokens !== undefined && typeof u.prompt_tokens !== "number") throw new Error("usage.prompt_tokens is not a number");
+    if (u.completion_tokens !== undefined && typeof u.completion_tokens !== "number") throw new Error("usage.completion_tokens is not a number");
+    if (u.prompt_tokens_details !== undefined) {
+      if (typeof u.prompt_tokens_details !== "object" || u.prompt_tokens_details === null || Array.isArray(u.prompt_tokens_details)) {
+        throw new Error("usage.prompt_tokens_details is not an object");
+      }
+      const pd = u.prompt_tokens_details as Record<string, unknown>;
+      if (pd.cached_tokens !== undefined && typeof pd.cached_tokens !== "number") throw new Error("prompt_tokens_details.cached_tokens is not a number");
+    }
+  }
+  if (c.choices !== undefined) {
+    if (!Array.isArray(c.choices)) throw new Error("OpenAI choices is not an array");
+    for (const choice of c.choices) {
+      if (!choice || typeof choice !== "object" || Array.isArray(choice)) throw new Error("OpenAI choice is not an object");
+      const ch = choice as Record<string, unknown>;
+      if (ch.finish_reason !== undefined && ch.finish_reason !== null && typeof ch.finish_reason !== "string") {
+        throw new Error("OpenAI finish_reason is not a string");
+      }
+      if (ch.delta !== undefined) {
+        if (typeof ch.delta !== "object" || ch.delta === null || Array.isArray(ch.delta)) throw new Error("OpenAI delta is not an object");
+        const d = ch.delta as Record<string, unknown>;
+        if (d.content !== undefined && typeof d.content !== "string") throw new Error("delta.content is not a string");
+        if (d.reasoning_content !== undefined && typeof d.reasoning_content !== "string") throw new Error("delta.reasoning_content is not a string");
+        if (d.tool_calls !== undefined) {
+          if (!Array.isArray(d.tool_calls)) throw new Error("delta.tool_calls is not an array");
+          for (const tc of d.tool_calls) {
+            if (!tc || typeof tc !== "object" || Array.isArray(tc)) throw new Error("tool_call is not an object");
+            const t = tc as Record<string, unknown>;
+            if (typeof t.index !== "number") throw new Error("tool_call.index is not a number");
+            if (t.id !== undefined && typeof t.id !== "string") throw new Error("tool_call.id is not a string");
+            if (t.type !== undefined && typeof t.type !== "string") throw new Error("tool_call.type is not a string");
+            if (t.function !== undefined) {
+              if (typeof t.function !== "object" || t.function === null || Array.isArray(t.function)) throw new Error("tool_call.function is not an object");
+              const f = t.function as Record<string, unknown>;
+              if (f.name !== undefined && typeof f.name !== "string") throw new Error("tool_call.function.name is not a string");
+              if (f.arguments !== undefined && typeof f.arguments !== "string") throw new Error("tool_call.function.arguments is not a string");
+            }
+          }
+        }
+      }
+    }
+  }
+  return raw as OpenAIChunk;
 }
 
 function safeParseArgs(args: string): Record<string, unknown> {

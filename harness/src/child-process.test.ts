@@ -122,4 +122,28 @@ describe("createChildFactory", () => {
     const result = await child.result;
     expect(result.outcome).toBe(Outcome.ABORTED);
   });
+
+  it("fails the turn closed when the fd-5 response backlog overflows (HOR-395 bounded buffering)", async () => {
+    // A child that hangs and never reads fd 5: supervisor response frames
+    // back up. A runaway dispatch loop that ignores `rpcSend`'s `false` would
+    // let Node buffer an unbounded number of frames in supervisor memory; the
+    // hard aggregate backlog cap must fail the turn closed instead.
+    const noReadScript = join(dir, "noread.cjs");
+    writeFileSync(noReadScript, 'setInterval(()=>{}, 1000);\n');
+    const factory = createChildFactory(cfg(), noReadScript, launchStub);
+    const sandbox = { root: join(dir, "sess-a"), home: "", tmp: "", session: "", workspace: "" };
+    const child = factory(assignment(), sandbox as never, "");
+    // Flood fd 5 with response frames as a compromised/fast child would force
+    // the dispatcher to do. The child never drains, so writes backpressure.
+    for (let i = 0; i < 5000; i++) {
+      child.rpcSend({ type: "modelEnd", requestId: `r${i}`, status: "error", errorMessage: "x" });
+    }
+    const result = await Promise.race([
+      child.result,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000)),
+    ]);
+    expect(result.outcome).toBe(Outcome.FAILED);
+    expect(result.message).toMatch(/backlog|not draining/i);
+    child.abort();
+  }, 5000);
 });

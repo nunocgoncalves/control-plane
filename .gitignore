@@ -31,3 +31,6 @@ go.work
 
 # Stray Go build output (go build ./harness/testserver/ without -o)
 /testserver
+
+# vitest cache
+node_modules/.vite/

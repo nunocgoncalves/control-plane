@@ -121,15 +121,51 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
     // upstream reader and resume on `drain` via rpcOnDrain, so a slow child
     // cannot grow an unbounded queue in supervisor memory (HOR-395 bounded
     // buffering/backpressure).
+    //
+    // Hard aggregate response-queue bound (HOR-395): the model-chunk path
+    // self-pauses on `false`, but the RPC dispatcher's control/terminal
+    // responses (duplicate-id, overflow, toolResult, modelEnd) used to ignore
+    // the boolean and `continue`, so a fast/compromised child that stops
+    // reading fd 5 could send unlimited requests and make Node queue an
+    // unbounded number of response frames despite the in-flight cap. We count
+    // every write that returns `false` (a frame buffered in supervisor memory
+    // beyond the pipe's high-water mark) and reset the count on `drain`; once
+    // the backlog exceeds the cap, the turn fails closed (FAILED + abort) —
+    // limiting active upstream calls alone does not bound supervisor memory.
     const rpcRespStream = stdio[5];
+    let rpcBacklog = 0; // frames written while fd 5 is backpressured, not yet drained
+    let rpcOverflowed = false;
+    const MAX_RPC_BACKLOG = 64; // hard aggregate response-queue bound (HOR-395)
     const rpcSend = (frame: unknown): boolean => {
+      if (rpcOverflowed) return false; // already failing closed — drop further writes
       try {
-        if (rpcRespStream) return writeFrame(rpcRespStream as Writable, frame);
+        if (rpcRespStream) {
+          const ok = writeFrame(rpcRespStream as Writable, frame);
+          if (!ok) {
+            rpcBacklog += 1;
+            if (rpcBacklog >= MAX_RPC_BACKLOG) {
+              // fd 5 is not draining — bound supervisor memory by failing the
+              // turn closed instead of queueing more response frames.
+              rpcOverflowed = true;
+              settle({ outcome: Outcome.FAILED, message: "fd 5 response backlog overflow (child not draining)" });
+              forceAbort();
+            }
+          }
+          return ok;
+        }
       } catch {
         /* fd closed (child gone) — the exit handler classifies the outcome */
       }
       return true;
     };
+    // Shared drain listener: when fd 5 drains, the backpressured backlog has
+    // been flushed (the buffer dropped below the high-water mark). Swallow
+    // async write errors (e.g. EPIPE when the child exits) — the exit handler
+    // classifies the outcome; fd 5 is best-effort once the turn is settling.
+    if (rpcRespStream) {
+      (rpcRespStream as Writable).on("drain", () => { rpcBacklog = 0; });
+      (rpcRespStream as Writable).on("error", () => { /* child gone — exit handler classifies */ });
+    }
     const rpcOnDrain = (listener: () => void): (() => void) => {
       const s = rpcRespStream as Writable | null;
       if (!s) return () => {};
