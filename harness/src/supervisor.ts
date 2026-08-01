@@ -288,6 +288,7 @@ export class Supervisor {
     try {
       const sandbox = this.resolveSandbox(at);
       this.validatePoolScope(at);
+      this.intersectPoolWorkspaceTools(at);
       // Durable execution boundary — observed before child lifecycle events.
       this.sendChildEvent({
         case: "executionStarted",
@@ -506,6 +507,17 @@ export class Supervisor {
     if (pool && at.scopeIdentityId !== pool) {
       throw new SandboxError(`scope identity ${at.scopeIdentityId ?? "(none)"} != pool scope ${pool}`);
     }
+  }
+
+  /** Interim residual (HOR-395, pending HOR-245): intersect the per-turn
+   * workspace-tool request with the deploy-time AgentPool maximum so a turn
+   * cannot widen pool permissions (ARCH-016/DEC-036/DEC-038). Deny-by-default —
+   * an unset/false pool maximum exposes no local tools regardless of the
+   * assignment. The authoritative AgentPool-owned maximum is tracked as a
+   * HOR-245 acceptance criterion; until then the supervisor config mirrors it. */
+  private intersectPoolWorkspaceTools(at: AssignTurn): void {
+    const poolMax = this.d.cfg.poolWorkspaceTools ?? false;
+    if (at.workspaceTools && !poolMax) at.workspaceTools = false;
   }
 
   /** Append the durable event to the WAL+outbox, then send. Marks the final outcome. */

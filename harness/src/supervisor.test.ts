@@ -195,6 +195,54 @@ describe("Supervisor turn loop", () => {
     expect(outcomes[0]?.outcome).toBe(Outcome.COMPLETED);
   });
 
+  it("intersects workspace_tools with the pool maximum (ARCH-016 interim residual)", async () => {
+    let assignTurnSent = false;
+    let captured: AssignTurn | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, {
+            kind: {
+              case: "welcome",
+              value: create(WelcomeSchema, { fencingGeneration: 1n }) as never,
+            } as never,
+          });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn(sandboxId);
+            } else if (m.kind.case === "turnEvent" && m.kind.value.kind.case === "workerOutcome") {
+              yield create(ControlMessageSchema, {
+                kind: {
+                  case: "eventAck",
+                  value: create(EventAckSchema, { turnId: m.kind.value.turnId, throughSequence: m.kind.value.sequence }),
+                },
+              });
+            }
+          }
+        },
+      });
+    });
+
+    // poolWorkspaceTools unset → deny-by-default; assignment requests true.
+    const cfg = makeCfg(sandboxParent, walDir);
+    const sup = new Supervisor({
+      cfg,
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: (at) => { captured = at; return fakeChild([], Outcome.COMPLETED); },
+      probes,
+      transport: () => transport,
+      gatewayClient: fakeGatewayClient(),
+      modelStream: fakeModelStream(),
+      onCreditAdvertised: () => {},
+    });
+    const runP = sup.run();
+    await new Promise<void>((r) => setTimeout(r, 150));
+    await sup.drain();
+    await runP;
+    expect(captured?.workspaceTools).toBe(false); // widened request denied
+  });
+
   it("emits FAILED when the sandbox is missing (not provisioned)", async () => {
     const received: WorkerMessage[] = [];
     let assignTurnSent = false;

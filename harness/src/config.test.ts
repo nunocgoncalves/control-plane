@@ -60,6 +60,13 @@ describe("loadConfig (infra-only boot config)", () => {
     expect(cfg.poolScopeIdentityId).toBe("scope-wf-123");
   });
 
+  it("accepts an optional poolWorkspaceTools maximum (ARCH-016 interim residual)", () => {
+    const cfg = loadConfig(writeCfg(`${VALID}poolWorkspaceTools: true\n`));
+    expect(cfg.poolWorkspaceTools).toBe(true);
+    const denied = loadConfig(writeCfg(VALID));
+    expect(denied.poolWorkspaceTools).toBeUndefined(); // deny-by-default
+  });
+
   it("does NOT depend on persona/model/session/workspaceTools (they are per-turn, via AssignTurn)", () => {
     // A config with only infra (no persona/model/session) loads fine — those
     // are no longer boot dependencies.

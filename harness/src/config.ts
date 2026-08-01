@@ -26,6 +26,13 @@ export interface HarnessConfig {
   };
   /** Optional pool scope identity (defense-in-depth: validate AssignTurn's scope_identity_id). */
   poolScopeIdentityId?: string;
+  /** Interim residual (HOR-395, pending HOR-245): the deploy-time AgentPool
+   * maximum for the fixed workspace-tool set. The supervisor intersects this
+   * with AssignTurn.workspace_tools — a turn cannot widen pool permissions
+   * (ARCH-016/DEC-036/DEC-038). Deny-by-default: unset/false exposes no local
+   * tools regardless of the assignment. The authoritative AgentPool-owned
+   * maximum is tracked as a HOR-245 acceptance criterion. */
+  poolWorkspaceTools?: boolean;
   /** mTLS (certs provisioned by HOR-245; re-read each reconnect for rotation). */
   tls: { cert: string; key: string; ca: string };
   /** Sandbox mount root (the shared RWX PVC; per-sandbox-id subdirs). */
@@ -97,6 +104,7 @@ export function loadConfig(
     poolId: str(raw, "worker.poolId", "worker.poolId"),
   };
   const poolScopeIdentityId = optStr(raw, "poolScopeIdentityId");
+  const poolWorkspaceTools = optBool(raw, "poolWorkspaceTools");
   const tls = {
     cert: str(raw, "tls.cert", "tls.cert"),
     key: str(raw, "tls.key", "tls.key"),
@@ -117,6 +125,7 @@ export function loadConfig(
     controlPlane,
     worker,
     ...(poolScopeIdentityId !== undefined ? { poolScopeIdentityId } : {}),
+    ...(poolWorkspaceTools !== undefined ? { poolWorkspaceTools } : {}),
     tls,
     sandboxRoot,
     piDirs: arr(raw, "piDirs") ?? DEFAULTS.piDirs,
@@ -184,6 +193,12 @@ function optStr(raw: Record<string, unknown>, dotted: string): string | undefine
   const v = dig(raw, dotted);
   if (v === undefined || v === null || v === "") return undefined;
   if (typeof v !== "string") throw new ConfigError(`config '${dotted}' must be a string`);
+  return v;
+}
+function optBool(raw: Record<string, unknown>, dotted: string): boolean | undefined {
+  const v = dig(raw, dotted);
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "boolean") throw new ConfigError(`config '${dotted}' must be a boolean`);
   return v;
 }
 function arr(raw: Record<string, unknown>, dotted: string): string[] | undefined {
