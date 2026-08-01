@@ -73,6 +73,8 @@ function usageFrom(u: OpenAIUsage | undefined): Usage {
  * event. The running `partial` mirrors pi-ai's provider pattern.
  */
 export class OpenAIStreamAccumulator {
+  private readonly modelId: string;
+  private readonly provider: string;
   private content: AssistantMessage["content"] = [];
   private textIndex = -1;
   private textBuf = "";
@@ -82,6 +84,20 @@ export class OpenAIStreamAccumulator {
   private nextContentIndex = 0;
   private usage: Usage = emptyUsage();
   private stopReason: StopReason = "stop";
+  /** Emitted the required `start` event yet? pi's agent loop keeps
+   * partialMessage=null until `start` and otherwise drops every
+   * text_delta/thinking_delta/tool-call update (see AssistantMessageEvent docs). */
+  private started = false;
+  /** Saw a valid OpenAI terminal (finish_reason or `[DONE]`)? A truncated or
+   * malformed HTTP-200 stream never reaches a terminal; without this guard it
+   * would be reported as a successful `done` (HOR-395: upstream behavior must
+   * not corrupt protocol channels). */
+  private sawTerminal = false;
+
+  constructor(modelId = "", provider = "iterabase-inference") {
+    this.modelId = modelId;
+    this.provider = provider;
+  }
 
   /** The running partial message (passed with each streamed event). */
   private partial(): AssistantMessage {
@@ -89,12 +105,19 @@ export class OpenAIStreamAccumulator {
       role: "assistant",
       content: this.content,
       api: "openai-completions" as never,
-      provider: "iterabase-inference" as never,
-      model: "",
+      provider: this.provider as never,
+      model: this.modelId,
       usage: this.usage,
       stopReason: this.stopReason,
       timestamp: Date.now(),
     };
+  }
+
+  /** Emit the `start` event once, before any content event. */
+  private begin(): AssistantMessageEvent[] {
+    if (this.started) return [];
+    this.started = true;
+    return [{ type: "start", partial: this.partial() }];
   }
 
   /**
@@ -103,16 +126,24 @@ export class OpenAIStreamAccumulator {
    * no event — the terminal `done`/`error` is emitted by `finish()`.
    */
   feed(data: string): AssistantMessageEvent[] {
-    if (data === "[DONE]") return [];
+    if (data === "[DONE]") {
+      this.sawTerminal = true;
+      return [];
+    }
     let chunk: OpenAIChunk;
     try {
       chunk = JSON.parse(data) as OpenAIChunk;
     } catch {
-      return []; // malformed chunk — drop (modelEnd carries terminal errors)
+      return []; // malformed chunk — drop; a missing terminal is caught by finish()
     }
     const events: AssistantMessageEvent[] = [];
     const choice = chunk.choices?.[0];
     const delta = choice?.delta;
+    // Any processable payload means the stream has started — emit `start`
+    // before the first content event (required by pi's agent loop).
+    if (delta?.content || delta?.reasoning_content || delta?.tool_calls || choice?.finish_reason) {
+      events.push(...this.begin());
+    }
 
     if (delta?.content) {
       if (this.textIndex < 0) {
@@ -157,6 +188,7 @@ export class OpenAIStreamAccumulator {
       }
     }
     if (choice?.finish_reason) {
+      this.sawTerminal = true;
       this.stopReason = mapStop(choice.finish_reason);
       // Close open content blocks.
       if (this.textIndex >= 0) events.push({ type: "text_end", contentIndex: this.textIndex, content: this.textBuf, partial: this.partial() });
@@ -184,6 +216,12 @@ export class OpenAIStreamAccumulator {
     }
     if (status === "error") {
       const msg = this.message("error", errorMessage);
+      return { type: "error", reason: "error", error: msg };
+    }
+    // A successful terminal requires a valid OpenAI finish_reason/[DONE]. A
+    // truncated or malformed HTTP-200 stream (no terminal) is a model failure.
+    if (!this.sawTerminal) {
+      const msg = this.message("error", errorMessage ?? "model stream ended without a terminal signal");
       return { type: "error", reason: "error", error: msg };
     }
     const reason = this.stopReason;
@@ -245,7 +283,7 @@ export function buildOpenAIRequestBody(
   if (context.systemPrompt) messages.push({ role: "system", content: context.systemPrompt });
   for (const m of context.messages) {
     if (m.role === "user") {
-      messages.push({ role: "user", content: piContentToText(m.content) });
+      messages.push({ role: "user", content: piUserContentToOpenAI(m.content) });
     } else if (m.role === "assistant") {
       const content = m.content
         .filter((c) => c.type === "text" || c.type === "thinking")
@@ -290,7 +328,24 @@ export function buildOpenAIRequestBody(
   return body;
 }
 
-function piContentToText(content: string | { type: string; text?: string }[]): string {
+/** Serialize a pi user message's content to OpenAI content parts. Text blocks
+ * become `{type:"text"}` parts; image blocks become `{type:"image_url"}` data
+ * URIs (the former OpenAI provider serialized them this way). HOR-395 keeps
+ * existing Work/per-turn image behavior intact. */
+function piUserContentToOpenAI(
+  content: string | { type: string; text?: string; data?: string; mimeType?: string }[],
+): string | unknown[] {
   if (typeof content === "string") return content;
-  return content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
+  const parts: unknown[] = [];
+  let textOnly = true;
+  for (const c of content) {
+    if (c.type === "text") {
+      parts.push({ type: "text", text: c.text ?? "" });
+    } else if (c.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string") {
+      textOnly = false;
+      parts.push({ type: "image_url", image_url: { url: `data:${c.mimeType};base64,${c.data}` } });
+    }
+  }
+  // OpenAI accepts a plain string for text-only user messages.
+  return textOnly ? parts.map((p) => (p as { text: string }).text).join("") : parts;
 }

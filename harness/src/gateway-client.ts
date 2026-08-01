@@ -55,7 +55,7 @@ export function createGatewayTransport(cfg: HarnessConfig): Transport {
 
 export interface GatewayClient {
   /** Discover the effective gateway tools for an active turn (ARCH-006). */
-  discover(scope: AssignmentScope): Promise<GatewayToolDescriptor[]>;
+  discover(scope: AssignmentScope, signal?: AbortSignal): Promise<GatewayToolDescriptor[]>;
   /** Invoke a gateway tool (ARCH-014). Returns the committed result + state. */
   invokeTool(
     scope: AssignmentScope,
@@ -64,6 +64,9 @@ export interface GatewayClient {
   ): Promise<InvokeResponse>;
   /** Cancel an in-flight invocation (ARCH-014 — cannot undo an effect). */
   cancelInvocation(invocationId: string): Promise<CancelResponse>;
+  /** Drop the memoized mTLS transport so the next call re-reads the cert/key/CA
+   * files (certificate rotation). Called by the supervisor on reconnect. */
+  resetTransport(): void;
 }
 
 /** Build a GatewayClient over a lazy transport. */
@@ -73,9 +76,8 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
     if (!transport) transport = transportFactory();
     return transport;
   };
-
   return {
-    async discover(scope: AssignmentScope): Promise<GatewayToolDescriptor[]> {
+    async discover(scope: AssignmentScope, signal?: AbortSignal): Promise<GatewayToolDescriptor[]> {
       const client = createClient(GatewayService, getTransport());
       const req = {
         attemptId: scope.runId,
@@ -84,7 +86,7 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
       };
       let resp: DiscoverResponse;
       try {
-        resp = await client.discoverEffectiveTools(req);
+        resp = await client.discoverEffectiveTools(req, signal ? { signal } : undefined);
       } catch (err) {
         throw new GatewayClientError(`discover failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -122,6 +124,13 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
       } catch (err) {
         throw new GatewayClientError(`cancel ${invocationId} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+    },
+
+    resetTransport(): void {
+      // Drop the memoized transport so the next discover/invoke/cancel call
+      // rebuilds it from the current cert/key/CA files (rotation). The
+      // process-wide memo otherwise keeps stale credentials until restart.
+      transport = null;
     },
   };
 }

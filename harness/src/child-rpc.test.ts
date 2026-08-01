@@ -106,4 +106,29 @@ describe("ChildRpc", () => {
     const raced = await Promise.race([consuming.then(() => "done"), new Promise<"open">((r) => setTimeout(() => r("open"), 50))]);
     expect(raced).toBe("open");
   });
+
+  it("does not send a modelRequest for a pre-aborted signal (cancellation must propagate upstream)", async () => {
+    const { rpc, sent } = makeRpc();
+    const ac = new AbortController();
+    ac.abort();
+    const stream = rpc.streamModel({ model: "m1" }, ac.signal);
+    const events: { type: string; reason?: string }[] = [];
+    for await (const ev of stream) events.push(ev as { type: string; reason?: string });
+    // No fd-4 frame written (no modelRequest, no cancel race).
+    expect(sent).toHaveLength(0);
+    expect(events.some((e) => e.type === "error" && e.reason === "aborted")).toBe(true);
+  });
+
+  it("does not send a toolCall for a pre-aborted signal", async () => {
+    const { rpc, sent } = makeRpc();
+    const ac = new AbortController();
+    ac.abort();
+    const res = await rpc.invokeTool(
+      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: "{}" },
+      ac.signal,
+    );
+    expect(sent).toHaveLength(0);
+    expect(res.isError).toBe(true);
+    expect(res.errorMessage).toMatch(/aborted/);
+  });
 });

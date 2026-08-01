@@ -19,7 +19,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFrame, parseSupervisorFrame, type ChildFrame } from "./ipc.js";
-import { parseAssignment, captureShutdownErrors, type ExtensionErrorEmitter } from "./child.js";
+import { parseAssignment, captureShutdownErrors, createSession, type ExtensionErrorEmitter } from "./child.js";
+import { ChildRpc } from "./child-rpc.js";
 
 const HARNESS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_BIN = join(HARNESS_ROOT, "dist", "child.js");
@@ -248,5 +249,52 @@ describe("parseAssignment", () => {
     expect(parseAssignment({ turnId: "t" })).toBeUndefined();
     expect(parseAssignment({ ...assignmentJson(), model: { id: "m" } })).toBeUndefined();
     expect(parseAssignment({ ...assignmentJson(), workspaceTools: "yes" })).toBeUndefined();
+  });
+});
+
+describe("createSession credentialless custom provider (HOR-395)", { timeout: 30_000 }, () => {
+  // Regression: the custom provider previously supplied `models` without
+  // baseUrl/apiKey, which pi's validateProviderConfig rejects ("baseUrl is
+  // required when defining models"), so every real turn failed during session
+  // setup. The credentialless path registers streamSimple+api only and supplies
+  // the model directly — this test creates the real pi session/provider to
+  // prove registration succeeds.
+  it("creates a pi session without baseUrl/apiKey by registering streamSimple only", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "harness-session-"));
+    try {
+      const rpc = new ChildRpc({ write: () => {} }); // fd 4 unused during creation
+      const a = parseAssignment(assignmentJson())!;
+      const sessionDir = join(tmp, "session");
+      const runtime = await createSession(a, sessionDir, tmp, [], 1, rpc, []);
+      expect(runtime.session).toBeDefined();
+      // The assigned model is the one we constructed directly (no registry lookup).
+      expect(runtime.session.model?.id).toBe(a.model.id);
+      await runtime.dispose();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("registers gateway tool stubs in the agent allow-set even with workspaceTools=false (HOR-395/ARCH-006)", async () => {
+    // Regression: passing `noTools:"all"` (or only the four built-ins) made
+    // pi filter every gateway stub out of the registry, so gateway tools never
+    // reached the agent. The allow-set now includes gateway descriptor names.
+    const tmp = mkdtempSync(join(tmpdir(), "harness-session-"));
+    try {
+      const rpc = new ChildRpc({ write: () => {} });
+      const a = parseAssignment({ ...assignmentJson(), workspaceTools: false })!;
+      const descriptors = [
+        { name: "graph.read_mail", version: "1.0.0", digest: "sha256:abc", description: "read mail", inputSchema: { type: "object" }, effectClass: "read_only" as const },
+      ];
+      const sessionDir = join(tmp, "session");
+      const runtime = await createSession(a, sessionDir, tmp, [], 1, rpc, descriptors);
+      const active = runtime.session.getActiveToolNames();
+      expect(active).toContain("graph.read_mail");
+      // workspaceTools=false → no local bash/read/write/edit.
+      expect(active).not.toContain("bash");
+      await runtime.dispose();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

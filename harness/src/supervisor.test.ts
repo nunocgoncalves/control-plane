@@ -372,6 +372,7 @@ function fakeGatewayClient(): import("./gateway-client.js").GatewayClient {
     discover: async () => [],
     invokeTool: async () => ({ invocationId: "", state: 0, resultJson: new Uint8Array(), artifactOutputRefs: [], error: { code: "", message: "", retryability: 0, detailsJson: new Uint8Array() }, existingInvocationId: "" }),
     cancelInvocation: async () => ({ state: 0 }),
+    resetTransport: () => {},
   };
 }
 
@@ -431,6 +432,7 @@ describe("Supervisor RPC dispatch (HOR-395)", () => {
         discover: async () => [], // empty effective set → tool is unassigned
         invokeTool: async () => { invoked = true; return { invocationId: "", state: 0, resultJson: new Uint8Array(), artifactOutputRefs: [], error: undefined, existingInvocationId: "" }; },
         cancelInvocation: async () => ({ state: 0 }),
+        resetTransport: () => {},
       },
       modelStream: fakeModelStream(),
     });

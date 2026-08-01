@@ -33,10 +33,14 @@ export interface ModelRequest {
 export type ModelEndStatus = "ok" | "error" | "aborted";
 
 export interface ModelStreamCallbacks {
-  /** One SSE `data:` payload (a JSON object string, or "[DONE]"). */
-  onChunk: (data: string) => void;
+  /** One SSE `data:` payload (a JSON object string, or "[DONE]"). Returns false
+   * to apply backpressure (the producer pauses its upstream reader until the
+   * `onDrain` callback fires). */
+  onChunk: (data: string) => boolean;
   /** Authoritative terminal signal. */
   onEnd: (status: ModelEndStatus, httpStatus: number | undefined, errorMessage: string | undefined) => void;
+  /** Subscribe to the downstream drain signal (resume a paused upstream reader). */
+  onDrain: (listener: () => void) => () => void;
 }
 
 export class ModelBridgeError extends Error {}
@@ -164,6 +168,46 @@ export function streamModel(
     stream.setEncoding("utf8");
     let buf = "";
     let httpStatus: number | undefined;
+    let paused = false;
+
+    /** Drain complete SSE frames from `buf`. Returns false if backpressure
+     * paused the upstream reader (the caller must stop and wait for drain). */
+    const processBuffer = (): boolean => {
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("data:")) {
+            const data = line.slice(5).trimStart();
+            // Backpressure: if the fd-5 write did not drain, pause the HTTP/2
+            // reader until the child drains fd 5 (HOR-395 bounded buffering —
+            // a slow child cannot grow an unbounded queue in supervisor memory).
+            if (!cb.onChunk(data)) {
+              paused = true;
+              try { stream?.pause(); } catch { /* stream gone */ }
+              return false;
+            }
+          }
+        }
+      }
+      return true;
+    };
+
+    const resumeOnDrain = (): void => {
+      const off = cb.onDrain(() => {
+        off();
+        if (paused) {
+          paused = false;
+          // Re-drain anything buffered while paused before resuming the reader.
+          if (processBuffer()) {
+            try { stream?.resume(); } catch { /* stream gone */ }
+          } else {
+            resumeOnDrain();
+          }
+        }
+      });
+    };
 
     stream.on("response", (respHeaders) => {
       const status = respHeaders[":status"];
@@ -176,18 +220,7 @@ export function streamModel(
     stream.on("data", (chunk: string) => {
       if (settled) return;
       buf += chunk;
-      // SSE frames are separated by a blank line. Emit each `data:` payload.
-      let idx: number;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("data:")) {
-            const data = line.slice(5).trimStart();
-            cb.onChunk(data);
-          }
-        }
-      }
+      if (!processBuffer()) resumeOnDrain();
     });
 
     stream.on("end", () => {

@@ -59,6 +59,28 @@ describe("OpenAIStreamAccumulator", () => {
     expect(acc.feed("[DONE]")).toEqual([]);
     expect(acc.feed("not json")).toEqual([]);
   });
+
+  it("emits a `start` event before the first content event (pi agent-loop contract)", () => {
+    const acc = new OpenAIStreamAccumulator("m1", "iterabase-inference");
+    const events = feedAll(acc, [JSON.stringify({ choices: [{ delta: { content: "hi" } }] })]);
+    const start = events.find((e) => (e as { type: string }).type === "start");
+    expect(start).toBeDefined();
+    expect((start as { partial: { model: string; provider: string } }).partial.model).toBe("m1");
+    expect((start as { partial: { provider: string } }).partial.provider).toBe("iterabase-inference");
+    // start must precede text_start.
+    expect(events.map((e) => (e as { type: string }).type).indexOf("start")).toBeLessThan(
+      events.map((e) => (e as { type: string }).type).indexOf("text_start"),
+    );
+  });
+
+  it("finishes as an error when the stream ends without a terminal signal (truncation)", () => {
+    const acc = new OpenAIStreamAccumulator();
+    feedAll(acc, [JSON.stringify({ choices: [{ delta: { content: "partial" } }] })]);
+    // No finish_reason and no [DONE] — a truncated HTTP-200 stream.
+    const ev = acc.finish("ok");
+    expect(ev.type).toBe("error");
+    expect(ev.type === "error" && ev.error.errorMessage).toMatch(/terminal/);
+  });
 });
 
 describe("buildOpenAIRequestBody", () => {
@@ -81,5 +103,28 @@ describe("buildOpenAIRequestBody", () => {
     expect(messages[0]).toEqual({ role: "system", content: "you are an agent" });
     expect(messages[1]).toEqual({ role: "user", content: "hi" });
     expect(body.tools).toEqual([{ type: "function", function: { name: "t", description: "d", parameters: { type: "object" } } }]);
+  });
+
+  it("preserves user image blocks as image_url data URIs (HOR-395 per-turn images)", () => {
+    const body = buildOpenAIRequestBody(
+      "m1",
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image", data: "AAABBB==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+      undefined,
+    ) as Record<string, unknown>;
+    const messages = body.messages as { role: string; content: unknown }[];
+    const content = messages[0].content as { type: string; text?: string; image_url?: { url: string } }[];
+    expect(Array.isArray(content)).toBe(true);
+    expect(content[0]).toEqual({ type: "text", text: "what is this?" });
+    expect(content[1]).toEqual({ type: "image_url", image_url: { url: "data:image/png;base64,AAABBB==" } });
   });
 });

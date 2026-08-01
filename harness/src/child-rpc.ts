@@ -96,10 +96,10 @@ export class ChildRpc {
    * supervisor validates the model against the active assignment and opens the
    * authenticated inference-gateway stream (ARCH-010/011).
    */
-  streamModel(body: unknown, signal: AbortSignal | undefined): EventStream {
+  streamModel(body: unknown, signal: AbortSignal | undefined, modelId = ""): EventStream {
     const requestId = nextRequestId();
     const stream = createAssistantMessageEventStream();
-    const acc = new OpenAIStreamAccumulator();
+    const acc = new OpenAIStreamAccumulator(modelId);
     const pending: PendingModel = { stream, acc, cancelled: false };
     this.pendingModels.set(requestId, pending);
 
@@ -113,8 +113,16 @@ export class ChildRpc {
     };
 
     if (signal) {
-      if (signal.aborted) cancel("aborted before request");
-      else signal.addEventListener("abort", () => cancel("aborted"), { once: true });
+      if (signal.aborted) {
+        // Pre-aborted: terminate locally without sending a request the
+        // supervisor has no controller for yet (cancellation must propagate
+        // upstream — sending modelRequest + cancel races the controller).
+        const ev = acc.finish("aborted", "aborted before request");
+        stream.push(ev);
+        stream.end(ev.type === "error" ? ev.error : ev.message);
+        return stream as unknown as EventStream;
+      }
+      signal.addEventListener("abort", () => cancel("aborted"), { once: true });
     }
 
     this.send({ type: "modelRequest", requestId, body });
@@ -143,8 +151,14 @@ export class ChildRpc {
         // promise never resolves — that is acceptable (the turn aborts).
       };
       if (signal) {
-        if (signal.aborted) cancel();
-        else signal.addEventListener("abort", () => cancel(), { once: true });
+        if (signal.aborted) {
+          // Pre-aborted: do not send a toolCall the supervisor has no
+          // controller for yet; resolve as an aborted error terminal.
+          pending.cancelled = true;
+          resolve({ isError: true, errorMessage: "aborted before request" });
+          return;
+        }
+        signal.addEventListener("abort", () => cancel(), { once: true });
       }
 
       this.send({

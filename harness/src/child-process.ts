@@ -89,7 +89,15 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
     if (rpcReqStream) {
       const rpcReader = new FrameReader((raw) => {
         const f = parseChildRpcFrame(raw);
-        if (!f) return; // malformed — drop
+        if (!f) {
+          // A malformed RPC request frame is stream corruption, not a
+          // droppable audit frame. The child is now waiting on a response
+          // that will never come, so terminate the turn fail-closed (HOR-395:
+          // runtime validation must be bounded fail-closed, not a silent drop).
+          settle({ outcome: Outcome.FAILED, message: "invalid child RPC frame on fd 4" });
+          forceAbort();
+          return;
+        }
         rpcRequests.push(f as ChildRpcRequest);
       });
       (rpcReqStream as Readable).on("data", (chunk: Buffer) => rpcReader.feed(chunk));
@@ -97,13 +105,26 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
       (rpcReqStream as Readable).on("error", () => rpcReader.end());
     }
     // Supervisor → child RPC channel (fd 5): framed responses (HOR-395).
+    // Backpressure: rpcSend returns the value of `Writable.write()` (false →
+    // the pipe buffer is full). Producers (the model bridge) must pause their
+    // upstream reader and resume on `drain` via rpcOnDrain, so a slow child
+    // cannot grow an unbounded queue in supervisor memory (HOR-395 bounded
+    // buffering/backpressure).
     const rpcRespStream = stdio[5];
-    const rpcSend = (frame: unknown): void => {
+    const rpcSend = (frame: unknown): boolean => {
       try {
-        if (rpcRespStream) writeFrame(rpcRespStream as Writable, frame);
+        if (rpcRespStream) return writeFrame(rpcRespStream as Writable, frame);
       } catch {
         /* fd closed (child gone) — the exit handler classifies the outcome */
       }
+      return true;
+    };
+    const rpcOnDrain = (listener: () => void): (() => void) => {
+      const s = rpcRespStream as Writable | null;
+      if (!s) return () => {};
+      const onDrain = (): void => listener();
+      s.on("drain", onDrain);
+      return () => s.off("drain", onDrain);
     };
 
     // Child → supervisor framed channel (fd 3).
@@ -215,6 +236,7 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
       events,
       rpcRequests,
       rpcSend,
+      rpcOnDrain,
       result,
     };
   };

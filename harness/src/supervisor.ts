@@ -70,19 +70,28 @@ export interface Child {
   events: AsyncIterable<ChildEvent>;
   /** child→supervisor RPC requests (fd 4) — model/tool calls (HOR-395). */
   rpcRequests: AsyncIterable<ChildRpcRequest>;
-  /** Write a supervisor→child RPC frame (fd 5): modelChunk/modelEnd/toolResult/gatewayTools/cancel. */
-  rpcSend: (frame: unknown) => void;
+  /** Write a supervisor→child RPC frame (fd 5): modelChunk/modelEnd/toolResult/gatewayTools/cancel.
+   * Returns false when the fd-5 pipe buffer is full (apply backpressure). */
+  rpcSend: (frame: unknown) => boolean;
+  /** Subscribe to fd-5 drain (resume a paused upstream producer). Returns an unsubscribe. */
+  rpcOnDrain: (listener: () => void) => () => void;
   result: Promise<ChildResult>;
 }
 export type ChildFactory = (assignment: AssignTurn, sandbox: SandboxPaths, cwd: string) => Child;
 
 export class SupervisorError extends Error {}
 
+/** Bounded deadline for gateway-tool discovery (HOR-395: slow upstream behavior
+ * must remain bounded). Aborts the discovery request and fails the turn. */
+const DISCOVERY_DEADLINE_MS = 10_000;
+
 interface TurnCtx {
   turnId: string;
   aborted: boolean;
   acked: Promise<void>;
   resolveAck: () => void;
+  /** Bounded/cancellable discovery (HOR-395): aborted on AbortTurn or deadline. */
+  discoveryAc: AbortController | null;
 }
 
 interface PendingReplay {
@@ -169,6 +178,9 @@ export class Supervisor {
   }
 
   private async connectAndServe(): Promise<void> {
+    // Re-read mTLS credentials on each reconnect (certificate rotation) —
+    // matches the documented guarantee for the tool-gateway transport.
+    this.gatewayClient.resetTransport();
     const transport = (this.d.transport ?? (() => createWorkTransport(this.d.cfg)))();
     this.state.onConnecting();
     const conn = await openWorkStream(this.d.hello, transport);
@@ -270,7 +282,7 @@ export class Supervisor {
     }
     let resolveAck!: () => void;
     const acked = new Promise<void>((r) => (resolveAck = r));
-    this.turn = { turnId: at.turnId, aborted: false, acked, resolveAck };
+    this.turn = { turnId: at.turnId, aborted: false, acked, resolveAck, discoveryAc: null };
     this.outbox = new EventOutbox(this.d.cfg.walDir, at.turnId, this.d.cfg.outbox.bound);
     this.startHeartbeat(at.turnId);
     try {
@@ -282,18 +294,32 @@ export class Supervisor {
         value: create(ExecutionStartedSchema, { sessionId: at.sessionId, sandbox: at.sandbox ?? undefined }),
       });
       const cwd = resolveWorkingDir(sandbox.root, at.sandbox?.workingDir || "home");
-      const child = this.d.childFactory(at, sandbox, cwd);
-      this.currentChild = child;
-      // Discover the effective gateway tools for this turn and pass the
-      // non-secret descriptors to the child (ARCH-006). Discovery failure fails
-      // the turn fail-closed — the child must not run with a stale/empty set.
       const scope = { turnId: at.turnId, runId: at.runId };
+      // Discover the effective gateway tools BEFORE spawning the child and pass
+      // the non-secret descriptors to the child (ARCH-006). Discovery is
+      // bounded (deadline) and cancellable (aborted on AbortTurn): a hanging
+      // discovery no longer leaves the turn stuck, and a failed discovery
+      // fails the turn fail-closed with NO live child left to terminate
+      // (HOR-395: slow upstream behavior remains bounded and every setup
+      // failure terminates the per-turn child lifecycle).
+      const discoveryAc = new AbortController();
+      if (this.turn) this.turn.discoveryAc = discoveryAc;
+      const deadline = setTimeout(() => discoveryAc.abort(), DISCOVERY_DEADLINE_MS);
+      deadline.unref?.();
       let descriptors: GatewayToolDescriptor[];
       try {
-        descriptors = await this.gatewayClient.discover(scope);
+        descriptors = await this.gatewayClient.discover(scope, discoveryAc.signal);
       } catch (err) {
-        throw new SandboxError(`gateway discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw new SandboxError(
+          `gateway discovery failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        clearTimeout(deadline);
+        if (this.turn) this.turn.discoveryAc = null;
       }
+      if (this.turn?.aborted) throw new SandboxError("aborted during discovery");
+      const child = this.d.childFactory(at, sandbox, cwd);
+      this.currentChild = child;
       child.rpcSend({ type: "gatewayTools", descriptors });
       // Drain the child's model/tool RPC requests (fd 4) concurrently with the
       // audit event stream (fd 3). Both close when the child exits.
@@ -346,6 +372,11 @@ export class Supervisor {
     // re-validates scope + version pin upstream.
     const discovered = new Map<string, GatewayToolDescriptor>();
     for (const d of descriptors) discovered.set(d.name, d);
+    // Bounded in-flight RPC work (HOR-395): a runaway child cannot open an
+    // unbounded number of concurrent upstream model/tool calls. Overflow is
+    // fail-closed — the request gets an error terminal instead of queuing.
+    const inflight = new Set<string>();
+    const MAX_INFLIGHT_RPC = 8;
 
     for await (const req of child.rpcRequests) {
       if (this.turn?.aborted) break;
@@ -354,12 +385,23 @@ export class Supervisor {
         if (ac) ac.abort();
         continue;
       }
+      if (inflight.size >= MAX_INFLIGHT_RPC) {
+        // Fail-closed overflow: bound queued/in-flight work.
+        if (req.type === "modelRequest") {
+          child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: "too many in-flight model/tool requests" });
+        } else {
+          child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "too many in-flight model/tool requests" });
+        }
+        continue;
+      }
+      inflight.add(req.requestId);
+      const done = (): void => { inflight.delete(req.requestId); };
       if (req.type === "modelRequest") {
-        void this.handleModelRequest(child, req, assignedModel, at, controllers);
+        void this.handleModelRequest(child, req, assignedModel, at, controllers, done);
         continue;
       }
       if (req.type === "toolCall") {
-        void this.handleToolCall(child, req, scope, discovered, controllers);
+        void this.handleToolCall(child, req, scope, discovered, controllers, done);
         continue;
       }
     }
@@ -374,6 +416,7 @@ export class Supervisor {
     assignedModel: string,
     at: AssignTurn,
     controllers: Map<string, AbortController>,
+    onDone: () => void,
   ): Promise<void> {
     const ac = new AbortController();
     controllers.set(req.requestId, ac);
@@ -386,6 +429,7 @@ export class Supervisor {
         ac.signal,
         {
           onChunk: (data) => child.rpcSend({ type: "modelChunk", requestId: req.requestId, data }),
+          onDrain: (listener) => child.rpcOnDrain(listener),
           onEnd: (status, httpStatus, errorMessage) =>
             child.rpcSend({ type: "modelEnd", requestId: req.requestId, status, ...(httpStatus !== undefined ? { httpStatus } : {}), ...(errorMessage !== undefined ? { errorMessage } : {}) }),
         },
@@ -394,6 +438,7 @@ export class Supervisor {
       child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: err instanceof Error ? err.message : String(err) });
     } finally {
       controllers.delete(req.requestId);
+      onDone();
     }
   }
 
@@ -405,10 +450,12 @@ export class Supervisor {
     scope: { turnId: string; runId: string },
     discovered: Map<string, GatewayToolDescriptor>,
     controllers: Map<string, AbortController>,
+    onDone: () => void,
   ): Promise<void> {
     const pinned = discovered.get(req.toolName);
     if (!pinned) {
       child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: `tool not permitted: ${req.toolName}` });
+      onDone();
       return;
     }
     const ac = new AbortController();
@@ -441,6 +488,7 @@ export class Supervisor {
       child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: err instanceof Error ? err.message : String(err) });
     } finally {
       controllers.delete(req.requestId);
+      onDone();
     }
   }
 
@@ -510,6 +558,7 @@ export class Supervisor {
 
   private abortActiveTurn(): void {
     if (this.turn) this.turn.aborted = true;
+    this.turn?.discoveryAc?.abort();
     this.currentChild?.abort();
   }
 

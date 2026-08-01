@@ -158,9 +158,11 @@ export function encodeFrame(body: unknown): Buffer {
   return Buffer.concat([header, json]);
 }
 
-/** Write a single framed message to a writable byte stream. */
-export function writeFrame(stream: { write(buf: Buffer): boolean }, body: unknown): void {
-  stream.write(encodeFrame(body));
+/** Write a single framed message to a writable byte stream. Returns the
+ * value of `stream.write()` (false when the kernel pipe buffer is full and the
+ * caller should apply backpressure instead of queuing more writes). */
+export function writeFrame(stream: { write(buf: Buffer): boolean }, body: unknown): boolean {
+  return stream.write(encodeFrame(body));
 }
 
 /**

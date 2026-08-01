@@ -126,7 +126,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
         "m1",
         { runId: "run-1", turnId: "turn-1" },
         undefined,
-        { onChunk: (d) => chunks.push(d), onEnd: (status) => (endStatus = status) },
+        { onChunk: (d) => { chunks.push(d); return true; }, onEnd: (status) => (endStatus = status), onDrain: () => () => {} },
       );
       expect(chunks.some((d) => d.includes("Hello"))).toBe(true);
       expect(chunks.some((d) => d === "[DONE]")).toBe(true);
@@ -147,7 +147,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
         "m1",
         { runId: "run-1", turnId: "turn-1" },
         undefined,
-        { onChunk: () => {}, onEnd: (s, _h, m) => { endStatus = s; errMsg = m; } },
+        { onChunk: () => true, onEnd: (s, _h, m) => { endStatus = s; errMsg = m; }, onDrain: () => () => {} },
       );
       expect(endStatus).toBe("error");
       expect(errMsg).toContain("model mismatch");
@@ -176,12 +176,63 @@ describe("streamModel (mTLS SSE bridge)", () => {
       "m1",
       { runId: "run-1", turnId: "turn-1" },
       ac.signal,
-      { onChunk: () => {}, onEnd: (s) => endStatuses.push(s) },
+      { onChunk: () => true, onEnd: (s) => endStatuses.push(s), onDrain: () => () => {} },
     );
     setTimeout(() => ac.abort(), 150);
     await done;
     expect(endStatuses).toContain("aborted");
     await new Promise<void>((r) => server.close(() => r()));
+  }, 10_000);
+
+  it("applies backpressure: pauses on a full fd-5 write and resumes on drain without losing chunks", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "a" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "b" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+      `data: [DONE]\n\n`,
+    ];
+    const srv = await startServer(sse);
+    try {
+      const chunks: string[] = [];
+      let drainCb: (() => void) | null = null;
+      let writes = 0;
+      let backpressured: () => void;
+      const backpressuredP = new Promise<void>((r) => (backpressured = r));
+      // Pretend fd 5 is full on the first write, then drain synchronously.
+      const done = streamModel(
+        { cfg: cfg(srv.url) },
+        { body: { model: "m1", messages: [] } },
+        "m1",
+        { runId: "run-1", turnId: "turn-1" },
+        undefined,
+        {
+          onChunk: (d) => {
+            writes += 1;
+            chunks.push(d);
+            if (writes === 1) {
+              // First write did not drain — apply backpressure.
+              return false;
+            }
+            return true;
+          },
+          onDrain: (listener) => {
+            drainCb = listener;
+            backpressured();
+            return () => {};
+          },
+          onEnd: () => {},
+        },
+      );
+      // Wait until backpressure is applied, then simulate fd-5 drain.
+      await backpressuredP;
+      drainCb?.();
+      await done;
+      expect(chunks.length).toBe(4);
+      expect(chunks.some((d) => d.includes("\"a\""))).toBe(true);
+      expect(chunks.some((d) => d === "[DONE]")).toBe(true);
+    } finally {
+      await srv.close();
+    }
   }, 10_000);
 });
 

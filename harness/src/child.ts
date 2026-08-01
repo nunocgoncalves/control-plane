@@ -42,7 +42,7 @@ import {
   type ProviderConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Context, SimpleStreamOptions, Model, Api } from "@earendil-works/pi-ai";
 import {
   AssistantMessageSchema,
   CompactionFinishedSchema,
@@ -402,12 +402,17 @@ function gatewayToolStub(rpc: ChildRpc): (d: GatewayToolDescriptor) => ToolDefin
           },
           signal,
         );
-        const text = res.isError
-          ? res.errorMessage ?? "tool error"
-          : res.resultJson ?? "";
+        if (res.isError) {
+          // Gateway denial/error must be an attributable failure, not a
+          // successful tool result. pi's executor sets isError=false whenever
+          // execute() resolves, so the supported error path is to throw: the
+          // agent loop marks the call isError=true and the durable
+          // tool_execution_end / model history carry it (REQ-010/SCN-009).
+          throw new Error(res.errorMessage ?? `gateway tool ${d.name} failed`);
+        }
         return {
-          content: [{ type: "text", text }],
-          details: { isError: res.isError },
+          content: [{ type: "text", text: res.resultJson ?? "" }],
+          details: {},
         };
       },
     });
@@ -437,7 +442,7 @@ function buildImages(a: Assignment): { type: "image"; data: string; mimeType: st
  * owned `AgentSessionRuntime` so the caller can run the async
  * `session_shutdown` lifecycle via `dispose()` before exit.
  */
-async function createSession(
+export async function createSession(
   a: Assignment,
   sessionDir: string,
   cwd: string,
@@ -453,9 +458,13 @@ async function createSession(
 
   const providerFactory: ExtensionFactory = (pi) => {
     const provider: ProviderConfig = {
-      // No baseUrl/apiKey — the child has no endpoint or credential. Model
-      // traffic crosses the streamSimple bridge → supervisor → inference
-      // gateway (mTLS). ARCH-010/011.
+      // No baseUrl/apiKey/models — the child has no endpoint or credential.
+      // Model traffic crosses the streamSimple bridge → supervisor → inference
+      // gateway (mTLS). ARCH-010/011. pi's validateProviderConfig requires
+      // baseUrl+apiKey whenever `models` is supplied, so the model metadata is
+      // supplied directly to createAgentSessionFromServices instead (a
+      // credentialless registration: streamSimple intercepts every call for
+      // this `api`, so no endpoint/auth is ever consulted).
       api: a.model.api as unknown as ProviderConfig["api"],
       streamSimple: (model, context: Context, options?: SimpleStreamOptions) => {
         const body = buildOpenAIRequestBody(
@@ -463,21 +472,27 @@ async function createSession(
           { systemPrompt: context.systemPrompt, messages: context.messages, tools: context.tools as { name: string; description: string; parameters: unknown }[] | undefined },
           { reasoning: options?.reasoning, maxTokens: a.model.maxOutputTokens },
         );
-        return rpc.streamModel(body, options?.signal);
+        return rpc.streamModel(body, options?.signal, model.id);
       },
-      models: [
-        {
-          id: a.model.id,
-          name: a.model.id,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: a.model.contextWindow,
-          maxTokens: a.model.maxOutputTokens ?? 4096,
-        },
-      ],
     };
     pi.registerProvider(PROVIDER, provider);
+  };
+
+  // The assigned model, constructed directly (no registry `models` block → no
+  // baseUrl/apiKey required). streamSimple is registered for `a.model.api`, so
+  // pi resolves this model's stream through the IPC bridge, never the (empty)
+  // baseUrl. `input` includes `image` to preserve per-turn image behavior.
+  const assignedModel: Model<Api> = {
+    id: a.model.id,
+    name: a.model.id,
+    api: a.model.api as Api,
+    provider: PROVIDER,
+    baseUrl: "", // unused — streamSimple intercepts (ARCH-010)
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: a.model.contextWindow,
+    maxTokens: a.model.maxOutputTokens ?? 4096,
   };
 
   // Deterministic runtime settings: provider-SDK retries disabled (one retry
@@ -488,10 +503,14 @@ async function createSession(
 
   // ARCH-016: workspaceTools=true exposes exactly the four built-in tools
   // under session UID/GID; false exposes none. Gateway stubs are always added
-  // via customTools. No arbitrary local-tool catalogue, no per-turn widening.
+  // via customTools. The allow-set MUST include the gateway descriptor names —
+  // pi's `_refreshToolRegistry` filters both built-ins AND customTools by
+  // `allowedToolNames`, so passing only the four built-ins (or `noTools:"all"`)
+  // would strip every gateway stub from the agent (HOR-395/ARCH-006).
+  const gatewayToolNames = descriptors.map((d) => d.name);
   const toolOpts = a.workspaceTools
-    ? { tools: ["read", "write", "edit", "bash"] as string[] }
-    : { noTools: "all" as const };
+    ? { tools: [...gatewayToolNames, "read", "write", "edit", "bash"] as string[] }
+    : { tools: gatewayToolNames.length ? gatewayToolNames : [] };
   const customTools = descriptors.map(gatewayToolStub(rpc));
 
   // The runtime factory closes over the assignment-specific inputs (provider,
@@ -520,13 +539,10 @@ async function createSession(
       },
     });
 
-    const model = services.modelRegistry.find(PROVIDER, a.model.id);
-    if (!model) throw new Error(`model not found after provider registration: ${a.model.id}`);
-
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,
-      model,
+      model: assignedModel,
       ...toolOpts,
       ...(customTools.length ? { customTools } : {}),
     });
