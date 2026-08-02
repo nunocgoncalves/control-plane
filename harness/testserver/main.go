@@ -279,7 +279,13 @@ func (s *server) scenario1(st *connect.BidiStream[v1.WorkerMessage, v1.ControlMe
 		return s.failErr("abort send: " + err.Error())
 	}
 	s.set(func(r *report) { r.AbortTurnSent = true })
-	return nil // close the stream (simulated stream loss)
+	// Simulate stream loss by returning a connect error: the client must observe
+	// a stream error (Premature close), not a clean OK end-of-stream. Returning
+	// nil would race between the AbortTurn send and the close, sometimes
+	// surfacing as {done: true} on the client. A non-failErr error closes conn 1
+	// with an error status WITHOUT setting report.Error (the reconnect in
+	// scenario2 is what completes the scenario and calls finish()).
+	return connect.NewError(connect.CodeUnavailable, errors.New("simulated stream loss"))
 }
 
 // scenario2 (reconnect): replayed unacked tail (workerOutcome seq 2) -> ACK ->
