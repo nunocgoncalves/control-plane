@@ -19,7 +19,7 @@ are per-turn).
 
 ```
 worker pod
-├── supervisor (long-lived, trusted; dist/main.js)         UID 65532 + CAP_SETUID/SETGID (HOR-245)
+├── supervisor (long-lived, trusted; dist/main.js)         UID 0 (root) + CAP_SETUID/SETGID (HOR-245, PSS baseline)
 │   ├── mTLS Work bidi-stream client (worker=client, CP=server)
 │   ├── protocol state machine (single-credit invariant) + heartbeat
 │   ├── event outbox + WAL (durable audit; no tail loss on crash)
@@ -128,8 +128,14 @@ streams (ARCH-011).
 
 ## Image (`Dockerfile`)
 
-`node:24-bookworm-slim`, multi-stage (`tsc` → `dist/`), non-root (`65532`).
-Bakes pi + the supervisor + the child entry + the SDK runtime. `setpriv`
+`node:24-bookworm-slim`, multi-stage (`tsc` → `dist/`). The image defaults to
+non-root (`65532`), but the AgentPool pod security context (HOR-245) runs the
+**supervisor as root (UID/GID 0)** — required to read the cert-manager CSI
+driver's root-owned `0600` tls.key, `chown` per-session sandbox entries under the
+root-owned `0711` mount root, and `setpriv`-drop to the session UID/GID (PSS
+`baseline` permits `runAsUser=0` + `CAP_SETUID`/`CAP_SETGID`; `restricted`
+forbids it). The session-UID child (dropped groups, `no_new_privs`) cannot read
+the key. Bakes pi + the supervisor + the child entry + the SDK runtime. `setpriv`
 (util-linux) is present. Mounts at runtime (HOR-245): config, `/pi` overlay,
 `/data/sandboxes` (PVC), TLS certs, the WAL emptyDir. No inbound RPC port — the
 worker dials the control-plane. `CAP_SETUID`/`CAP_SETGID` are granted to the
