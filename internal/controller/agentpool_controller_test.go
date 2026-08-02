@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,7 +38,7 @@ import (
 // RBAC-limited manager-role (so role.yaml is behaviorally validated). When
 // store is non-nil, the reconciler materializes CRs into it (the Git->DB
 // bridge). Returns the admin client + the manager context.
-func newAgentPoolTestEnv(t *testing.T, store *gateway.Store) (client.Client, context.Context) {
+func newAgentPoolTestEnv(t *testing.T, store PoolMaterializer) (client.Client, context.Context) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -390,4 +392,152 @@ func TestAgentPoolGatewayMaterialization(t *testing.T) {
 		_, err := store.ResolvePoolBySpiffePrefix(ctx, spiffe)
 		return err == gateway.ErrNotFound
 	}, 15*time.Second, 200*time.Millisecond, "pool should be soft-deleted on CR deletion")
+}
+
+// TestAgentPoolSpecRollout verifies that a change to a boot-config-rendered
+// field (workspaceTools) rolls out by recreating the warm-worker pod, not by
+// mutating it in place. The pod-template hash includes the rendered boot-config
+// digest, so toggling workspaceTools changes the hash -> the reconciler deletes
+// the old pod and creates a new one with the updated config (the harness loads
+// config at process startup, so recreation is required to apply a revoked
+// workspaceTools maximum). It also asserts the rollout converges: after
+// recreation the pod's hash matches the desired hash (no further deletion).
+// Requires KUBEBUILDER_ASSETS (envtest).
+func TestAgentPoolSpecRollout(t *testing.T) {
+	adminClient, ctx := newAgentPoolTestEnv(t, nil)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns},
+		StringData: map[string]string{"tls.crt": "c", "tls.key": "k"},
+	}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns},
+		StringData: map[string]string{"token": "v"},
+	}))
+
+	pool := validAgentPool("rollout-pool", ns)
+	pool.Spec.Replicas = 1
+	pool.Spec.WorkspaceTools = false
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	workerNN := types.NamespacedName{Name: "rollout-pool-worker-0", Namespace: ns}
+	poolNN := types.NamespacedName{Name: "rollout-pool", Namespace: ns}
+
+	// Initial worker pod created; capture its UID.
+	var firstUID types.UID
+	require.Eventually(t, func() bool {
+		var pod corev1.Pod
+		if err := adminClient.Get(ctx, workerNN, &pod); err != nil {
+			return false
+		}
+		firstUID = pod.UID
+		return firstUID != ""
+	}, 15*time.Second, 200*time.Millisecond, "initial worker pod should be created")
+
+	// Toggle workspaceTools -> must recreate the pod with a new config/hash.
+	require.Eventually(t, func() bool {
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		if got.Spec.WorkspaceTools {
+			return true // already flipped (e.g. by a retry)
+		}
+		got.Spec.WorkspaceTools = true
+		return adminClient.Update(ctx, &got) == nil
+	}, 15*time.Second, 200*time.Millisecond, "should toggle workspaceTools on")
+
+	// Pod recreated: new UID (!= firstUID) and the hash annotation matches the
+	// desired hash computed from the current spec -> the rollout converged.
+	require.Eventually(t, func() bool {
+		var pod corev1.Pod
+		if err := adminClient.Get(ctx, workerNN, &pod); err != nil {
+			return false // pod deleted + not yet recreated
+		}
+		if pod.UID == firstUID {
+			return false // not yet recreated
+		}
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		return pod.Annotations[workerTemplateHashAnnotation] == workerPodTemplateHash(&got, "rollout-pool-worker-0")
+	}, 15*time.Second, 200*time.Millisecond, "pod should be recreated with the updated template hash after workspaceTools rollout")
+}
+
+// flakyMaterializer is a PoolMaterializer that fails the first failN
+// MaterializePool calls and then succeeds. It records calls so a test can prove
+// the reconciler retried after a failure (failure->retry coverage for the
+// Git->DB bridge, ARCH-018/REQ-010).
+type flakyMaterializer struct {
+	mu        sync.Mutex
+	failN     int
+	calls     int
+	succeeded bool
+	lastKey   string
+}
+
+func (f *flakyMaterializer) MaterializePool(ctx context.Context, key, name, spiffePrefix string, grants []gateway.PoolGrantInput, bindings []gateway.CredentialBindingInput) error {
+	f.mu.Lock()
+	f.calls++
+	n := f.calls
+	f.lastKey = key
+	f.mu.Unlock()
+	if n <= f.failN {
+		return fmt.Errorf("induced materialize failure (call %d)", n)
+	}
+	f.mu.Lock()
+	f.succeeded = true
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *flakyMaterializer) SoftDeletePoolByKey(ctx context.Context, key string) error { return nil }
+
+// TestAgentPoolGatewayMaterializationRetry proves the Git->DB bridge is
+// convergent + fail-closed under transient failure: when MaterializePool fails,
+// the reconciler MUST NOT advance ObservedGeneration (which would gate away the
+// retry), and it MUST retry until the atomic materialization commits. Uses a
+// flaky materializer that fails once then succeeds. Requires KUBEBUILDER_ASSETS
+// (envtest).
+func TestAgentPoolGatewayMaterializationRetry(t *testing.T) {
+	flaky := &flakyMaterializer{failN: 1}
+	adminClient, ctx := newAgentPoolTestEnv(t, flaky)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns},
+		StringData: map[string]string{"tls.crt": "c", "tls.key": "k"},
+	}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns},
+		StringData: map[string]string{"token": "v"},
+	}))
+
+	pool := validAgentPool("retry-pool", ns)
+	pool.Spec.Replicas = 0 // focus on materialization, not pod assembly
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	poolNN := types.NamespacedName{Name: "retry-pool", Namespace: ns}
+
+	// The reconciler retries after the induced failure and eventually converges:
+	// ObservedGeneration advances only once MaterializePool commits.
+	require.Eventually(t, func() bool {
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		return got.Status.ObservedGeneration == got.Generation
+	}, 15*time.Second, 200*time.Millisecond, "ObservedGeneration should advance only after materialization succeeds on retry")
+
+	flaky.mu.Lock()
+	calls := flaky.calls
+	succeeded := flaky.succeeded
+	lastKey := flaky.lastKey
+	flaky.mu.Unlock()
+
+	assert.True(t, succeeded, "MaterializePool should have succeeded after retry")
+	assert.GreaterOrEqual(t, calls, 2, "reconciler should have retried after the first failure (no generation-gate skip)")
+	assert.Equal(t, "default/retry-pool", lastKey, "materializer should have been called for this pool")
 }

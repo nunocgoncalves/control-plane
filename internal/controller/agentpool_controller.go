@@ -62,9 +62,11 @@ type AgentPoolReconciler struct {
 	APIReader client.Reader
 	// Store materializes AgentPool CRs into the toolgateway Postgres schema
 	// (the Git->DB bridge for pools/pool_grants/credential_bindings,
-	// migration 000011/ARCH-018). Optional: when nil, gateway materialization
-	// is skipped (e.g. envtest without Postgres).
-	Store *gateway.Store
+	// migration 000011/ARCH-018). It is a PoolMaterializer so the reconciler
+	// depends only on the materialization contract (and tests can inject a
+	// flaky fake). Optional: when nil, gateway materialization is skipped
+	// (e.g. envtest without Postgres).
+	Store PoolMaterializer
 }
 
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=agentpools,verbs=get;list;watch;create;update;patch;delete
@@ -75,6 +77,19 @@ type AgentPoolReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+
+// PoolMaterializer is the contract by which the AgentPool reconciler
+// materializes CRs into the toolgateway schema (the Git->DB bridge,
+// ARCH-018/migration 000011) and revokes them on CR deletion. MaterializePool
+// MUST be atomic (all-or-nothing across pool + grants + bindings) so the
+// gateway never observes mixed old/new authorization, and the reconciler
+// records success (ObservedGeneration) only after it returns nil — on error it
+// retries the whole generation. *gateway.Store implements it; tests may inject
+// a fake.
+type PoolMaterializer interface {
+	MaterializePool(ctx context.Context, key, name, spiffePrefix string, grants []gateway.PoolGrantInput, bindings []gateway.CredentialBindingInput) error
+	SoftDeletePoolByKey(ctx context.Context, key string) error
+}
 
 // Reconcile handles AgentPool create/update/delete events.
 //
@@ -115,7 +130,7 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Validate (structural) before doing anything. A validation error is
 	// surfaced in status and does not requeue — the user must fix the CR.
 	if err := r.validateSpec(ctx, &pool); err != nil {
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("validation: %v", err))
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("validation: %v", err), true)
 		return ctrl.Result{}, nil
 	}
 
@@ -128,19 +143,23 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if err := r.ensurePVC(ctx, &pool); err != nil {
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure PVC: %v", err))
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure PVC: %v", err), false)
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureNetworkPolicy(ctx, &pool); err != nil {
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure NetworkPolicy: %v", err))
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure NetworkPolicy: %v", err), false)
 		return ctrl.Result{}, err
 	}
 	if err := r.materializeGateway(ctx, &pool); err != nil {
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("materialize gateway: %v", err))
+		// Do NOT advance ObservedGeneration: the materializeGateway generation
+		// gate would then skip the retry, leaving the Git->DB bridge
+		// unconverged (mixed/missing authorization). Retry the whole generation
+		// until MaterializePool commits atomically (ARCH-018/REQ-010).
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("materialize gateway: %v", err), false)
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileWorkers(ctx, &pool); err != nil {
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure workers: %v", err))
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure workers: %v", err), false)
 		return ctrl.Result{}, err
 	}
 
@@ -152,7 +171,7 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	} else if !ready {
 		msg = "waiting for worker pods to become Ready"
 	}
-	if err := r.patchStatus(ctx, &pool, ready, readyReplicas, msg); err != nil {
+	if err := r.patchStatus(ctx, &pool, ready, readyReplicas, msg, true); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.Info("reconciled AgentPool", "replicas", pool.Spec.Replicas, "ready", readyReplicas)
@@ -319,19 +338,17 @@ func (r *AgentPoolReconciler) materializeGateway(ctx context.Context, pool *v1al
 		trustDomain = v1alpha1.DefaultTrustDomain
 	}
 	spiffePrefix := fmt.Sprintf("spiffe://%s/pools/%s/", trustDomain, pool.UID)
-	p, err := r.Store.UpsertPool(ctx, key, pool.Name, spiffePrefix)
-	if err != nil {
-		return fmt.Errorf("upsert gateway pool: %w", err)
-	}
-	if err := r.Store.ReplacePoolGrants(ctx, p.ID, toGatewayGrantInputs(pool)); err != nil {
-		return fmt.Errorf("replace gateway grants: %w", err)
-	}
+	grants := toGatewayGrantInputs(pool)
 	bindings, err := toGatewayBindingInputs(pool)
 	if err != nil {
 		return fmt.Errorf("marshal gateway bindings: %w", err)
 	}
-	if err := r.Store.ReplaceCredentialBindings(ctx, p.ID, bindings); err != nil {
-		return fmt.Errorf("replace gateway bindings: %w", err)
+	// Atomic: pool + grants + bindings commit in one transaction, so the
+	// gateway never sees mixed old/new authorization for a generation. On
+	// error the caller MUST NOT advance ObservedGeneration (see Reconcile) so
+	// the whole generation is retried until it converges (ARCH-018/REQ-010).
+	if err := r.Store.MaterializePool(ctx, key, pool.Name, spiffePrefix, grants, bindings); err != nil {
+		return fmt.Errorf("materialize gateway: %w", err)
 	}
 	return nil
 }
@@ -543,18 +560,26 @@ func buildWorkerPod(pool *v1alpha1.AgentPool, name, hash string) *corev1.Pod {
 	}
 }
 
-// workerPodTemplateHash is a stable hash of the desired worker pod template,
-// used to detect spec changes that require pod recreation. It is computed
-// from the marshaled desired PodSpec.
+// workerPodTemplateHash is a stable hash of the desired worker pod template +
+// rendered boot config, used to detect changes that require pod recreation. It
+// is computed from the marshaled desired PodSpec and the rendered harness
+// config.yaml, so config-only changes (a workspaceTools toggle, a gateway
+// endpoint/serverName change, poolScopeIdentityId) also roll out via
+// delete+recreate — the harness loads config at process startup, so without the
+// config digest an updated ConfigMap would leave the old worker running with a
+// revoked workspaceTools maximum.
 func workerPodTemplateHash(pool *v1alpha1.AgentPool, name string) string {
 	spec := buildWorkerPodSpec(pool, name)
-	b, err := json.Marshal(spec)
+	specBytes, err := json.Marshal(spec)
 	if err != nil {
 		// PodSpec always marshals; fall back to a constant so creation proceeds.
 		return "unhashable"
 	}
+	cfgBytes := []byte(renderHarnessConfig(pool, name))
 	h := fnv.New64a()
-	_, _ = h.Write(b)
+	_, _ = h.Write(specBytes)
+	_, _ = h.Write([]byte{0}) // separator so spec/config boundaries can't collide
+	_, _ = h.Write(cfgBytes)
 	return strconv.FormatUint(h.Sum64(), 36)
 }
 
@@ -875,11 +900,18 @@ func podIsReady(p *corev1.Pod) bool {
 	return false
 }
 
-func (r *AgentPoolReconciler) patchStatus(ctx context.Context, pool *v1alpha1.AgentPool, ready bool, readyReplicas int32, message string) error {
+func (r *AgentPoolReconciler) patchStatus(ctx context.Context, pool *v1alpha1.AgentPool, ready bool, readyReplicas int32, message string, recordObserved bool) error {
 	base := pool.DeepCopy()
 	pool.Status.Ready = ready
 	pool.Status.ReadyReplicas = readyReplicas
-	pool.Status.ObservedGeneration = pool.Generation
+	// ObservedGeneration is advanced only on definitive outcomes: a successful
+	// reconcile or a structural validation rejection (no retry until the spec
+	// changes). Transient errors (PVC/NetworkPolicy/gateway/workers) MUST NOT
+	// advance it, or the materializeGateway generation gate would skip the
+	// retry and leave the Git->DB bridge unconverged (ARCH-018/REQ-010).
+	if recordObserved {
+		pool.Status.ObservedGeneration = pool.Generation
+	}
 	pool.Status.Message = message
 	return r.Status().Patch(ctx, pool, client.MergeFrom(base))
 }

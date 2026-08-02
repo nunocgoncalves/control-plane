@@ -1142,6 +1142,93 @@ func (s *Store) SoftDeletePoolByKey(ctx context.Context, key string) error {
 	return nil
 }
 
+// MaterializePool atomically upserts a pool and replaces its grants +
+// credential bindings in a single transaction (HOR-245 Git->DB bridge,
+// ARCH-018/migration 000011). Atomicity guarantees the gateway never observes
+// mixed old/new authorization for a generation: either all of a generation's
+// writes commit or none do. Stale grants/bindings are soft-deleted within the
+// same txn, and desired rows are upserted (reviving a soft-deleted row on
+// conflict). Idempotent on re-run for the same generation. The caller records
+// success (ObservedGeneration) only after this returns nil.
+func (s *Store) MaterializePool(ctx context.Context, key, name, spiffePrefix string, grants []PoolGrantInput, bindings []CredentialBindingInput) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("materialize pool: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var poolID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO toolgateway.pools (key, name, spiffe_id_prefix)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (key) DO UPDATE
+			SET name = EXCLUDED.name, spiffe_id_prefix = EXCLUDED.spiffe_id_prefix,
+			    deleted_at = NULL, updated_at = now()
+		RETURNING id`, key, name, spiffePrefix).Scan(&poolID); err != nil {
+		return fmt.Errorf("materialize pool: upsert pool: %w", err)
+	}
+
+	// Replace grants (soft-delete stale + upsert-revive desired) within the txn.
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.pool_grants SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("materialize pool: clear grants: %w", err)
+	}
+	for _, g := range grants {
+		actions := g.AllowedActions
+		if actions == nil {
+			actions = []string{}
+		}
+		b, err := json.Marshal(actions)
+		if err != nil {
+			return fmt.Errorf("materialize pool: marshal actions: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.pool_grants (pool_id, tool_name, max_effect_class, allowed_actions)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (pool_id, tool_name) DO UPDATE
+				SET max_effect_class = EXCLUDED.max_effect_class,
+			    allowed_actions = EXCLUDED.allowed_actions,
+			    deleted_at = NULL, updated_at = now()`,
+			poolID, g.ToolName, g.MaxEffect, b); err != nil {
+			return fmt.Errorf("materialize pool: upsert grant %s: %w", g.ToolName, err)
+		}
+	}
+
+	// Replace bindings (soft-delete stale + upsert-revive desired) within the txn.
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.credential_bindings SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("materialize pool: clear bindings: %w", err)
+	}
+	for _, b := range bindings {
+		spec := b.SecretSpec
+		if spec == nil {
+			spec = []byte("{}")
+		}
+		rc := b.ResourceConstraints
+		if rc == nil {
+			rc = []byte("{}")
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.credential_bindings
+				(pool_id, tool_name, slot_name, scheme, secret_ref, resource_constraints)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (pool_id, tool_name, slot_name) DO UPDATE
+				SET scheme = EXCLUDED.scheme, secret_ref = EXCLUDED.secret_ref,
+			    resource_constraints = EXCLUDED.resource_constraints,
+			    deleted_at = NULL, updated_at = now()`,
+			poolID, b.ToolName, b.SlotName, b.Scheme, spec, rc); err != nil {
+			return fmt.Errorf("materialize pool: upsert binding %s/%s: %w", b.ToolName, b.SlotName, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("materialize pool: commit: %w", err)
+	}
+	return nil
+}
+
 // UpsertWorkflowPoolBinding inserts/revives a workflow->pool binding
 // (operator-seed; Workflow definitions HOR-252 later).
 func (s *Store) UpsertWorkflowPoolBinding(ctx context.Context, workflowKey, poolID string, permittedTools []string) error {
