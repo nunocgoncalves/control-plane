@@ -268,6 +268,12 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 	}
 	// Credential bindings: required fields, scheme-specific Secret refs +
 	// existence, resource constraints (mirrors toolgateway.credential_bindings).
+	// Duplicate (toolName, slot) bindings and duplicate resource keys are
+	// rejected because MaterializePool upserts bindings in array order and
+	// toGatewayBindingInputs collapses resource keys into a map, so the last
+	// declaration would silently win instead of failing closed (ARCH-018/
+	// HOR-245).
+	seenBindings := make(map[string]bool)
 	for i, b := range pool.Spec.CredentialBindings {
 		if b.ToolName == "" {
 			return fmt.Errorf("spec.credentialBindings[%d].toolName is required", i)
@@ -275,6 +281,11 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 		if b.Slot == "" {
 			return fmt.Errorf("spec.credentialBindings[%d].slot is required", i)
 		}
+		bindingKey := b.ToolName + "/" + b.Slot
+		if seenBindings[bindingKey] {
+			return fmt.Errorf("spec.credentialBindings[%d].toolName+slot %q is duplicated", i, bindingKey)
+		}
+		seenBindings[bindingKey] = true
 		var secretName string
 		switch b.Scheme {
 		case "bearer":
@@ -305,6 +316,7 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 		if err := r.secretExists(ctx, pool.Namespace, secretName); err != nil {
 			return fmt.Errorf("credentialBindings[%d]: %w", i, err)
 		}
+		seenResources := make(map[string]bool)
 		for j, c := range b.ResourceConstraints {
 			if c.Resource == "" {
 				return fmt.Errorf("spec.credentialBindings[%d].resourceConstraints[%d].resource is required", i, j)
@@ -312,6 +324,10 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 			if c.Value == "" {
 				return fmt.Errorf("spec.credentialBindings[%d].resourceConstraints[%d].value is required", i, j)
 			}
+			if seenResources[c.Resource] {
+				return fmt.Errorf("spec.credentialBindings[%d].resourceConstraints[%d].resource %q is duplicated", i, j, c.Resource)
+			}
+			seenResources[c.Resource] = true
 		}
 	}
 	return nil

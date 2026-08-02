@@ -317,6 +317,30 @@ func TestAgentPoolValidation(t *testing.T) {
 	err = newReconciler(ca, creds).validateSpec(ctx, badAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ReadWriteMany")
+
+	// Duplicate (toolName, slot) binding -> rejected (ARCH-018/HOR-245).
+	dupBinding := validAgentPool("b6", ns)
+	dupBinding.Spec.Replicas = 1
+	dupBinding.Spec.CredentialBindings = []v1alpha1.CredentialBinding{
+		{ToolName: "graph.read", Slot: "x", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}}},
+		{ToolName: "graph.read", Slot: "x", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}}},
+	}
+	err = newReconciler(ca, creds).validateSpec(ctx, dupBinding)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
+
+	// Duplicate resourceConstraints[].resource key -> rejected.
+	dupResource := validAgentPool("b7", ns)
+	dupResource.Spec.Replicas = 1
+	dupResource.Spec.CredentialBindings = []v1alpha1.CredentialBinding{
+		{ToolName: "graph.read", Slot: "x", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}}, ResourceConstraints: []v1alpha1.ResourceConstraint{
+			{Resource: "scope", Value: "a"},
+			{Resource: "scope", Value: "b"},
+		}},
+	}
+	err = newReconciler(ca, creds).validateSpec(ctx, dupResource)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
 }
 
 // TestAgentPoolGatewayMaterialization exercises the Git->DB bridge (HOR-245,
