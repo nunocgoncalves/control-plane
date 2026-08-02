@@ -541,3 +541,122 @@ func TestAgentPoolGatewayMaterializationRetry(t *testing.T) {
 	assert.GreaterOrEqual(t, calls, 2, "reconciler should have retried after the first failure (no generation-gate skip)")
 	assert.Equal(t, "default/retry-pool", lastKey, "materializer should have been called for this pool")
 }
+
+// recordingMaterializer records every MaterializePool call (key + grants +
+// bindings) so a test can assert what authorization the gateway observed, even
+// when pod/storage assembly fails. Succeeds by default. Used to prove
+// revocation converges independently of unrelated resource reconciliation
+// failures (REQ-010/ARCH-018).
+type recordingMaterializer struct {
+	mu    sync.Mutex
+	calls []recordedMaterialize
+}
+
+type recordedMaterialize struct {
+	key      string
+	grants   []gateway.PoolGrantInput
+	bindings []gateway.CredentialBindingInput
+}
+
+func (r *recordingMaterializer) MaterializePool(_ context.Context, key, _ string, _ string, grants []gateway.PoolGrantInput, bindings []gateway.CredentialBindingInput) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g := append([]gateway.PoolGrantInput(nil), grants...)
+	b := append([]gateway.CredentialBindingInput(nil), bindings...)
+	r.calls = append(r.calls, recordedMaterialize{key: key, grants: g, bindings: b})
+	return nil
+}
+
+func (r *recordingMaterializer) SoftDeletePoolByKey(_ context.Context, _ string) error { return nil }
+
+func (r *recordingMaterializer) lastGrants() []gateway.PoolGrantInput {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.calls) == 0 {
+		return nil
+	}
+	return r.calls[len(r.calls)-1].grants
+}
+
+// TestAgentPoolGatewayRevocationIndependentOfAssembly proves the gateway
+// authorization boundary (ARCH-018) converges/revokes EVEN WHEN unrelated
+// pod/storage assembly fails forever. Scenario: a pool with a grant converges;
+// then a new generation revokes the grant while the sandbox PVC is made
+// unreconcilable (owned by a foreign controller so ensurePVC's
+// SetControllerReference fails). The gateway MUST still observe the revoked
+// (empty) grant set; otherwise a denied capability stays live indefinitely
+// (REQ-010). Requires KUBEBUILDER_ASSETS (envtest).
+func TestAgentPoolGatewayRevocationIndependentOfAssembly(t *testing.T) {
+	rec := &recordingMaterializer{}
+	adminClient, ctx := newAgentPoolTestEnv(t, rec)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns},
+		StringData: map[string]string{"tls.crt": "c", "tls.key": "k"},
+	}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns},
+		StringData: map[string]string{"token": "v"},
+	}))
+
+	pool := validAgentPool("revoke-pool", ns)
+	pool.Spec.Replicas = 0 // focus on authorization, not pod assembly
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	poolNN := types.NamespacedName{Name: "revoke-pool", Namespace: ns}
+	pvcNN := types.NamespacedName{Name: "revoke-pool-sandbox", Namespace: ns}
+
+	// Generation 1: pool with the grant converges (gateway materializes it).
+	require.Eventually(t, func() bool {
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		return got.Status.ObservedGeneration == got.Generation
+	}, 15*time.Second, 200*time.Millisecond, "generation 1 should converge (grant materialized)")
+
+	rec.mu.Lock()
+	require.NotEmpty(t, rec.calls, "grant should have been materialized")
+	require.Len(t, rec.calls[len(rec.calls)-1].grants, 1, "generation 1 materialized one grant")
+	rec.mu.Unlock()
+
+	// Hijack the sandbox PVC: give it a foreign controller owner so ensurePVC's
+	// SetControllerReference fails on every subsequent reconcile (simulating an
+	// unreconcilable storage change that blocks assembly forever).
+	foreign := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign-owner", Namespace: ns}}
+	require.NoError(t, adminClient.Create(ctx, foreign))
+	require.Eventually(t, func() bool {
+		var pvc corev1.PersistentVolumeClaim
+		if err := adminClient.Get(ctx, pvcNN, &pvc); err != nil {
+			return false
+		}
+		pvc.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "v1", Kind: "ConfigMap", Name: foreign.Name, UID: foreign.UID,
+			Controller: ptr.To(true), BlockOwnerDeletion: ptr.To(true),
+		}}
+		return adminClient.Update(ctx, &pvc) == nil
+	}, 10*time.Second, 200*time.Millisecond, "hijack PVC owner to a foreign controller")
+
+	// Generation 2: revoke the grant + binding. The PVC is now unreconcilable,
+	// so assembly never completes — but the gateway MUST still observe the
+	// revoked (empty) grant set.
+	updated := &v1alpha1.AgentPool{}
+	require.NoError(t, adminClient.Get(ctx, poolNN, updated))
+	updated.Spec.GatewayGrants = nil
+	updated.Spec.CredentialBindings = nil
+	require.NoError(t, adminClient.Update(ctx, updated))
+
+	// The gateway materializes the REVOKED (empty) grant set even though
+	// ensurePVC keeps failing.
+	require.Eventually(t, func() bool {
+		return len(rec.lastGrants()) == 0
+	}, 15*time.Second, 200*time.Millisecond, "gateway should observe the revoked (empty) grant set despite PVC assembly failure")
+
+	// Sanity: assembly is genuinely still failing — ObservedGeneration did not
+	// advance to the revocation generation, yet revocation converged.
+	var final v1alpha1.AgentPool
+	require.NoError(t, adminClient.Get(ctx, poolNN, &final))
+	assert.NotEqual(t, final.Generation, final.Status.ObservedGeneration,
+		"assembly must still be failing (ObservedGeneration pinned), yet revocation converged")
+}

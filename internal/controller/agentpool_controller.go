@@ -142,20 +142,27 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	// Materialize gateway authorization (the Git->DB bridge) BEFORE pod/storage
+	// assembly. REQ-010 requires denied capabilities to fail without broader
+	// fallback, and ARCH-018 makes AgentPool the deployable gateway-permission
+	// boundary, so revocation MUST converge independently of unrelated resource
+	// assembly — otherwise an unreconcilable PVC/NetworkPolicy change (e.g. an
+	// immutable storage class) would block this line forever and a revoked
+	// grant/binding would stay live in the gateway indefinitely. Do NOT advance
+	// ObservedGeneration on error: the materializeGateway generation gate would
+	// then skip the retry, leaving the bridge unconverged (mixed/missing
+	// authorization). Retry the whole generation until MaterializePool commits
+	// atomically (ARCH-018/REQ-010).
+	if err := r.materializeGateway(ctx, &pool); err != nil {
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("materialize gateway: %v", err), false)
+		return ctrl.Result{}, err
+	}
 	if err := r.ensurePVC(ctx, &pool); err != nil {
 		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure PVC: %v", err), false)
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureNetworkPolicy(ctx, &pool); err != nil {
 		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure NetworkPolicy: %v", err), false)
-		return ctrl.Result{}, err
-	}
-	if err := r.materializeGateway(ctx, &pool); err != nil {
-		// Do NOT advance ObservedGeneration: the materializeGateway generation
-		// gate would then skip the retry, leaving the Git->DB bridge
-		// unconverged (mixed/missing authorization). Retry the whole generation
-		// until MaterializePool commits atomically (ARCH-018/REQ-010).
-		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("materialize gateway: %v", err), false)
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileWorkers(ctx, &pool); err != nil {

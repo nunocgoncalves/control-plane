@@ -121,25 +121,66 @@ export function provisionSandbox(sandboxRoot: string, uid: number, gid: number):
 }
 
 /**
- * Ensure the sandbox mount root (the shared RWX PVC) exists and is mode 0711:
- * traversable (so a session-UID child can reach its own 0700 root) but not
- * listable/writable by non-root (so only the supervisor can create sandbox
- * entries — a child cannot forge a sibling). Called once at supervisor startup.
- * Best-effort when not root/owner (test/dev): a non-root supervisor skips the
- * chmod; the per-sandbox 0700 ownership check still gates the child.
+ * Ensure the sandbox mount root (the shared RWX PVC) is a non-symlink directory
+ * owned by the supervisor at mode 0711: traversable (so a session-UID child
+ * can reach its own 0700 root) but not listable/writable by non-root (so only
+ * the supervisor can create sandbox entries — a child cannot forge a sibling).
+ * Called once at supervisor startup.
+ *
+ * ESTABLISH + VERIFY: the mode/ownership are set and then RE-STAT'd — a
+ * root-squashed or pre-owned RWX volume can silently ignore chmod/chown, so the
+ * resulting inode (not the call) is the source of truth. Startup FAILS if a
+ * safe root cannot be guaranteed (symlink attack, foreign owner, un-fixable
+ * mode). It never silently degrades to a best-effort skip: a writable/listable
+ * parent lets a session-UID child create, rename, or delete sibling roots
+ * regardless of each sibling's 0700 mode (HOR-245/HOR-381 isolation contract).
  */
 export function ensureSandboxMountRoot(mountRoot: string): void {
+  // Create if missing (recursive so intermediate dirs exist).
   try {
     mkdirSync(mountRoot, { mode: 0o711, recursive: true });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
+
+  // Reject a symlink root before any chmod/chown (TOCTOU-safe: lstat, not stat).
+  let st = lstatSync(mountRoot);
+  if (st.isSymbolicLink()) throw new SandboxError(`sandbox mount root is a symlink (refused): ${mountRoot}`);
+  if (!st.isDirectory()) throw new SandboxError(`sandbox mount root is not a directory: ${mountRoot}`);
+
+  // The supervisor must have a determinable uid/gid (Linux). On a platform
+  // without getuid the ownership invariant is undefined — refuse to start.
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+    throw new SandboxError(`supervisor uid/gid unavailable on this platform (refused): ${mountRoot}`);
+  }
+  const uid = process.getuid();
+  const gid = process.getgid();
+  // Establish ownership: the supervisor must own the root so only it can create
+  // sandbox entries. As root we (re)claim a stray/foreign-owned volume; as
+  // non-root we can only own what we created — a foreign owner is refused.
+  if (st.uid !== uid || st.gid !== gid) {
+    if (uid === 0) {
+      chownSync(mountRoot, 0, 0);
+    } else {
+      throw new SandboxError(`sandbox mount root owned by ${st.uid}:${st.gid}, not supervisor ${uid}:${gid} (refused): ${mountRoot}`);
+    }
+  }
+
+  // Establish mode 0711. EPERM (root-squash, read-only mount) means we cannot
+  // guarantee the mode — fail startup rather than run with a writable parent.
   try {
     chmodSync(mountRoot, 0o711);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM") return; // not root/owner; best-effort
-    throw err;
+    throw new SandboxError(`cannot chmod sandbox mount root to 0711 (${(err as NodeJS.ErrnoException).code}): ${mountRoot}`);
   }
+
+  // VERIFY: re-stat and assert the final type/owner/mode. Never trust the
+  // chmod/chown call on a volume that may silently ignore it.
+  st = lstatSync(mountRoot);
+  if (st.isSymbolicLink()) throw new SandboxError(`sandbox mount root is a symlink (refused): ${mountRoot}`);
+  if (!st.isDirectory()) throw new SandboxError(`sandbox mount root is not a directory: ${mountRoot}`);
+  if (st.uid !== uid || st.gid !== gid) throw new SandboxError(`sandbox mount root owner ${st.uid}:${st.gid} != supervisor ${uid}:${gid}: ${mountRoot}`);
+  if ((st.mode & 0o777) !== 0o711) throw new SandboxError(`sandbox mount root mode ${(st.mode & 0o777).toString(8)} != 0711: ${mountRoot}`);
 }
 
 /**

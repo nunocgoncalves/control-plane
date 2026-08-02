@@ -161,11 +161,36 @@ describe("ensureSandboxMountRoot", () => {
     expect(st.mode & 0o777).toBe(0o711);
   });
 
-  it("chmods an existing mount root to 0711", () => {
+  it("chmods an existing permissive mount root to 0711 and verifies ownership", () => {
     const mr = join(base, "mountroot");
     mkdirSync(mr, { mode: 0o777 });
     ensureSandboxMountRoot(mr);
+    const st = lstatSync(mr);
+    expect(st.mode & 0o777).toBe(0o711);
+    expect(st.uid).toBe(process.getuid());
+    expect(st.gid).toBe(process.getgid());
+  });
+
+  it("is idempotent on an already-correct 0711 root", () => {
+    const mr = join(base, "mountroot");
+    mkdirSync(mr, { mode: 0o711 });
+    chmodSync(mr, 0o711);
+    expect(() => ensureSandboxMountRoot(mr)).not.toThrow();
     expect(lstatSync(mr).mode & 0o777).toBe(0o711);
+  });
+
+  it("refuses a symlink mount root (TOCTOU-safe)", () => {
+    const real = join(base, "realroot");
+    mkdirSync(real, { mode: 0o711 });
+    const link = join(base, "mountroot-link");
+    symlinkSync(real, link);
+    expect(() => ensureSandboxMountRoot(link)).toThrow(SandboxError);
+  });
+
+  it("refuses a non-directory mount root", () => {
+    const mr = join(base, "mountroot-file");
+    writeFileSync(mr, "not a dir");
+    expect(() => ensureSandboxMountRoot(mr)).toThrow(SandboxError);
   });
 });
 
