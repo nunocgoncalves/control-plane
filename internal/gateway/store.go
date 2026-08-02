@@ -1000,6 +1000,148 @@ func (s *Store) UpsertCredentialBinding(ctx context.Context, poolID, toolName, s
 	return nil
 }
 
+// PoolGrantInput is a CR-sourced pool grant (HOR-245).
+type PoolGrantInput struct {
+	ToolName       string
+	MaxEffect      EffectClass
+	AllowedActions []string
+}
+
+// CredentialBindingInput is a CR-sourced credential binding (HOR-245).
+// SecretSpec and ResourceConstraints are the JSONB stored in
+// toolgateway.credential_bindings (the reconciler marshals them from the CRD's
+// scheme-specific fields).
+type CredentialBindingInput struct {
+	ToolName            string
+	SlotName            string
+	Scheme              CredentialScheme
+	SecretSpec          []byte // scheme-dependent secret_ref JSONB
+	ResourceConstraints []byte // non-secret scope JSONB
+}
+
+// ReplacePoolGrants reconciles a pool's grants to the desired set (HOR-245):
+// it soft-deletes the pool's current grants, then upserts each desired grant
+// (reviving a soft-deleted row on conflict). Grants no longer in the desired
+// set stay soft-deleted (stale-row removal). The gateway reads only live rows.
+func (s *Store) ReplacePoolGrants(ctx context.Context, poolID string, grants []PoolGrantInput) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("replace pool grants: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.pool_grants SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("replace pool grants: clear: %w", err)
+	}
+	for _, g := range grants {
+		actions := g.AllowedActions
+		if actions == nil {
+			actions = []string{}
+		}
+		b, err := json.Marshal(actions)
+		if err != nil {
+			return fmt.Errorf("replace pool grants: marshal actions: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.pool_grants (pool_id, tool_name, max_effect_class, allowed_actions)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (pool_id, tool_name) DO UPDATE
+				SET max_effect_class = EXCLUDED.max_effect_class,
+				    allowed_actions = EXCLUDED.allowed_actions,
+				    deleted_at = NULL, updated_at = now()`,
+			poolID, g.ToolName, g.MaxEffect, b); err != nil {
+			return fmt.Errorf("replace pool grants: upsert %s: %w", g.ToolName, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("replace pool grants: commit: %w", err)
+	}
+	return nil
+}
+
+// ReplaceCredentialBindings reconciles a pool's credential bindings to the
+// desired set (HOR-245), with the same soft-delete + upsert-revive semantics as
+// ReplacePoolGrants.
+func (s *Store) ReplaceCredentialBindings(ctx context.Context, poolID string, bindings []CredentialBindingInput) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("replace credential bindings: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.credential_bindings SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("replace credential bindings: clear: %w", err)
+	}
+	for _, b := range bindings {
+		spec := b.SecretSpec
+		if spec == nil {
+			spec = []byte("{}")
+		}
+		rc := b.ResourceConstraints
+		if rc == nil {
+			rc = []byte("{}")
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.credential_bindings
+				(pool_id, tool_name, slot_name, scheme, secret_ref, resource_constraints)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (pool_id, tool_name, slot_name) DO UPDATE
+				SET scheme = EXCLUDED.scheme, secret_ref = EXCLUDED.secret_ref,
+				    resource_constraints = EXCLUDED.resource_constraints,
+				    deleted_at = NULL, updated_at = now()`,
+			poolID, b.ToolName, b.SlotName, b.Scheme, spec, rc); err != nil {
+			return fmt.Errorf("replace credential bindings: upsert %s/%s: %w", b.ToolName, b.SlotName, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("replace credential bindings: commit: %w", err)
+	}
+	return nil
+}
+
+// SoftDeletePoolByKey soft-deletes a pool and its grants/bindings on AgentPool CR
+// deletion (HOR-245). Access is revoked (rows retained for history/audit). A
+// no-op if the pool is already soft-deleted or never existed.
+func (s *Store) SoftDeletePoolByKey(ctx context.Context, key string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("soft-delete pool: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var poolID string
+	err = tx.QueryRow(ctx, `
+		UPDATE toolgateway.pools SET deleted_at = now()
+		WHERE key = $1 AND deleted_at IS NULL RETURNING id`, key).Scan(&poolID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // already soft-deleted or never existed
+		}
+		return fmt.Errorf("soft-delete pool: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.pool_grants SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("soft-delete pool grants: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.credential_bindings SET deleted_at = now()
+		WHERE pool_id = $1::uuid AND deleted_at IS NULL`, poolID); err != nil {
+		return fmt.Errorf("soft-delete credential bindings: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("soft-delete pool: commit: %w", err)
+	}
+	return nil
+}
+
 // UpsertWorkflowPoolBinding inserts/revives a workflow->pool binding
 // (operator-seed; Workflow definitions HOR-252 later).
 func (s *Store) UpsertWorkflowPoolBinding(ctx context.Context, workflowKey, poolID string, permittedTools []string) error {

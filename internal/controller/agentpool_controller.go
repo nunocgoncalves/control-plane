@@ -23,6 +23,7 @@ import (
 	yaml "sigs.k8s.io/yaml"
 
 	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
+	"github.com/nunocgoncalves/control-plane/internal/gateway"
 )
 
 const (
@@ -59,6 +60,11 @@ type AgentPoolReconciler struct {
 	// so raw credential/CA values are never retained in (nor a Secret informer
 	// started by) this reconciler (ARCH-008/010). It must be set by the caller.
 	APIReader client.Reader
+	// Store materializes AgentPool CRs into the toolgateway Postgres schema
+	// (the Git->DB bridge for pools/pool_grants/credential_bindings,
+	// migration 000011/ARCH-018). Optional: when nil, gateway materialization
+	// is skipped (e.g. envtest without Postgres).
+	Store *gateway.Store
 }
 
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=agentpools,verbs=get;list;watch;create;update;patch;delete
@@ -86,9 +92,17 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Deletion path: finalizer cleanup. Owned pods/configmaps/pvc/networkpolicy
 	// are garbage-collected by the owner ref, but the finalizer guarantees we
-	// don't leave dangling named children if GC is delayed.
+	// don't leave dangling named children if GC is delayed, and that the
+	// toolgateway rows are revoked (soft-deleted) before the CR is gone.
 	if !pool.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&pool, agentPoolFinalizer) {
+			if r.Store != nil {
+				key := agentPoolKey(&pool)
+				if err := r.Store.SoftDeletePoolByKey(ctx, key); err != nil {
+					logger.Error(err, "failed to soft-delete gateway pool on CR deletion", "key", key)
+					return ctrl.Result{}, err
+				}
+			}
 			controllerutil.RemoveFinalizer(&pool, agentPoolFinalizer)
 			if err := r.Update(ctx, &pool); err != nil {
 				return ctrl.Result{}, err
@@ -119,6 +133,10 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	if err := r.ensureNetworkPolicy(ctx, &pool); err != nil {
 		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("ensure NetworkPolicy: %v", err))
+		return ctrl.Result{}, err
+	}
+	if err := r.materializeGateway(ctx, &pool); err != nil {
+		_ = r.patchStatus(ctx, &pool, false, 0, fmt.Sprintf("materialize gateway: %v", err))
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileWorkers(ctx, &pool); err != nil {
@@ -281,6 +299,101 @@ func validateGatewayPodSelector(sel v1alpha1.GatewayPodSelector) error {
 		return fmt.Errorf("podSelector must be non-empty (at least one matchLabel or matchExpression)")
 	}
 	return nil
+}
+
+// materializeGateway persists the AgentPool + its grants/bindings into the
+// toolgateway Postgres schema (the Git->DB bridge, migration 000011/ARCH-018).
+// It runs once per pool generation so pod-event reconciles do not churn the
+// DB. On CR deletion the pool + grants/bindings are soft-deleted (see
+// Reconcile's deletion path). Skipped when Store is nil.
+func (r *AgentPoolReconciler) materializeGateway(ctx context.Context, pool *v1alpha1.AgentPool) error {
+	if r.Store == nil {
+		return nil
+	}
+	if pool.Status.ObservedGeneration != 0 && pool.Generation == pool.Status.ObservedGeneration {
+		return nil // already materialized for this generation
+	}
+	key := agentPoolKey(pool)
+	trustDomain := pool.Spec.Identity.TrustDomain
+	if trustDomain == "" {
+		trustDomain = v1alpha1.DefaultTrustDomain
+	}
+	spiffePrefix := fmt.Sprintf("spiffe://%s/pools/%s/", trustDomain, pool.UID)
+	p, err := r.Store.UpsertPool(ctx, key, pool.Name, spiffePrefix)
+	if err != nil {
+		return fmt.Errorf("upsert gateway pool: %w", err)
+	}
+	if err := r.Store.ReplacePoolGrants(ctx, p.ID, toGatewayGrantInputs(pool)); err != nil {
+		return fmt.Errorf("replace gateway grants: %w", err)
+	}
+	bindings, err := toGatewayBindingInputs(pool)
+	if err != nil {
+		return fmt.Errorf("marshal gateway bindings: %w", err)
+	}
+	if err := r.Store.ReplaceCredentialBindings(ctx, p.ID, bindings); err != nil {
+		return fmt.Errorf("replace gateway bindings: %w", err)
+	}
+	return nil
+}
+
+// agentPoolKey is the stable toolgateway.pools natural key for a CR
+// ("<namespace>/<name>"), matching ResolvePoolBySpiffePrefix's key convention.
+func agentPoolKey(pool *v1alpha1.AgentPool) string {
+	return fmt.Sprintf("%s/%s", pool.Namespace, pool.Name)
+}
+
+// toGatewayGrantInputs maps CRD grants to store grant inputs.
+func toGatewayGrantInputs(pool *v1alpha1.AgentPool) []gateway.PoolGrantInput {
+	out := make([]gateway.PoolGrantInput, 0, len(pool.Spec.GatewayGrants))
+	for _, g := range pool.Spec.GatewayGrants {
+		out = append(out, gateway.PoolGrantInput{
+			ToolName:       g.Tool,
+			MaxEffect:      gateway.EffectClass(g.MaxEffectClass),
+			AllowedActions: g.AllowedActions,
+		})
+	}
+	return out
+}
+
+// toGatewayBindingInputs maps CRD credential bindings to store binding inputs,
+// marshaling the scheme-dependent secret_ref + non-secret resource constraints
+// to the JSONB shapes stored in toolgateway.credential_bindings.
+func toGatewayBindingInputs(pool *v1alpha1.AgentPool) ([]gateway.CredentialBindingInput, error) {
+	out := make([]gateway.CredentialBindingInput, 0, len(pool.Spec.CredentialBindings))
+	for _, b := range pool.Spec.CredentialBindings {
+		var secretSpec map[string]any
+		switch b.Scheme {
+		case "bearer":
+			secretSpec = map[string]any{"value_ref": map[string]any{"name": b.Bearer.ValueSecretRef.Name, "key": b.Bearer.ValueSecretRef.Key}}
+		case "oauth_client_credentials":
+			secretSpec = map[string]any{
+				"client_id":         b.OAuth.ClientID,
+				"client_secret_ref": map[string]any{"name": b.OAuth.ClientSecretRef.Name, "key": b.OAuth.ClientSecretRef.Key},
+				"token_url":         b.OAuth.TokenURL,
+				"scope":             b.OAuth.Scopes,
+			}
+		}
+		specJSON, err := json.Marshal(secretSpec)
+		if err != nil {
+			return nil, fmt.Errorf("marshal secret spec for %s/%s: %w", b.ToolName, b.Slot, err)
+		}
+		rc := make(map[string]string, len(b.ResourceConstraints))
+		for _, c := range b.ResourceConstraints {
+			rc[c.Resource] = c.Value
+		}
+		rcJSON, err := json.Marshal(rc)
+		if err != nil {
+			return nil, fmt.Errorf("marshal resource constraints for %s/%s: %w", b.ToolName, b.Slot, err)
+		}
+		out = append(out, gateway.CredentialBindingInput{
+			ToolName:            b.ToolName,
+			SlotName:            b.Slot,
+			Scheme:              gateway.CredentialScheme(b.Scheme),
+			SecretSpec:          specJSON,
+			ResourceConstraints: rcJSON,
+		})
+	}
+	return out, nil
 }
 
 // secretExists returns nil if the Secret is present, or a descriptive error.

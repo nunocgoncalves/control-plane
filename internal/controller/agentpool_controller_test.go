@@ -18,20 +18,25 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/nunocgoncalves/control-plane/api/v1alpha1"
+	"github.com/nunocgoncalves/control-plane/internal/gateway"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
+	"github.com/nunocgoncalves/control-plane/internal/testutil"
 )
 
 // newAgentPoolTestEnv stands up envtest (real API server, RBAC enforced) with
 // the generated CRDs installed and the AgentPoolReconciler running under the
-// RBAC-limited manager-role (so role.yaml is behaviorally validated). Returns
-// the admin client + a cancel for the manager.
-func newAgentPoolTestEnv(t *testing.T) (client.Client, context.Context) {
+// RBAC-limited manager-role (so role.yaml is behaviorally validated). When
+// store is non-nil, the reconciler materializes CRs into it (the Git->DB
+// bridge). Returns the admin client + the manager context.
+func newAgentPoolTestEnv(t *testing.T, store *gateway.Store) (client.Client, context.Context) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -58,12 +63,16 @@ func newAgentPoolTestEnv(t *testing.T) (client.Client, context.Context) {
 	require.NoError(t, err)
 	saCfg := rbacManagerConfig(t, ctx, cfg, scheme)
 
-	mgr, err := ctrl.NewManager(saCfg, ctrl.Options{Scheme: scheme})
+	mgr, err := ctrl.NewManager(saCfg, ctrl.Options{
+		Scheme:     scheme,
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
+	})
 	require.NoError(t, err)
 	require.NoError(t, (&AgentPoolReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,
 		APIReader: mgr.GetAPIReader(),
+		Store:     store,
 	}).SetupWithManager(mgr))
 
 	// Surface controller-runtime errors on the test log.
@@ -129,7 +138,7 @@ func gwSelector(app string) v1alpha1.GatewayPodSelector {
 // runtime readiness (real-cluster PSS/CSI/storage validation is the ticket's
 // stated real-cluster gate). Requires KUBEBUILDER_ASSETS (envtest).
 func TestAgentPoolReconcile(t *testing.T) {
-	adminClient, ctx := newAgentPoolTestEnv(t)
+	adminClient, ctx := newAgentPoolTestEnv(t, nil)
 	ns := "default"
 
 	// Prerequisite Secrets: the platform CA + a credential-binding Secret.
@@ -306,4 +315,79 @@ func TestAgentPoolValidation(t *testing.T) {
 	err = newReconciler(ca, creds).validateSpec(ctx, badAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ReadWriteMany")
+}
+
+// TestAgentPoolGatewayMaterialization exercises the Git->DB bridge (HOR-245,
+// ARCH-018/migration 000011): creating an AgentPool materializes the pool +
+// grants + credential bindings into toolgateway; updating the CR removes stale
+// grants (soft-delete); deleting the CR soft-deletes the pool + its rows so the
+// gateway fails closed. Requires KUBEBUILDER_ASSETS (envtest) + Postgres.
+func TestAgentPoolGatewayMaterialization(t *testing.T) {
+	pgPool := testutil.NewPostgresPool(t)
+	store := gateway.NewStore(pgPool)
+	adminClient, ctx := newAgentPoolTestEnv(t, store)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns}, StringData: map[string]string{"tls.crt": "c", "tls.key": "k"}}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns}, StringData: map[string]string{"token": "v"}}))
+
+	pool := validAgentPool("gw-pool", ns)
+	pool.Spec.Replicas = 0 // focus on gateway materialization, not pod assembly
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	spiffe := "spiffe://iterabase.local/pools/" + string(pool.UID) + "/workers/gw-pool-worker-0"
+	key := "default/gw-pool"
+
+	// Pool + grant + binding materialized (live).
+	var p gateway.Pool
+	require.Eventually(t, func() bool {
+		got, err := store.ResolvePoolBySpiffePrefix(ctx, spiffe)
+		if err != nil || got.Key != key {
+			return false
+		}
+		p = got
+		if _, err := store.GetPoolGrant(ctx, p.ID, "graph.read"); err != nil {
+			return false
+		}
+		binds, err := store.ResolveCredentialBindings(ctx, p.ID, "graph.read")
+		return err == nil && len(binds) == 1 && binds[0].SlotName == "graphToken" && binds[0].Scheme == gateway.CredBearer
+	}, 15*time.Second, 200*time.Millisecond, "pool/grant/binding should be materialized")
+
+	// Wait until the first reconciliation settles, then re-fetch + update the CR
+	// (retry on conflict: the reconciler may still be patching status).
+	require.Eventually(t, func() bool {
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, types.NamespacedName{Name: "gw-pool", Namespace: ns}, &got); err != nil {
+			return false
+		}
+		if got.Status.ObservedGeneration != got.Generation {
+			return false
+		}
+		got.Spec.GatewayGrants = nil
+		got.Spec.CredentialBindings = []v1alpha1.CredentialBinding{
+			{ToolName: "graph.read", Slot: "renamed", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}}},
+		}
+		return adminClient.Update(ctx, &got) == nil
+	}, 15*time.Second, 200*time.Millisecond, "should update the AgentPool to drop the grant + rename the binding")
+
+	require.Eventually(t, func() bool {
+		if _, err := store.GetPoolGrant(ctx, p.ID, "graph.read"); err != gateway.ErrNotFound {
+			return false // stale grant must be soft-deleted (not live)
+		}
+		binds, err := store.ResolveCredentialBindings(ctx, p.ID, "graph.read")
+		return err == nil && len(binds) == 1 && binds[0].SlotName == "renamed"
+	}, 15*time.Second, 200*time.Millisecond, "stale grant/binding should be soft-deleted; new binding live")
+
+	// The old binding slot is soft-deleted (not returned by the live read above).
+	// Direct check: deleted_at is set on the stale graphToken binding row.
+	var staleDeleted *time.Time
+	require.NoError(t, pgPool.QueryRow(ctx, `SELECT deleted_at FROM toolgateway.credential_bindings WHERE pool_id = $1 AND slot_name = 'graphToken'`, p.ID).Scan(&staleDeleted))
+	require.NotNil(t, staleDeleted, "stale binding must be soft-deleted")
+
+	// Delete the CR -> pool + rows soft-deleted (gateway fails closed).
+	require.NoError(t, adminClient.Delete(ctx, pool))
+	require.Eventually(t, func() bool {
+		_, err := store.ResolvePoolBySpiffePrefix(ctx, spiffe)
+		return err == gateway.ErrNotFound
+	}, 15*time.Second, 200*time.Millisecond, "pool should be soft-deleted on CR deletion")
 }

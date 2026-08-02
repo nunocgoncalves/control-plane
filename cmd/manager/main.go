@@ -31,6 +31,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/controller"
 	"github.com/nunocgoncalves/control-plane/internal/database"
+	"github.com/nunocgoncalves/control-plane/internal/gateway"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
@@ -249,6 +250,7 @@ func run() int {
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,
 		APIReader: mgr.GetAPIReader(),
+		Store:     gateway.NewStore(pool),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up AgentPool reconciler")
 		return 1
