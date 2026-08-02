@@ -143,10 +143,15 @@ export function provisionSandbox(sandboxRoot: string, uid: number, gid: number):
  *    was recreated, or EPERM on a root-squashed volume) → typed SandboxError so
  *    the leak is surfaced rather than silently accepted.
  *
- * Reaping is best-effort relative to dispatch state: the CP MUST NOT recycle a
- * sandbox_id before the worker has ACKed reaping (v1: the CP simply waits for
- * the next Ready / a bounded grace). A transient IO error is surfaced as a
- * SandboxError so the supervisor can fail-closed rather than leak silently.
+ * Reuse-safety (v1 safety floor, founder-approved): the CP MUST NOT recycle a
+ * sandbox_id — and MUST NOT recycle the session (uid, gid) — before the worker
+ * has reaped. v1 carries no reap-ack on the wire, so the CP confirms reaping
+ * indirectly via the supervisor's fail-closed reap (a worker that returns to
+ * Ready did not hit a reap error this connection) plus a bounded grace during
+ * which the (sandbox_id, uid, gid) triple is non-recyclable. A transient IO
+ * error is surfaced as a SandboxError so the supervisor fails closed rather
+ * than leaks silently. v1 accepts that a stream loss before SessionEnd is
+ * handled leaves the sandbox until reconciled by a later session-end/reaper.
  */
 export function reapSandbox(sandboxRoot: string, uid: number, gid: number): void {
   let st;

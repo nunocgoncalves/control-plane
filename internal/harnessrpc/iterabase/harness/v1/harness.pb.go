@@ -2279,12 +2279,19 @@ func (x *AssignTurn) GetRunId() string {
 }
 
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
-// The supervisor validates ownership/mode + the relative working_dir; it never
-// chowns and (v1) never auto-creates the root.
+// Under the HOR-381 provisioning rescope (founder-approved 2026-08-02), the
+// supervisor itself provisions this sandbox at AssignTurn: provisionSandbox
+// creates <sandbox-id>/{root,home,tmp,session,workspace} at mode 0700, chowned
+// to the assignment's stable session UID/GID beneath a root-owned 0711 mount
+// root, then runs validateSandbox as the post-provision integrity gate before
+// spawning the child. The supervisor remains validate-only for an existing
+// path: it never chowns/"completes" a mismatched or partial sandbox — a
+// crash-mid-provision root is refused as a typed FAILED (never silently
+// re-adopted). It reaps the sandbox on SessionEnd (see below).
 type SandboxRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
-	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"` // stable per-session UID (provisioner chowns the sandbox)
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"` // stable per-session UID (supervisor chowns at provision)
 	Gid           uint32                 `protobuf:"varint,3,opt,name=gid,proto3" json:"gid,omitempty"`
 	WorkingDir    string                 `protobuf:"bytes,4,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"` // relative to the sandbox root; never absolute/escaping
 	unknownFields protoimpl.UnknownFields
@@ -2600,13 +2607,35 @@ func (x *EventAck) GetThroughSequence() uint64 {
 // sandbox may be reaped from the shared RWX PVC. The supervisor (which
 // provisioned the sandbox at AssignTurn under the HOR-245 provisioning
 // rescope) recursively removes `<sandbox-id>/` only after verifying it is a
-// non-symlink directory owned by the session (uid, gid); it never removes a
-// foreign-owned or mismatched path. Legal only when no turn is active (idle /
-// armed); a SessionEnd during an active turn is a protocol violation
-// (dispatch sequences it after the final outcome ACK). Idempotent: a missing
-// sandbox (never provisioned, or already reaped) is a no-op. Reaping is
-// best-effort relative to dispatch state — the CP MUST NOT rely on the worker
-// having reaped before recycling the sandbox_id.
+// non-symlink directory owned by the session (uid, gid); it never follows
+// symlinks and never reaps a foreign-owned or mismatched path. Reap errors
+// (symlink/foreign-owner/persist-after-remove/IO) are fatal — a SandboxError
+// surfaces a security invariant or a volume that silently ignores removal, so
+// the worker exits rather than leaks silently. Legal only when no turn is
+// active (idle/armed); a SessionEnd during an active turn is a fatal protocol
+// violation (dispatch sequences it after the final outcome EventAck).
+// Idempotent: a missing sandbox (never provisioned, or already reaped) is a
+// no-op.
+//
+// Reuse-safety contract (v1 safety floor, founder-approved): the CP MUST NOT
+// recycle a sandbox_id — and MUST NOT recycle the session (uid, gid) — before
+// the worker has reaped. v1 carries no reap-acknowledgment on the wire, so
+// the CP confirms reaping indirectly via (i) the supervisor's fail-closed
+// reap (any reap error is fatal, so a worker that returns to Ready did not
+// hit a reap error this connection) and (ii) a bounded grace exceeding the
+// max reap latency, during which the (sandbox_id, uid, gid) triple is
+// non-recyclable. The uid/gid ownership verification fences reuse: a stale
+// root owned by a prior session is refused (typed error -> fatal), never
+// silently re-adopted, so a recycled UID/GID cannot resurrect a prior
+// session's files.
+//
+// Accepted v1 limitation (founder-approved): v1 has no durable reap-ack +
+// retry/fencing contract on the wire — a stream loss before SessionEnd is
+// handled leaves the sandbox on the PVC until reconciled by a later
+// session-end or a follow-on reaper; v1 accepts this leak-and-reconcile
+// posture. The bounded grace + non-recycling + fail-closed reap is the v1
+// safety floor; a durable reap-ack is an explicit non-goal deferred to a
+// later hardening ticket.
 type SessionEnd struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`

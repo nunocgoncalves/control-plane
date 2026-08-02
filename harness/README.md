@@ -44,7 +44,9 @@ bidi method: `rpc Work(stream WorkerMessage) returns (stream ControlMessage)`.
   `TokenDelta` (ephemeral, non-sequenced — live token streaming).
 - **CP→worker:** `Welcome` (fencing generation + lease intervals),
   `AssignTurn` (per-turn session/persona/model/workspace-tools/run-id/sandbox/message),
-  `AbortTurn` (idempotent), `EventAck` (cumulative, post-Postgres-commit).
+  `AbortTurn` (idempotent), `EventAck` (cumulative, post-Postgres-commit),
+  `SessionEnd` (session terminated → supervisor reaps the per-session sandbox;
+  legal only when no turn is active).
 
 12 durable `TurnEvent` payloads (`ExecutionStarted`, `ModelCallStarted`,
 `AssistantMessage`, `ModelCallFailed`, `ModelRetryScheduled/Finished`,
@@ -54,13 +56,22 @@ token-delta UI forwarding are deferred (interactive surfaces).
 
 ## Sandbox
 
-`/data/sandboxes/<sandbox-id>/{home,tmp,session,workspace}`, root `0700` owned
-by a stable CP-assigned session UID/GID; mount-root `0711` (traversable, not
-listable). The **provisioner (HOR-245) creates+chowns** sandboxes (+ repo CoW
-checkouts for agentic coding); the **supervisor validates-only** (never chowns,
-no v1 auto-create — missing/mismatched → typed `FAILED`). The child runs under
-the session UID with `no_new_privs` + all caps dropped (kernel `EACCES` for
-sibling session roots). Extension code is pool-bound read-only; the per-turn
+`/data/sandboxes/<sandbox-id>/{root,home,tmp,session,workspace}`, root `0700`
+owned by a stable CP-assigned session UID/GID; mount-root `0711` (traversable,
+not listable, root-owned — established at startup by `ensureSandboxMountRoot`).
+Under the HOR-381 provisioning rescope (founder-approved 2026-08-02), the
+**supervisor itself provisions** the per-session sandbox at `AssignTurn`
+(`provisionSandbox` creates the `0700` entries chowned to the session UID/GID,
+then `validateSandbox` is the post-provision integrity gate); it remains
+validate-only for an **existing** path (never chowns/"completes" a mismatched
+or partial sandbox — missing/mismatched → typed `FAILED`) (+ repo CoW checkouts
+for agentic coding). On `SessionEnd` (HOR-245 cleanup contract) the supervisor
+reaps `<sandbox-id>/` after verifying non-symlink + session ownership. Reuse-
+safety: the CP MUST NOT recycle `sandbox_id` or `(uid, gid)` before reaping
+(v1: no reap-ack; fail-closed reap + bounded grace; a stream loss before
+`SessionEnd` is handled leaks until reconciled — accepted v1 limitation). The
+child runs under the session UID with `no_new_privs` + all caps dropped
+(kernel `EACCES` for sibling session roots). Extension code is pool-bound read-only; the per-turn
 `workspaceTools` switch (ARCH-016) exposes exactly pi's built-in
 `read`/`write`/`edit`/`bash` when enabled — no arbitrary local-tool catalogue.
 
