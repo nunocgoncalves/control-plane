@@ -109,11 +109,6 @@ type AgentPoolSpec struct {
 	// +optional
 	CredentialBindings []CredentialBinding `json:"credentialBindings,omitempty"`
 
-	// resourceConstraints are non-secret resource scopes/constraints bound at
-	// the pool level (ARCH-018), e.g. a tenant/site/drive the pool is scoped to.
-	// +optional
-	ResourceConstraints []ResourceConstraint `json:"resourceConstraints,omitempty"`
-
 	// piDirs are the read-only overlay paths mounted into the worker (skills +
 	// the built-in model/gateway bridges). Arbitrary sandbox-local tool
 	// extensions are removed (ARCH-016); authored skills remain. Defaults to
@@ -200,10 +195,14 @@ type PoolGatewaysSpec struct {
 	InferenceGateway GatewayEndpoint `json:"inferenceGateway"`
 }
 
-// GatewayEndpoint is an mTLS gateway URL + expected server cert SAN.
+// GatewayEndpoint is an mTLS gateway URL, its expected server cert SAN, and
+// the pod selector identifying the gateway's pods for NetworkPolicy egress
+// (REQ-010/ARCH-003). Egress is restricted to pods matching the selector on
+// the URL's port, rather than every pod in the namespace.
 // +kubebuilder:object:generate=true
 type GatewayEndpoint struct {
-	// url is the absolute endpoint, e.g. https://control-plane:8443.
+	// url is the absolute endpoint, e.g. https://control-plane:8443. Its port
+	// is used as the NetworkPolicy egress port for this gateway.
 	// +kubebuilder:validation:Pattern=`^https://`
 	// +kubebuilder:validation:Required
 	URL string `json:"url"`
@@ -211,48 +210,130 @@ type GatewayEndpoint struct {
 	// serverName is the expected server certificate SAN.
 	// +kubebuilder:validation:Required
 	ServerName string `json:"serverName"`
+
+	// selector identifies the gateway's pods for NetworkPolicy egress.
+	// +kubebuilder:validation:Required
+	Selector GatewayPodSelector `json:"selector"`
+}
+
+// GatewayPodSelector selects pods in a namespace for NetworkPolicy egress.
+// +kubebuilder:object:generate=true
+type GatewayPodSelector struct {
+	// namespaceSelector selects the namespace. When nil, the AgentPool's own
+	// namespace is used.
+	// +optional
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
+
+	// podSelector selects the pods within the namespace. Must be non-empty.
+	// +kubebuilder:validation:Required
+	PodSelector metav1.LabelSelector `json:"podSelector"`
 }
 
 // NetworkPolicySpec configures worker pod egress.
 // +kubebuilder:object:generate=true
 type NetworkPolicySpec struct {
-	// egress selects the egress mode. `denied` (default) allows only kube-dns +
-	// the three gateways + kube API; `internet` additionally allows outbound to
+	// egress selects the egress mode. `denied` (default) allows only the DNS
+	// pods + the three gateways; `internet` additionally allows outbound to
 	// non-cluster Internet (per-pool operator opt-in). Customer-system
 	// credentialed access still routes through the gateway regardless.
 	// +kubebuilder:validation:Enum=denied;internet
 	// +optional
 	Egress string `json:"egress,omitempty"`
+
+	// dnsSelector selects the cluster DNS pods for egress on port 53. When nil,
+	// defaults to the kube-system namespace + k8s-app=kube-dns.
+	// +optional
+	DnsSelector *GatewayPodSelector `json:"dnsSelector,omitempty"`
 }
 
 // GatewayGrant is one maximum gateway capability permission (ARCH-018).
+// Mirrors toolgateway.pool_grants: a tool, its maximum effect class, and an
+// opaque allowed-actions allow-list. A turn cannot widen these; the gateway
+// intersects them with deployed registry availability, workflow-requested
+// capabilities, and durable customer/identity policy at discovery (HOR-392).
 // +kubebuilder:object:generate=true
 type GatewayGrant struct {
 	// tool is the logical gateway tool/capability name (e.g. "graph.read").
 	// +kubebuilder:validation:Required
 	Tool string `json:"tool"`
 
-	// permissions are the maximum permissions granted for this tool. A turn
-	// cannot widen them. Must be non-empty; the gateway intersects with
-	// workflow/customer policy at discovery.
-	// +kubebuilder:validation:MinItems=1
+	// maxEffectClass is the maximum effect class granted for this tool. A turn
+	// cannot widen it. Semantic validation against a registered tool's effect
+	// class is the gateway's responsibility (HOR-392/397).
+	// +kubebuilder:validation:Enum=read_only;idempotent_write;non_idempotent_write
 	// +kubebuilder:validation:Required
-	Permissions []string `json:"permissions"`
+	MaxEffectClass string `json:"maxEffectClass"`
+
+	// allowedActions is an opaque action allow-list (e.g. ["read", "list"]).
+	// Empty means effect-class-only (no action narrowing). The gateway
+	// intersects it with workflow/customer policy at discovery.
+	// +optional
+	AllowedActions []string `json:"allowedActions,omitempty"`
 }
 
-// CredentialBinding binds a logical credential slot to a K8s Secret key.
+// CredentialBinding binds a logical credential slot (declared by a runner
+// tool manifest, ARCH-008/018) to a scheme-specific K8s Secret reference plus
+// non-secret resource constraints. Mirrors toolgateway.credential_bindings.
+// The credential VALUE never enters the CRD or Postgres — only the Secret
+// reference; the gateway resolves it at invocation. The operator validates the
+// referenced Secrets exist.
 // +kubebuilder:object:generate=true
 type CredentialBinding struct {
-	// slot is the logical credential slot name declared by a runner tool
-	// manifest (ARCH-008). The gateway resolves it at invocation.
+	// toolName is the logical gateway tool that declares this slot.
+	// +kubebuilder:validation:Required
+	ToolName string `json:"toolName"`
+
+	// slot is the logical credential slot name declared by the tool manifest.
 	// +kubebuilder:validation:Required
 	Slot string `json:"slot"`
 
-	// secretRef names the K8s Secret + key holding the credential VALUE. The
-	// value never enters the CRD or Postgres. The operator validates the Secret
-	// exists.
+	// scheme is the credential resolution scheme. Determines which secret
+	// reference fields are required.
+	// +kubebuilder:validation:Enum=bearer;oauth_client_credentials
 	// +kubebuilder:validation:Required
-	SecretRef SecretKeyRef `json:"secretRef"`
+	Scheme string `json:"scheme"`
+
+	// bearer is required when scheme=bearer.
+	// +optional
+	Bearer *BearerCredential `json:"bearer,omitempty"`
+
+	// oauth is required when scheme=oauth_client_credentials.
+	// +optional
+	OAuth *OAuthClientCredentials `json:"oauth,omitempty"`
+
+	// resourceConstraints are non-secret resource scopes bound to this binding
+	// (e.g. tenant/site), resolved by the gateway at invocation.
+	// +optional
+	ResourceConstraints []ResourceConstraint `json:"resourceConstraints,omitempty"`
+}
+
+// BearerCredential is a bearer-token Secret reference (scheme=bearer).
+// +kubebuilder:object:generate=true
+type BearerCredential struct {
+	// valueSecretRef names the K8s Secret + key holding the token value.
+	// +kubebuilder:validation:Required
+	ValueSecretRef SecretKeyRef `json:"valueSecretRef"`
+}
+
+// OAuthClientCredentials is an OAuth client-credentials Secret reference
+// (scheme=oauth_client_credentials).
+// +kubebuilder:object:generate=true
+type OAuthClientCredentials struct {
+	// clientId is the OAuth client id (non-secret).
+	// +kubebuilder:validation:Required
+	ClientID string `json:"clientId"`
+
+	// clientSecretRef names the K8s Secret + key holding the client secret.
+	// +kubebuilder:validation:Required
+	ClientSecretRef SecretKeyRef `json:"clientSecretRef"`
+
+	// tokenURL is the OAuth token endpoint.
+	// +kubebuilder:validation:Required
+	TokenURL string `json:"tokenUrl"`
+
+	// scopes are the requested OAuth scopes.
+	// +optional
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 // SecretKeyRef names a key within a K8s Secret in the pool's namespace.

@@ -62,33 +62,108 @@ spec:
                   the binding at invocation. Secret VALUES never enter the CRD or Postgres —
                   only the reference. The operator validates the referenced Secret exists.
                 items:
-                  description: CredentialBinding binds a logical credential slot to
-                    a K8s Secret key.
+                  description: |-
+                    CredentialBinding binds a logical credential slot (declared by a runner
+                    tool manifest, ARCH-008/018) to a scheme-specific K8s Secret reference plus
+                    non-secret resource constraints. Mirrors toolgateway.credential_bindings.
+                    The credential VALUE never enters the CRD or Postgres — only the Secret
+                    reference; the gateway resolves it at invocation. The operator validates the
+                    referenced Secrets exist.
                   properties:
-                    secretRef:
-                      description: |-
-                        secretRef names the K8s Secret + key holding the credential VALUE. The
-                        value never enters the CRD or Postgres. The operator validates the Secret
-                        exists.
+                    bearer:
+                      description: bearer is required when scheme=bearer.
                       properties:
-                        key:
-                          description: key is the key within the Secret.
+                        valueSecretRef:
+                          description: valueSecretRef names the K8s Secret + key holding
+                            the token value.
+                          properties:
+                            key:
+                              description: key is the key within the Secret.
+                              type: string
+                            name:
+                              description: name is the Kubernetes Secret name.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      required:
+                      - valueSecretRef
+                      type: object
+                    oauth:
+                      description: oauth is required when scheme=oauth_client_credentials.
+                      properties:
+                        clientId:
+                          description: clientId is the OAuth client id (non-secret).
                           type: string
-                        name:
-                          description: name is the Kubernetes Secret name.
+                        clientSecretRef:
+                          description: clientSecretRef names the K8s Secret + key
+                            holding the client secret.
+                          properties:
+                            key:
+                              description: key is the key within the Secret.
+                              type: string
+                            name:
+                              description: name is the Kubernetes Secret name.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        scopes:
+                          description: scopes are the requested OAuth scopes.
+                          items:
+                            type: string
+                          type: array
+                        tokenUrl:
+                          description: tokenURL is the OAuth token endpoint.
                           type: string
                       required:
-                      - key
-                      - name
+                      - clientId
+                      - clientSecretRef
+                      - tokenUrl
                       type: object
-                    slot:
+                    resourceConstraints:
                       description: |-
-                        slot is the logical credential slot name declared by a runner tool
-                        manifest (ARCH-008). The gateway resolves it at invocation.
+                        resourceConstraints are non-secret resource scopes bound to this binding
+                        (e.g. tenant/site), resolved by the gateway at invocation.
+                      items:
+                        description: ResourceConstraint is a non-secret pool-level
+                          resource scope (ARCH-018).
+                        properties:
+                          resource:
+                            description: resource is the logical resource name (e.g.
+                              "site", "tenant").
+                            type: string
+                          value:
+                            description: value is the non-secret resource value (e.g.
+                              "walter").
+                            type: string
+                        required:
+                        - resource
+                        - value
+                        type: object
+                      type: array
+                    scheme:
+                      description: |-
+                        scheme is the credential resolution scheme. Determines which secret
+                        reference fields are required.
+                      enum:
+                      - bearer
+                      - oauth_client_credentials
+                      type: string
+                    slot:
+                      description: slot is the logical credential slot name declared
+                        by the tool manifest.
+                      type: string
+                    toolName:
+                      description: toolName is the logical gateway tool that declares
+                        this slot.
                       type: string
                   required:
-                  - secretRef
+                  - scheme
                   - slot
+                  - toolName
                   type: object
                 type: array
               gatewayGrants:
@@ -101,24 +176,37 @@ spec:
                   registered is the gateway's responsibility (HOR-392/397); the operator
                   validates structure only (required fields, no duplicate tools).
                 items:
-                  description: GatewayGrant is one maximum gateway capability permission
-                    (ARCH-018).
+                  description: |-
+                    GatewayGrant is one maximum gateway capability permission (ARCH-018).
+                    Mirrors toolgateway.pool_grants: a tool, its maximum effect class, and an
+                    opaque allowed-actions allow-list. A turn cannot widen these; the gateway
+                    intersects them with deployed registry availability, workflow-requested
+                    capabilities, and durable customer/identity policy at discovery (HOR-392).
                   properties:
-                    permissions:
+                    allowedActions:
                       description: |-
-                        permissions are the maximum permissions granted for this tool. A turn
-                        cannot widen them. Must be non-empty; the gateway intersects with
-                        workflow/customer policy at discovery.
+                        allowedActions is an opaque action allow-list (e.g. ["read", "list"]).
+                        Empty means effect-class-only (no action narrowing). The gateway
+                        intersects it with workflow/customer policy at discovery.
                       items:
                         type: string
-                      minItems: 1
                       type: array
+                    maxEffectClass:
+                      description: |-
+                        maxEffectClass is the maximum effect class granted for this tool. A turn
+                        cannot widen it. Semantic validation against a registered tool's effect
+                        class is the gateway's responsibility (HOR-392/397).
+                      enum:
+                      - read_only
+                      - idempotent_write
+                      - non_idempotent_write
+                      type: string
                     tool:
                       description: tool is the logical gateway tool/capability name
                         (e.g. "graph.read").
                       type: string
                   required:
-                  - permissions
+                  - maxEffectClass
                   - tool
                   type: object
                 type: array
@@ -132,15 +220,120 @@ spec:
                     description: controlPlane is the Work bidi-stream gRPC server
                       (HOR-249).
                     properties:
+                      selector:
+                        description: selector identifies the gateway's pods for NetworkPolicy
+                          egress.
+                        properties:
+                          namespaceSelector:
+                            description: |-
+                              namespaceSelector selects the namespace. When nil, the AgentPool's own
+                              namespace is used.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          podSelector:
+                            description: podSelector selects the pods within the namespace.
+                              Must be non-empty.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - podSelector
+                        type: object
                       serverName:
                         description: serverName is the expected server certificate
                           SAN.
                         type: string
                       url:
-                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        description: |-
+                          url is the absolute endpoint, e.g. https://control-plane:8443. Its port
+                          is used as the NetworkPolicy egress port for this gateway.
                         pattern: ^https://
                         type: string
                     required:
+                    - selector
                     - serverName
                     - url
                     type: object
@@ -149,30 +342,240 @@ spec:
                       inferenceGateway is the /v1/chat/completions workload mTLS listener
                       (HOR-398).
                     properties:
+                      selector:
+                        description: selector identifies the gateway's pods for NetworkPolicy
+                          egress.
+                        properties:
+                          namespaceSelector:
+                            description: |-
+                              namespaceSelector selects the namespace. When nil, the AgentPool's own
+                              namespace is used.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          podSelector:
+                            description: podSelector selects the pods within the namespace.
+                              Must be non-empty.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - podSelector
+                        type: object
                       serverName:
                         description: serverName is the expected server certificate
                           SAN.
                         type: string
                       url:
-                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        description: |-
+                          url is the absolute endpoint, e.g. https://control-plane:8443. Its port
+                          is used as the NetworkPolicy egress port for this gateway.
                         pattern: ^https://
                         type: string
                     required:
+                    - selector
                     - serverName
                     - url
                     type: object
                   toolGateway:
                     description: toolGateway is the GatewayService gRPC endpoint (HOR-392).
                     properties:
+                      selector:
+                        description: selector identifies the gateway's pods for NetworkPolicy
+                          egress.
+                        properties:
+                          namespaceSelector:
+                            description: |-
+                              namespaceSelector selects the namespace. When nil, the AgentPool's own
+                              namespace is used.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          podSelector:
+                            description: podSelector selects the pods within the namespace.
+                              Must be non-empty.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - podSelector
+                        type: object
                       serverName:
                         description: serverName is the expected server certificate
                           SAN.
                         type: string
                       url:
-                        description: url is the absolute endpoint, e.g. https://control-plane:8443.
+                        description: |-
+                          url is the absolute endpoint, e.g. https://control-plane:8443. Its port
+                          is used as the NetworkPolicy egress port for this gateway.
                         pattern: ^https://
                         type: string
                     required:
+                    - selector
                     - serverName
                     - url
                     type: object
@@ -225,10 +628,113 @@ spec:
                   fetching packages). Customer-system credentialed access still routes
                   through the gateway regardless — the sandbox never holds customer creds.
                 properties:
+                  dnsSelector:
+                    description: |-
+                      dnsSelector selects the cluster DNS pods for egress on port 53. When nil,
+                      defaults to the kube-system namespace + k8s-app=kube-dns.
+                    properties:
+                      namespaceSelector:
+                        description: |-
+                          namespaceSelector selects the namespace. When nil, the AgentPool's own
+                          namespace is used.
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector
+                              requirements. The requirements are ANDed.
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              properties:
+                                key:
+                                  description: key is the label key that the selector
+                                    applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - key
+                              - operator
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      podSelector:
+                        description: podSelector selects the pods within the namespace.
+                          Must be non-empty.
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector
+                              requirements. The requirements are ANDed.
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              properties:
+                                key:
+                                  description: key is the label key that the selector
+                                    applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - key
+                              - operator
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - podSelector
+                    type: object
                   egress:
                     description: |-
-                      egress selects the egress mode. `denied` (default) allows only kube-dns +
-                      the three gateways + kube API; `internet` additionally allows outbound to
+                      egress selects the egress mode. `denied` (default) allows only the DNS
+                      pods + the three gateways; `internet` additionally allows outbound to
                       non-cluster Internet (per-pool operator opt-in). Customer-system
                       credentialed access still routes through the gateway regardless.
                     enum:
@@ -280,26 +786,6 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
-              resourceConstraints:
-                description: |-
-                  resourceConstraints are non-secret resource scopes/constraints bound at
-                  the pool level (ARCH-018), e.g. a tenant/site/drive the pool is scoped to.
-                items:
-                  description: ResourceConstraint is a non-secret pool-level resource
-                    scope (ARCH-018).
-                  properties:
-                    resource:
-                      description: resource is the logical resource name (e.g. "site",
-                        "tenant").
-                      type: string
-                    value:
-                      description: value is the non-secret resource value (e.g. "walter").
-                      type: string
-                  required:
-                  - resource
-                  - value
-                  type: object
-                type: array
               resources:
                 description: |-
                   resources are the worker pod's resource requirements (supervisor + child

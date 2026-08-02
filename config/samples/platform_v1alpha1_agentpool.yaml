@@ -31,46 +31,62 @@ spec:
     size: 100Gi
     mountPath: /data/sandboxes
 
-  # Supervisor platform endpoints (ARCH-010). The child receives none.
+  # Supervisor platform endpoints (ARCH-010). The child receives none. Each
+  # endpoint's selector restricts NetworkPolicy egress to that gateway's pods
+  # on the URL's port (REQ-010).
   gateways:
     controlPlane:
       url: https://control-plane.platform.svc:8443
       serverName: control-plane
+      selector:
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: control-plane}
     toolGateway:
       url: https://gateway.platform.svc:8443
       serverName: tool-gateway
+      selector:
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: tool-gateway}
     inferenceGateway:
       url: https://inference-gateway.platform.svc:8443
       serverName: inference-gateway
+      selector:
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: inference-gateway}
 
-  # ARCH-003 deny-by-default egress. `denied` = kube-dns + the three gateways
+  # ARCH-003 deny-by-default egress. `denied` = DNS pods + the three gateways
   # only; `internet` additionally allows non-cluster Internet (per-pool opt-in
   # for e.g. coding agents). Customer-system credentialed access always routes
   # through the gateway regardless — the sandbox holds no customer creds.
   networkPolicy:
     egress: denied
+    # dnsSelector defaults to kube-system / k8s-app=kube-dns when omitted.
 
   # ARCH-016: deny-by-default local-workspace tools. true exposes exactly
   # read/write/edit/bash; false exposes none.
   workspaceTools: false
 
   # ARCH-018: maximum gateway capability grants (a turn cannot widen these).
+  # Mirrors toolgateway.pool_grants: tool + max effect class + allowed actions.
   gatewayGrants:
     - tool: graph.read
-      permissions: [read]
+      maxEffectClass: read_only
+      allowedActions: [read, list]
     - tool: graph.mail.send
-      permissions: [send]
+      maxEffectClass: idempotent_write
+      allowedActions: [send]
 
-  # ARCH-008/018: logical credential slots -> K8s Secret refs. VALUES never
-  # enter the CRD; the gateway resolves them at invocation.
+  # ARCH-008/018: logical credential slots -> scheme-specific K8s Secret refs.
+  # VALUES never enter the CRD; the gateway resolves them at invocation.
   credentialBindings:
-    - slot: graphToken
-      secretRef: { name: graph-creds, key: token }
-
-  # ARCH-018: non-secret pool-level resource scopes.
-  resourceConstraints:
-    - resource: site
-      value: walter
+    - toolName: graph.read
+      slot: graphToken
+      scheme: bearer
+      bearer:
+        valueSecretRef: {name: graph-creds, key: token}
+      resourceConstraints:
+        - resource: site
+          value: walter
 
   piDirs: [/pi/product, /pi/client]
   walDir: /var/harness/wal

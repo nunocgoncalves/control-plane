@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -189,6 +190,9 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 		if ep.ServerName == "" {
 			return fmt.Errorf("spec.gateways.%s.serverName is required", name)
 		}
+		if err := validateGatewayPodSelector(ep.Selector); err != nil {
+			return fmt.Errorf("spec.gateways.%s.selector: %w", name, err)
+		}
 	}
 	// Egress mode (CRD enum already constrains, but default-then-check).
 	switch pool.Spec.NetworkPolicy.Egress {
@@ -196,7 +200,8 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 	default:
 		return fmt.Errorf("spec.networkPolicy.egress must be \"denied\" or \"internet\"")
 	}
-	// Gateway grants: no duplicate tools, non-empty permissions.
+	// Gateway grants: no duplicate tools, valid max effect class, no empty
+	// allowed actions (mirrors toolgateway.pool_grants).
 	seen := make(map[string]bool)
 	for i, g := range pool.Spec.GatewayGrants {
 		if g.Tool == "" {
@@ -206,35 +211,74 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 			return fmt.Errorf("spec.gatewayGrants[%d].tool %q is duplicated", i, g.Tool)
 		}
 		seen[g.Tool] = true
-		if len(g.Permissions) == 0 {
-			return fmt.Errorf("spec.gatewayGrants[%d].permissions must be non-empty", i)
+		switch g.MaxEffectClass {
+		case "read_only", "idempotent_write", "non_idempotent_write":
+		default:
+			return fmt.Errorf("spec.gatewayGrants[%d].maxEffectClass must be read_only, idempotent_write, or non_idempotent_write", i)
 		}
-		for _, p := range g.Permissions {
-			if strings.TrimSpace(p) == "" {
-				return fmt.Errorf("spec.gatewayGrants[%d].permissions contains an empty value", i)
+		for _, a := range g.AllowedActions {
+			if strings.TrimSpace(a) == "" {
+				return fmt.Errorf("spec.gatewayGrants[%d].allowedActions contains an empty value", i)
 			}
 		}
 	}
-	// Credential bindings: required fields + Secret existence.
+	// Credential bindings: required fields, scheme-specific Secret refs +
+	// existence, resource constraints (mirrors toolgateway.credential_bindings).
 	for i, b := range pool.Spec.CredentialBindings {
+		if b.ToolName == "" {
+			return fmt.Errorf("spec.credentialBindings[%d].toolName is required", i)
+		}
 		if b.Slot == "" {
 			return fmt.Errorf("spec.credentialBindings[%d].slot is required", i)
 		}
-		if b.SecretRef.Name == "" || b.SecretRef.Key == "" {
-			return fmt.Errorf("spec.credentialBindings[%d].secretRef name+key are required", i)
+		var secretName string
+		switch b.Scheme {
+		case "bearer":
+			if b.Bearer == nil {
+				return fmt.Errorf("spec.credentialBindings[%d].bearer is required when scheme=bearer", i)
+			}
+			if b.Bearer.ValueSecretRef.Name == "" || b.Bearer.ValueSecretRef.Key == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].bearer.valueSecretRef name+key are required", i)
+			}
+			secretName = b.Bearer.ValueSecretRef.Name
+		case "oauth_client_credentials":
+			if b.OAuth == nil {
+				return fmt.Errorf("spec.credentialBindings[%d].oauth is required when scheme=oauth_client_credentials", i)
+			}
+			if b.OAuth.ClientID == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].oauth.clientId is required", i)
+			}
+			if b.OAuth.ClientSecretRef.Name == "" || b.OAuth.ClientSecretRef.Key == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].oauth.clientSecretRef name+key are required", i)
+			}
+			if b.OAuth.TokenURL == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].oauth.tokenUrl is required", i)
+			}
+			secretName = b.OAuth.ClientSecretRef.Name
+		default:
+			return fmt.Errorf("spec.credentialBindings[%d].scheme must be bearer or oauth_client_credentials", i)
 		}
-		if err := r.secretExists(ctx, pool.Namespace, b.SecretRef.Name); err != nil {
-			return fmt.Errorf("credentialBindings[%d].secretRef: %w", i, err)
+		if err := r.secretExists(ctx, pool.Namespace, secretName); err != nil {
+			return fmt.Errorf("credentialBindings[%d]: %w", i, err)
+		}
+		for j, c := range b.ResourceConstraints {
+			if c.Resource == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].resourceConstraints[%d].resource is required", i, j)
+			}
+			if c.Value == "" {
+				return fmt.Errorf("spec.credentialBindings[%d].resourceConstraints[%d].value is required", i, j)
+			}
 		}
 	}
-	// Resource constraints: required fields.
-	for i, c := range pool.Spec.ResourceConstraints {
-		if c.Resource == "" {
-			return fmt.Errorf("spec.resourceConstraints[%d].resource is required", i)
-		}
-		if c.Value == "" {
-			return fmt.Errorf("spec.resourceConstraints[%d].value is required", i)
-		}
+	return nil
+}
+
+// validateGatewayPodSelector requires a non-empty pod selector (at least one
+// matchLabel or matchExpression) so NetworkPolicy egress is actually
+// restricted to the intended gateway pods rather than the whole namespace.
+func validateGatewayPodSelector(sel v1alpha1.GatewayPodSelector) error {
+	if len(sel.PodSelector.MatchLabels) == 0 && len(sel.PodSelector.MatchExpressions) == 0 {
+		return fmt.Errorf("podSelector must be non-empty (at least one matchLabel or matchExpression)")
 	}
 	return nil
 }
@@ -537,31 +581,33 @@ func buildWorkerPodSpec(pool *v1alpha1.AgentPool, name string) corev1.PodSpec {
 	}
 }
 
-// buildNetworkPolicySpec renders a deny-by-default egress policy selecting the
-// pool's worker pods. `denied` allows only kube-dns + the pool namespace (the
-// three gateways run there); `internet` additionally allows outbound to
+// buildNetworkPolicySpec renders a deny-by-default egress policy selecting
+// the pool's worker pods. Egress is restricted to: the DNS pods (port 53) and
+// each gateway's pods (selected by label) on that gateway's URL port. `denied`
+// (default) allows only those; `internet` additionally allows outbound to
 // non-cluster Internet (RFC1918/loopback/link-local excluded, so credentialed
-// customer systems on private IPs remain reachable only via the gateway).
+// customer systems on private IPs remain reachable only via the gateway). An
+// enabled `bash` tool therefore cannot reach unrelated colocated databases,
+// caches, or adapters (REQ-010/ARCH-003).
 func buildNetworkPolicySpec(pool *v1alpha1.AgentPool) networkingv1.NetworkPolicySpec {
 	dnsPort := intstr.FromInt(53)
 	udp := corev1.ProtocolUDP
 	tcp := corev1.ProtocolTCP
+
 	egress := []networkingv1.NetworkPolicyEgressRule{
-		// kube-dns (Service resolution for the gateway hostnames).
+		// DNS pods only (Service resolution for the gateway hostnames).
 		{
-			To: []networkingv1.NetworkPolicyPeer{{
-				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
-			}},
+			To:    []networkingv1.NetworkPolicyPeer{dnsPolicyPeer(pool)},
 			Ports: []networkingv1.NetworkPolicyPort{{Port: &dnsPort, Protocol: &udp}, {Port: &dnsPort, Protocol: &tcp}},
 		},
-		// The three gateways run in the pool's namespace (control-plane, tool
-		// gateway, inference gateway). The harness is a gRPC client to them;
-		// it is not a Kubernetes API client, so no kube-API egress is needed.
-		{
-			To: []networkingv1.NetworkPolicyPeer{{
-				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": pool.Namespace}},
-			}},
-		},
+	}
+	// Each gateway: its pods only, on its port.
+	for _, ep := range []v1alpha1.GatewayEndpoint{
+		pool.Spec.Gateways.ControlPlane,
+		pool.Spec.Gateways.ToolGateway,
+		pool.Spec.Gateways.InferenceGateway,
+	} {
+		egress = append(egress, gatewayEgressRule(pool, ep))
 	}
 	if pool.Spec.NetworkPolicy.Egress == "internet" {
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
@@ -582,6 +628,53 @@ func buildNetworkPolicySpec(pool *v1alpha1.AgentPool) networkingv1.NetworkPolicy
 		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 		Egress:      egress,
 	}
+}
+
+// gatewayEgressRule builds an egress rule restricted to one gateway's pods on
+// its URL port.
+func gatewayEgressRule(pool *v1alpha1.AgentPool, ep v1alpha1.GatewayEndpoint) networkingv1.NetworkPolicyEgressRule {
+	port := gatewayPort(ep.URL)
+	tcp := corev1.ProtocolTCP
+	return networkingv1.NetworkPolicyEgressRule{
+		To:    []networkingv1.NetworkPolicyPeer{gatewayPolicyPeer(pool, ep.Selector)},
+		Ports: []networkingv1.NetworkPolicyPort{{Port: &port, Protocol: &tcp}},
+	}
+}
+
+// gatewayPolicyPeer builds a NetworkPolicy peer selecting the gateway's pods in
+// the selected namespace (defaulting to the pool's namespace).
+func gatewayPolicyPeer(pool *v1alpha1.AgentPool, sel v1alpha1.GatewayPodSelector) networkingv1.NetworkPolicyPeer {
+	nsSel := sel.NamespaceSelector
+	if nsSel == nil {
+		nsSel = &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": pool.Namespace}}
+	}
+	podSel := sel.PodSelector
+	return networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: nsSel,
+		PodSelector:       &podSel,
+	}
+}
+
+// dnsPolicyPeer builds the DNS egress peer, defaulting to kube-system +
+// k8s-app=kube-dns when no selector is configured.
+func dnsPolicyPeer(pool *v1alpha1.AgentPool) networkingv1.NetworkPolicyPeer {
+	if pool.Spec.NetworkPolicy.DnsSelector != nil {
+		return gatewayPolicyPeer(pool, *pool.Spec.NetworkPolicy.DnsSelector)
+	}
+	return networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+	}
+}
+
+// gatewayPort extracts the port from a gateway URL (defaults to 443 for https).
+func gatewayPort(rawURL string) intstr.IntOrString {
+	if u, err := url.Parse(rawURL); err == nil && u.Port() != "" {
+		if p, err := strconv.Atoi(u.Port()); err == nil {
+			return intstr.FromInt(p)
+		}
+	}
+	return intstr.FromInt(443)
 }
 
 // renderHarnessConfig renders the infra-only harness boot config.yaml for one

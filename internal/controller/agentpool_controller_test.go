@@ -100,19 +100,25 @@ func validAgentPool(name, ns string) *v1alpha1.AgentPool {
 				MountPath:        "/data/sandboxes",
 			},
 			Gateways: v1alpha1.PoolGatewaysSpec{
-				ControlPlane:     v1alpha1.GatewayEndpoint{URL: "https://control-plane:8443", ServerName: "control-plane"},
-				ToolGateway:      v1alpha1.GatewayEndpoint{URL: "https://gateway:8443", ServerName: "tool-gateway"},
-				InferenceGateway: v1alpha1.GatewayEndpoint{URL: "https://inference-gateway:8443", ServerName: "inference-gateway"},
+				ControlPlane:     v1alpha1.GatewayEndpoint{URL: "https://control-plane:8443", ServerName: "control-plane", Selector: gwSelector("control-plane")},
+				ToolGateway:      v1alpha1.GatewayEndpoint{URL: "https://gateway:8443", ServerName: "tool-gateway", Selector: gwSelector("tool-gateway")},
+				InferenceGateway: v1alpha1.GatewayEndpoint{URL: "https://inference-gateway:8443", ServerName: "inference-gateway", Selector: gwSelector("inference-gateway")},
 			},
 			NetworkPolicy: v1alpha1.NetworkPolicySpec{Egress: "denied"},
 			GatewayGrants: []v1alpha1.GatewayGrant{
-				{Tool: "graph.read", Permissions: []string{"read"}},
+				{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"read"}},
 			},
 			CredentialBindings: []v1alpha1.CredentialBinding{
-				{Slot: "graphToken", SecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}},
+				{ToolName: "graph.read", Slot: "graphToken", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "graph-creds", Key: "token"}}},
 			},
 		},
 	}
+}
+
+// gwSelector builds a pod selector matching app.kubernetes.io/name=<app> in the
+// pool's own namespace.
+func gwSelector(app string) v1alpha1.GatewayPodSelector {
+	return v1alpha1.GatewayPodSelector{PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": app}}}
 }
 
 // TestAgentPoolReconcile exercises the full assembly UNDER RBAC: creating an
@@ -166,6 +172,18 @@ func TestAgentPoolReconcile(t *testing.T) {
 		}
 	}
 	assert.False(t, hasInternetBlock, "denied mode must not allow internet egress")
+	// Every egress peer is restricted by a pod selector (and gateway rules by a
+	// port), so an enabled bash tool cannot reach unrelated colocated pods on
+	// arbitrary ports (REQ-010) — no namespace-wide "any pod, any port" rule.
+	for _, e := range np.Spec.Egress {
+		require.NotEmpty(t, e.To, "egress rule must have at least one peer")
+		for _, peer := range e.To {
+			if peer.IPBlock != nil {
+				continue
+			}
+			require.NotNil(t, peer.PodSelector, "egress must be restricted by a pod selector (no namespace-wide rule)")
+		}
+	}
 
 	// Pods + ConfigMaps created with the expected shape.
 	require.Eventually(t, func() bool {
@@ -245,7 +263,7 @@ func TestAgentPoolValidation(t *testing.T) {
 	badBinding := validAgentPool("b1", ns)
 	badBinding.Spec.Replicas = 1
 	badBinding.Spec.CredentialBindings = []v1alpha1.CredentialBinding{
-		{Slot: "x", SecretRef: v1alpha1.SecretKeyRef{Name: "does-not-exist", Key: "k"}},
+		{ToolName: "graph.read", Slot: "x", Scheme: "bearer", Bearer: &v1alpha1.BearerCredential{ValueSecretRef: v1alpha1.SecretKeyRef{Name: "does-not-exist", Key: "k"}}},
 	}
 	err := newReconciler(ca).validateSpec(ctx, badBinding)
 	require.Error(t, err)
@@ -256,21 +274,21 @@ func TestAgentPoolValidation(t *testing.T) {
 	dup.Spec.Replicas = 1
 	dup.Spec.CredentialBindings = nil
 	dup.Spec.GatewayGrants = []v1alpha1.GatewayGrant{
-		{Tool: "graph.read", Permissions: []string{"read"}},
-		{Tool: "graph.read", Permissions: []string{"write"}},
+		{Tool: "graph.read", MaxEffectClass: "read_only"},
+		{Tool: "graph.read", MaxEffectClass: "idempotent_write"},
 	}
 	err = newReconciler(ca).validateSpec(ctx, dup)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicated")
 
-	// Empty permission list -> rejected.
+	// Invalid max effect class -> rejected.
 	noPerm := validAgentPool("b3", ns)
 	noPerm.Spec.Replicas = 1
 	noPerm.Spec.CredentialBindings = nil
-	noPerm.Spec.GatewayGrants = []v1alpha1.GatewayGrant{{Tool: "t", Permissions: nil}}
+	noPerm.Spec.GatewayGrants = []v1alpha1.GatewayGrant{{Tool: "t", MaxEffectClass: "bogus"}}
 	err = newReconciler(ca).validateSpec(ctx, noPerm)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "permissions must be non-empty")
+	assert.Contains(t, err.Error(), "maxEffectClass")
 
 	// Missing CA Secret -> rejected.
 	noCA := validAgentPool("b4", ns)
