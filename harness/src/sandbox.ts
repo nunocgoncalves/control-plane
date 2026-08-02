@@ -1,15 +1,23 @@
-// Sandbox validation (HOR-381). The supervisor validates the per-session
-// sandbox on the shared RWX PVC before launching the child: resolve the root
-// beneath the boot-configured mount root, verify it exists / is a directory /
-// is NOT a symlink / is owned by the session UID/GID / is mode 0700, and
-// resolve the relative working directory within it.
+// Sandbox provisioning + validation (HOR-245). The trusted supervisor (root)
+// provisions the per-session sandbox on the shared RWX PVC at AssignTurn, then
+// validates it before launching the child: resolve the root beneath the
+// boot-configured mount root, create+chown it (0700, session UID/GID) if
+// missing, verify it exists / is a directory / is NOT a symlink / is owned by
+// the session UID/GID / is mode 0700, and resolve the relative working dir.
 //
-// The supervisor NEVER chowns and (v1) NEVER auto-creates a sandbox root — a
-// missing or mismatched sandbox yields a typed SandboxError the supervisor
-// turns into a FAILED outcome. Provisioning (create+chown, UID/GID assignment,
-// repo CoW checkouts) is HOR-245's job.
+// Provisioning contract (the "separately approved provisioning contract" of
+// HOR-381 §4, owned by HOR-245): the provisioner is a strict, audited function
+// inside the supervisor — NOT a separate binary — because the supervisor is
+// already root and a separate in-pod process would add no real compartment. The
+// trust boundary is kernel-enforced (session-UID child vs 0700 sibling roots)
+// plus a 0711 root-owned mount root (only root can create sandbox entries, so a
+// session-UID child cannot forge a sibling). The provisioner NEVER chowns an
+// existing path: a missing root is created; a correctly-provisioned root is
+// left untouched (idempotent across turns of the same session); a mismatched
+// root is refused with a typed SandboxError → FAILED (never auto-fixed). Repo
+// CoW/reflink checkouts remain deferred (HOR-381).
 
-import { lstatSync } from "node:fs";
+import { lstatSync, mkdirSync, chmodSync, chownSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
 export class SandboxError extends Error {
@@ -54,21 +62,104 @@ export function resolveSandboxRoot(sandboxMountRoot: string, sandboxId: string):
  * Validate a sandbox root and return its canonical subpaths. Checks: exists,
  * is a directory, is NOT a symlink, owned by (uid, gid), mode 0700. Does not
  * chown and does not auto-create — a missing/mismatched root is a typed error.
+ * Run after {@link provisionSandbox} as the post-provision integrity gate
+ * before spawning the child.
  */
 export function validateSandbox(sandboxRoot: string, uid: number, gid: number): SandboxPaths {
+  assertOwnedDir(sandboxRoot, uid, gid, "sandbox root");
+  return sandboxSubpaths(sandboxRoot);
+}
+
+/**
+ * Provision (create + chown) a missing per-session sandbox root + its canonical
+ * subdirectories, or assert an existing one is already correctly provisioned
+ * (idempotent across turns of the same session). Returns the canonical paths.
+ *
+ * Trust contract:
+ *  - Missing root → create root + home/tmp/session/workspace at mode 0700,
+ *    chowned to the assignment's (uid, gid). Only the supervisor (root) can
+ *    create entries under the 0711 mount root, so a session-UID child cannot
+ *    pre-create a sandbox to be adopted.
+ *  - Existing root → idempotent ONLY if the root + every subdir is already a
+ *    non-symlink directory owned by (uid, gid) at mode 0700. Otherwise it is a
+ *    typed SandboxError → FAILED. The provisioner NEVER chowns or "completes"
+ *    an existing mismatched/partial path (a crash mid-provision leaves a root
+ *    the next provision refuses; v1 accepts FAILED, HOR-381).
+ *  - (uid, gid) come from the durable assignment (AssignTurn), validated by the
+ *    supervisor — never child-supplied.
+ *
+ * Call validateSandbox afterwards (the supervisor does) as the post-provision
+ * integrity gate before spawning the child.
+ */
+export function provisionSandbox(sandboxRoot: string, uid: number, gid: number): SandboxPaths {
+  const paths = sandboxSubpaths(sandboxRoot);
+  let rootExists = false;
+  try {
+    lstatSync(sandboxRoot);
+    rootExists = true;
+  } catch {
+    rootExists = false; // ENOENT (or other) → treat as absent; mkdir surfaces real errors
+  }
+  if (!rootExists) {
+    // Create root + canonical subdirs at 0700, chowned to the session UID/GID.
+    // chmod defeats the process umask; chown happens before the child is spawned.
+    for (const p of [paths.root, paths.home, paths.tmp, paths.session, paths.workspace]) {
+      mkdirSync(p, { mode: 0o700 });
+      chmodSync(p, 0o700);
+      chownSync(p, uid, gid);
+    }
+    return paths;
+  }
+  // Root exists: idempotent only if root + every subdir is already correctly
+  // provisioned for THIS session. NEVER chown/complete a mismatched path.
+  assertOwnedDir(paths.root, uid, gid, "sandbox root");
+  assertOwnedDir(paths.home, uid, gid, "sandbox home");
+  assertOwnedDir(paths.tmp, uid, gid, "sandbox tmp");
+  assertOwnedDir(paths.session, uid, gid, "sandbox session");
+  assertOwnedDir(paths.workspace, uid, gid, "sandbox workspace");
+  return paths;
+}
+
+/**
+ * Ensure the sandbox mount root (the shared RWX PVC) exists and is mode 0711:
+ * traversable (so a session-UID child can reach its own 0700 root) but not
+ * listable/writable by non-root (so only the supervisor can create sandbox
+ * entries — a child cannot forge a sibling). Called once at supervisor startup.
+ * Best-effort when not root/owner (test/dev): a non-root supervisor skips the
+ * chmod; the per-sandbox 0700 ownership check still gates the child.
+ */
+export function ensureSandboxMountRoot(mountRoot: string): void {
+  try {
+    mkdirSync(mountRoot, { mode: 0o711, recursive: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  try {
+    chmodSync(mountRoot, 0o711);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") return; // not root/owner; best-effort
+    throw err;
+  }
+}
+
+/**
+ * Assert `p` is a non-symlink directory owned by (uid, gid) at mode 0700, else
+ * throw a typed SandboxError. Shared by validateSandbox and the idempotent path
+ * of provisionSandbox.
+ */
+function assertOwnedDir(p: string, uid: number, gid: number, label: string): void {
   let st;
   try {
-    st = lstatSync(sandboxRoot);
+    st = lstatSync(p);
   } catch {
-    throw new SandboxError(`sandbox root missing (not provisioned): ${sandboxRoot}`);
+    throw new SandboxError(`${label} missing (not provisioned): ${p}`);
   }
-  if (st.isSymbolicLink()) throw new SandboxError(`sandbox root is a symlink (refused): ${sandboxRoot}`);
-  if (!st.isDirectory()) throw new SandboxError(`sandbox root is not a directory: ${sandboxRoot}`);
-  if (st.uid !== uid) throw new SandboxError(`sandbox root uid ${st.uid} != expected ${uid}: ${sandboxRoot}`);
-  if (st.gid !== gid) throw new SandboxError(`sandbox root gid ${st.gid} != expected ${gid}: ${sandboxRoot}`);
+  if (st.isSymbolicLink()) throw new SandboxError(`${label} is a symlink (refused): ${p}`);
+  if (!st.isDirectory()) throw new SandboxError(`${label} is not a directory: ${p}`);
+  if (st.uid !== uid) throw new SandboxError(`${label} uid ${st.uid} != expected ${uid}: ${p}`);
+  if (st.gid !== gid) throw new SandboxError(`${label} gid ${st.gid} != expected ${gid}: ${p}`);
   const mode = st.mode & 0o777;
-  if (mode !== 0o700) throw new SandboxError(`sandbox root mode ${mode.toString(8)} != 0700: ${sandboxRoot}`);
-  return sandboxSubpaths(sandboxRoot);
+  if (mode !== 0o700) throw new SandboxError(`${label} mode ${mode.toString(8)} != 0700: ${p}`);
 }
 
 /**

@@ -14,12 +14,17 @@ import { loadConfig } from "./config.js";
 import { Probes } from "./probes.js";
 import { Supervisor } from "./supervisor.js";
 import { createChildFactory } from "./child-process.js";
+import { ensureSandboxMountRoot } from "./sandbox.js";
 
 /** The compiled pi child entry, sibling to this module's output. */
 const CHILD_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "child.js");
 
 export async function runWorker(): Promise<void> {
   const cfg = loadConfig();
+  // Ensure the shared RWX sandbox mount root is 0711 root-owned so only the
+  // supervisor (root) can create per-session sandbox entries — a session-UID
+  // child can reach its own 0700 root but cannot forge a sibling (HOR-245).
+  ensureSandboxMountRoot(cfg.sandboxRoot);
   const probes = new Probes();
   await probes.start(cfg.probe.port);
 

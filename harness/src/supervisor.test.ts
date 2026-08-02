@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createRouterTransport } from "@connectrpc/connect";
 import { create } from "@bufbuild/protobuf";
-import { mkdtempSync, rmSync, chmodSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, chmodSync, mkdirSync, existsSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import {
@@ -95,9 +95,8 @@ describe("Supervisor turn loop", () => {
     sandboxParent = mkdtempSync(join(tmpdir(), "harness-sup-"));
     walDir = mkdtempSync(join(tmpdir(), "harness-wal-"));
     sandboxId = "sess-a";
-    const root = join(sandboxParent, sandboxId);
-    mkdirSync(root, { recursive: true }); // the sandbox dir (owned by UID/GID)
-    chmodSync(root, 0o700);
+    // The supervisor provisions the per-session sandbox itself (HOR-245); tests
+    // that need a pre-existing (e.g. mismatched) root create it in their body.
     probes = new Probes();
   });
   afterEach(() => {
@@ -193,6 +192,14 @@ describe("Supervisor turn loop", () => {
       .filter((m) => m.kind.case === "turnEvent" && m.kind.value.kind.case === "workerOutcome")
       .map((m) => m.kind!.value!.kind!.value as { outcome: Outcome });
     expect(outcomes[0]?.outcome).toBe(Outcome.COMPLETED);
+
+    // HOR-245: the supervisor provisioned the per-session sandbox itself
+    // (root + home/tmp/session/workspace, 0700, owned by the session UID/GID).
+    for (const sub of ["home", "tmp", "session", "workspace"]) {
+      const st = lstatSync(join(sandboxParent, sandboxId, sub));
+      expect(st.isDirectory()).toBe(true);
+      expect(st.mode & 0o777).toBe(0o700);
+    }
   });
 
   it("intersects workspace_tools with the pool maximum (ARCH-016 interim residual)", async () => {
@@ -243,7 +250,12 @@ describe("Supervisor turn loop", () => {
     expect(captured?.workspaceTools).toBe(false); // widened request denied
   });
 
-  it("emits FAILED when the sandbox is missing (not provisioned)", async () => {
+  it("emits FAILED when the sandbox root pre-exists with a wrong mode (never chowned)", async () => {
+    // HOR-245: the provisioner never chowns an existing path. A pre-existing
+    // mismatched root (wrong mode) is refused -> typed FAILED (not auto-fixed).
+    const badRoot = join(sandboxParent, "sess-a");
+    mkdirSync(badRoot, { mode: 0o755 });
+    chmodSync(badRoot, 0o755);
     const received: WorkerMessage[] = [];
     let assignTurnSent = false;
     const transport = createRouterTransport((router) => {
@@ -256,7 +268,7 @@ describe("Supervisor turn loop", () => {
             received.push(m);
             if (m.kind.case === "ready" && !assignTurnSent) {
               assignTurnSent = true;
-              yield assignTurn("no-such-sandbox");
+              yield assignTurn(sandboxId);
             } else if (m.kind.case === "turnEvent" && m.kind.value.kind.case === "workerOutcome") {
               yield create(ControlMessageSchema, {
                 kind: {
@@ -443,9 +455,7 @@ describe("Supervisor RPC dispatch (HOR-395)", () => {
   beforeEach(() => {
     sandboxParent = mkdtempSync(join(tmpdir(), "harness-sup-rpc-"));
     walDir = mkdtempSync(join(tmpdir(), "harness-wal-rpc-"));
-    const root = join(sandboxParent, "sess-a");
-    mkdirSync(root, { recursive: true });
-    chmodSync(root, 0o700);
+    // The supervisor provisions the sandbox itself (HOR-245).
     probes = new Probes();
   });
   afterEach(() => {

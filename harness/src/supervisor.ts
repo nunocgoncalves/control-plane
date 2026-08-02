@@ -41,7 +41,7 @@ import {
 import type { HarnessConfig } from "./config.js";
 import { createWorkTransport, openWorkStream, type WorkStream, type Welcome } from "./work-client.js";
 import { WorkerState as WorkerStateMachine, ProtocolError } from "./worker-state.js";
-import { resolveSandboxRoot, validateSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
+import { resolveSandboxRoot, validateSandbox, provisionSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
 import type { Probes } from "./probes.js";
 import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
 import { createGatewayClient, type GatewayClient } from "./gateway-client.js";
@@ -508,11 +508,16 @@ export class Supervisor {
     }
   }
 
-  /** Validate sandbox ownership/mode beneath the mount root. */
+  /** Provision (if missing) then validate the sandbox beneath the mount root. */
   private resolveSandbox(at: AssignTurn): SandboxPaths {
     const sb = at.sandbox;
     if (!sb) throw new SandboxError("AssignTurn missing sandbox");
     const root = resolveSandboxRoot(this.d.cfg.sandboxRoot, sb.sandboxId);
+    // HOR-245: the supervisor provisions the per-session sandbox (create+chown
+    // 0700, session UID/GID) under the 0711 root-owned mount root, then validates
+    // it as the integrity gate before spawning the child. The provisioner never
+    // chowns an existing path; a mismatched/partial root is a typed FAILED.
+    provisionSandbox(root, sb.uid, sb.gid);
     return validateSandbox(root, sb.uid, sb.gid);
   }
 
