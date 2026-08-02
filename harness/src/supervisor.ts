@@ -35,13 +35,14 @@ import {
   WorkerState,
   type AssignTurn,
   type ControlMessage,
+  type SessionEnd,
   type TurnEvent,
   type WorkerMessage,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
 import type { HarnessConfig } from "./config.js";
 import { createWorkTransport, openWorkStream, type WorkStream, type Welcome } from "./work-client.js";
 import { WorkerState as WorkerStateMachine, ProtocolError } from "./worker-state.js";
-import { resolveSandboxRoot, validateSandbox, provisionSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
+import { resolveSandboxRoot, validateSandbox, provisionSandbox, reapSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
 import type { Probes } from "./probes.js";
 import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
 import { createGatewayClient, type GatewayClient } from "./gateway-client.js";
@@ -220,6 +221,9 @@ export class Supervisor {
         this.onEventAck(msg.kind.value.turnId, Number(msg.kind.value.throughSequence));
         return;
       }
+      case "sessionEnd":
+        this.handleSessionEnd(msg.kind.value);
+        return;
       case "welcome":
         return;
     }
@@ -519,6 +523,32 @@ export class Supervisor {
     // chowns an existing path; a mismatched/partial root is a typed FAILED.
     provisionSandbox(root, sb.uid, sb.gid);
     return validateSandbox(root, sb.uid, sb.gid);
+  }
+
+  /**
+   * Reap a terminated session's sandbox (HOR-245 cleanup owner). Legal only
+   * when no turn is active: the CP sequences SessionEnd after the final outcome
+   * ACK (idle/armed). A SessionEnd during an active turn is a dispatch bug →
+   * fatal (fail-closed), because reaping a live turn's sandbox would corrupt
+   * the running child. Reaping errors (symlink/foreign-owner/IO) are fatal:
+   * a SandboxError here signals a security invariant or a volume that silently
+   * ignores removal, neither of which v1 tolerates.
+   */
+  private handleSessionEnd(msg: SessionEnd): void {
+    if (this.state.hasActiveTurn) {
+      this.fatal(new ProtocolError(`SessionEnd for ${msg.sandboxId} during active turn ${this.state.activeTurnId}`));
+      return;
+    }
+    if (!msg.sandboxId) {
+      this.fatal(new ProtocolError("SessionEnd with empty sandbox_id"));
+      return;
+    }
+    const root = resolveSandboxRoot(this.d.cfg.sandboxRoot, msg.sandboxId);
+    try {
+      reapSandbox(root, msg.uid, msg.gid);
+    } catch (err) {
+      this.fatal(err instanceof Error ? err : new SandboxError(String(err)));
+    }
   }
 
   /** Defense-in-depth: reject assignments whose scope identity != the configured pool scope. */

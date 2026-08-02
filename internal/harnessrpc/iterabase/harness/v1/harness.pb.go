@@ -1959,6 +1959,7 @@ type ControlMessage struct {
 	//	*ControlMessage_AssignTurn
 	//	*ControlMessage_AbortTurn
 	//	*ControlMessage_EventAck
+	//	*ControlMessage_SessionEnd
 	Kind          isControlMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2037,6 +2038,15 @@ func (x *ControlMessage) GetEventAck() *EventAck {
 	return nil
 }
 
+func (x *ControlMessage) GetSessionEnd() *SessionEnd {
+	if x != nil {
+		if x, ok := x.Kind.(*ControlMessage_SessionEnd); ok {
+			return x.SessionEnd
+		}
+	}
+	return nil
+}
+
 type isControlMessage_Kind interface {
 	isControlMessage_Kind()
 }
@@ -2057,6 +2067,10 @@ type ControlMessage_EventAck struct {
 	EventAck *EventAck `protobuf:"bytes,4,opt,name=event_ack,json=eventAck,proto3,oneof"`
 }
 
+type ControlMessage_SessionEnd struct {
+	SessionEnd *SessionEnd `protobuf:"bytes,5,opt,name=session_end,json=sessionEnd,proto3,oneof"`
+}
+
 func (*ControlMessage_Welcome) isControlMessage_Kind() {}
 
 func (*ControlMessage_AssignTurn) isControlMessage_Kind() {}
@@ -2064,6 +2078,8 @@ func (*ControlMessage_AssignTurn) isControlMessage_Kind() {}
 func (*ControlMessage_AbortTurn) isControlMessage_Kind() {}
 
 func (*ControlMessage_EventAck) isControlMessage_Kind() {}
+
+func (*ControlMessage_SessionEnd) isControlMessage_Kind() {}
 
 // Welcome is sent once after Hello auth + registration. A newly accepted
 // connection for the same worker_id atomically fences + closes the old
@@ -2580,6 +2596,77 @@ func (x *EventAck) GetThroughSequence() uint64 {
 	return 0
 }
 
+// SessionEnd tells the worker a session has terminated and its per-session
+// sandbox may be reaped from the shared RWX PVC. The supervisor (which
+// provisioned the sandbox at AssignTurn under the HOR-245 provisioning
+// rescope) recursively removes `<sandbox-id>/` only after verifying it is a
+// non-symlink directory owned by the session (uid, gid); it never removes a
+// foreign-owned or mismatched path. Legal only when no turn is active (idle /
+// armed); a SessionEnd during an active turn is a protocol violation
+// (dispatch sequences it after the final outcome ACK). Idempotent: a missing
+// sandbox (never provisioned, or already reaped) is a no-op. Reaping is
+// best-effort relative to dispatch state — the CP MUST NOT rely on the worker
+// having reaped before recycling the sandbox_id.
+type SessionEnd struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"` // session UID that owns the sandbox (verified before reaping)
+	Gid           uint32                 `protobuf:"varint,3,opt,name=gid,proto3" json:"gid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionEnd) Reset() {
+	*x = SessionEnd{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionEnd) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionEnd) ProtoMessage() {}
+
+func (x *SessionEnd) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionEnd.ProtoReflect.Descriptor instead.
+func (*SessionEnd) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SessionEnd) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *SessionEnd) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SessionEnd) GetGid() uint32 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
 var File_iterabase_harness_v1_harness_proto protoreflect.FileDescriptor
 
 const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
@@ -2702,14 +2789,16 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12#\n" +
 	"\rcontent_index\x18\x02 \x01(\x05R\fcontentIndex\x123\n" +
 	"\x04type\x18\x03 \x01(\x0e2\x1f.iterabase.harness.v1.DeltaTypeR\x04type\x12\x14\n" +
-	"\x05delta\x18\x04 \x01(\tR\x05delta\"\x99\x02\n" +
+	"\x05delta\x18\x04 \x01(\tR\x05delta\"\xde\x02\n" +
 	"\x0eControlMessage\x129\n" +
 	"\awelcome\x18\x01 \x01(\v2\x1d.iterabase.harness.v1.WelcomeH\x00R\awelcome\x12C\n" +
 	"\vassign_turn\x18\x02 \x01(\v2 .iterabase.harness.v1.AssignTurnH\x00R\n" +
 	"assignTurn\x12@\n" +
 	"\n" +
 	"abort_turn\x18\x03 \x01(\v2\x1f.iterabase.harness.v1.AbortTurnH\x00R\tabortTurn\x12=\n" +
-	"\tevent_ack\x18\x04 \x01(\v2\x1e.iterabase.harness.v1.EventAckH\x00R\beventAckB\x06\n" +
+	"\tevent_ack\x18\x04 \x01(\v2\x1e.iterabase.harness.v1.EventAckH\x00R\beventAck\x12C\n" +
+	"\vsession_end\x18\x05 \x01(\v2 .iterabase.harness.v1.SessionEndH\x00R\n" +
+	"sessionEndB\x06\n" +
 	"\x04kind\"\xc1\x01\n" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
@@ -2753,7 +2842,13 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\"N\n" +
 	"\bEventAck\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12)\n" +
-	"\x10through_sequence\x18\x02 \x01(\x04R\x0fthroughSequence*\xc8\x01\n" +
+	"\x10through_sequence\x18\x02 \x01(\x04R\x0fthroughSequence\"O\n" +
+	"\n" +
+	"SessionEnd\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x10\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x10\n" +
+	"\x03gid\x18\x03 \x01(\rR\x03gid*\xc8\x01\n" +
 	"\vWorkerState\x12\x1c\n" +
 	"\x18WORKER_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11WORKER_STATE_IDLE\x10\x01\x12\x19\n" +
@@ -2807,7 +2902,7 @@ func file_iterabase_harness_v1_harness_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(WorkerState)(0),            // 0: iterabase.harness.v1.WorkerState
 	(PiPhase)(0),                // 1: iterabase.harness.v1.PiPhase
@@ -2844,6 +2939,7 @@ var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(*Image)(nil),               // 32: iterabase.harness.v1.Image
 	(*AbortTurn)(nil),           // 33: iterabase.harness.v1.AbortTurn
 	(*EventAck)(nil),            // 34: iterabase.harness.v1.EventAck
+	(*SessionEnd)(nil),          // 35: iterabase.harness.v1.SessionEnd
 }
 var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	7,  // 0: iterabase.harness.v1.WorkerMessage.hello:type_name -> iterabase.harness.v1.Hello
@@ -2877,17 +2973,18 @@ var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	29, // 28: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
 	33, // 29: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
 	34, // 30: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
-	30, // 31: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
-	31, // 32: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
-	32, // 33: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
-	5,  // 34: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
-	6,  // 35: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
-	27, // 36: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
-	36, // [36:37] is the sub-list for method output_type
-	35, // [35:36] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	35, // 31: iterabase.harness.v1.ControlMessage.session_end:type_name -> iterabase.harness.v1.SessionEnd
+	30, // 32: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	31, // 33: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
+	32, // 34: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
+	5,  // 35: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
+	6,  // 36: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
+	27, // 37: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
+	37, // [37:38] is the sub-list for method output_type
+	36, // [36:37] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_harness_v1_harness_proto_init() }
@@ -2921,6 +3018,7 @@ func file_iterabase_harness_v1_harness_proto_init() {
 		(*ControlMessage_AssignTurn)(nil),
 		(*ControlMessage_AbortTurn)(nil),
 		(*ControlMessage_EventAck)(nil),
+		(*ControlMessage_SessionEnd)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2928,7 +3026,7 @@ func file_iterabase_harness_v1_harness_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_harness_v1_harness_proto_rawDesc), len(file_iterabase_harness_v1_harness_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   29,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

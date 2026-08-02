@@ -7,6 +7,7 @@ import {
   sandboxSubpaths,
   validateSandbox,
   provisionSandbox,
+  reapSandbox,
   ensureSandboxMountRoot,
   resolveWorkingDir,
   SandboxError,
@@ -149,6 +150,62 @@ describe("provisionSandbox", () => {
     chmodSync(real, 0o700);
     symlinkSync(real, link);
     expect(() => provisionSandbox(link, UID, GID)).toThrow(SandboxError);
+  });
+});
+
+describe("reapSandbox", () => {
+  it("removes a provisioned sandbox root + all subdirs", () => {
+    const root = join(base, "sess-a");
+    provisionSandbox(root, UID, GID);
+    writeFileSync(join(root, "home", "note.txt"), "x");
+    mkdirSync(join(root, "workspace", "repo"), { recursive: true });
+    reapSandbox(root, UID, GID);
+    expect(() => lstatSync(root)).toThrow();
+  });
+
+  it("is a no-op on a missing root (never provisioned / already reaped)", () => {
+    expect(() => reapSandbox(join(base, "never-existed"), UID, GID)).not.toThrow();
+  });
+
+  it("refuses a symlink root (never follows)", () => {
+    const real = join(base, "real");
+    const link = join(base, "link");
+    mkdirSync(real, { mode: 0o700 });
+    chmodSync(real, 0o700);
+    symlinkSync(real, link);
+    expect(() => reapSandbox(link, UID, GID)).toThrow(SandboxError);
+    // The target survives.
+    expect(lstatSync(real).isDirectory()).toBe(true);
+  });
+
+  it("refuses a foreign-owned root (never reaps a mismatched path)", () => {
+    const root = join(base, "sess-a");
+    mkdirSync(root, { mode: 0o700 });
+    chmodSync(root, 0o700);
+    expect(() => reapSandbox(root, UID + 1, GID)).toThrow(SandboxError);
+    expect(lstatSync(root).isDirectory()).toBe(true); // not removed
+  });
+
+  it("refuses a non-directory root", () => {
+    const file = join(base, "file");
+    writeFileSync(file, "x");
+    chmodSync(file, 0o700);
+    expect(() => reapSandbox(file, UID, GID)).toThrow(SandboxError);
+  });
+
+  it("removes a child-created symlink entry without following it", () => {
+    const root = join(base, "sess-a");
+    provisionSandbox(root, UID, GID);
+    // Simulate a child (session UID owns the 0700 sandbox) replacing `home`
+    // with a symlink to an outside target the child must NOT delete.
+    const outside = join(base, "outside-target");
+    mkdirSync(outside, { mode: 0o700 });
+    rmSync(join(root, "home"), { recursive: true, force: true });
+    symlinkSync(outside, join(root, "home"));
+    reapSandbox(root, UID, GID);
+    expect(() => lstatSync(root)).toThrow();
+    // The symlink target survives (reaping did not follow it).
+    expect(lstatSync(outside).isDirectory()).toBe(true);
   });
 });
 

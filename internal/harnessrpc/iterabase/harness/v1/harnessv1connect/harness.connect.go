@@ -41,7 +41,7 @@ const (
 type HarnessClient interface {
 	// Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
 	// Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
-	// Welcome, AssignTurn, AbortTurn, EventAck.
+	// Welcome, AssignTurn, AbortTurn, EventAck, SessionEnd.
 	Work(context.Context) *connect.BidiStreamForClient[v1.WorkerMessage, v1.ControlMessage]
 }
 
@@ -79,7 +79,7 @@ func (c *harnessClient) Work(ctx context.Context) *connect.BidiStreamForClient[v
 type HarnessHandler interface {
 	// Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
 	// Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
-	// Welcome, AssignTurn, AbortTurn, EventAck.
+	// Welcome, AssignTurn, AbortTurn, EventAck, SessionEnd.
 	Work(context.Context, *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage]) error
 }
 

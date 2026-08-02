@@ -15,6 +15,7 @@ import {
   ModelConfigSchema,
   EventAckSchema,
   AssistantMessageSchema,
+  SessionEndSchema,
   Outcome,
   type AssignTurn,
   type WorkerMessage,
@@ -201,6 +202,101 @@ describe("Supervisor turn loop", () => {
       expect(st.mode & 0o777).toBe(0o700);
     }
   });
+
+  it("reaps the per-session sandbox on SessionEnd after a completed turn (HOR-245 cleanup)", async () => {
+    let assignTurnSent = false;
+    let sessionEnded = false;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, {
+            kind: {
+              case: "welcome",
+              value: create(WelcomeSchema, { fencingGeneration: 1n }) as never,
+            } as never,
+          });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn(sandboxId);
+            } else if (m.kind.case === "turnEvent") {
+              const te = m.kind.value;
+              if (te.kind.case === "workerOutcome" && !sessionEnded) {
+                sessionEnded = true;
+                yield create(ControlMessageSchema, {
+                  kind: { case: "eventAck", value: create(EventAckSchema, { turnId: te.turnId, throughSequence: te.sequence }) },
+                });
+                // After the final ACK the worker is idle; the CP reaps the
+                // terminated session's sandbox (HOR-245 cleanup owner).
+                yield create(ControlMessageSchema, {
+                  kind: { case: "sessionEnd", value: create(SessionEndSchema, { sandboxId, uid: UID, gid: GID }) },
+                });
+              }
+            }
+          }
+        },
+      });
+    });
+    let credits = 0;
+    const credit2 = new Promise<void>((r) => {
+      (globalThis as { __creditCb?: () => void }).__creditCb = () => { credits += 1; if (credits === 2) r(); };
+    });
+    const onCreditAdvertised = () => (globalThis as { __creditCb?: () => void }).__creditCb?.();
+    const sup = new Supervisor({
+      cfg: makeCfg(sandboxParent, walDir),
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: () => fakeChild([{ kind: "event", payload: { case: "assistantMessage", value: create(AssistantMessageSchema, { text: "done" }) } }], Outcome.COMPLETED),
+      probes,
+      transport: () => transport,
+      gatewayClient: fakeGatewayClient(),
+      modelStream: fakeModelStream(),
+      onCreditAdvertised,
+    });
+    const runP = sup.run();
+    await credit2; // initial credit + post-turn credit (idle after ACK)
+    await new Promise((r) => setTimeout(r, 100)); // let SessionEnd process
+    await sup.drain();
+    await runP;
+    // The sandbox the supervisor provisioned at AssignTurn is now reaped.
+    expect(() => lstatSync(join(sandboxParent, sandboxId))).toThrow();
+  }, 5_000);
+
+  it("treats SessionEnd during an active turn as a protocol violation (fatal, no reap)", async () => {
+    let assignTurnSent = false;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, {
+            kind: { case: "welcome", value: create(WelcomeSchema, { fencingGeneration: 1n }) as never } as never,
+          });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn(sandboxId);
+              // Dispatch bug: SessionEnd arrives while the turn is still running.
+              yield create(ControlMessageSchema, {
+                kind: { case: "sessionEnd", value: create(SessionEndSchema, { sandboxId, uid: UID, gid: GID }) },
+              });
+            }
+          }
+        },
+      });
+    });
+    const sup = new Supervisor({
+      cfg: makeCfg(sandboxParent, walDir),
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: () => fakeChild([], Outcome.COMPLETED),
+      probes,
+      transport: () => transport,
+      gatewayClient: { ...fakeGatewayClient(), discover: async () => new Promise(() => {}) /* never resolves: stay running */ },
+      modelStream: fakeModelStream(),
+    });
+    const runP = sup.run();
+    await runP; // fatal makes run() return
+    // The sandbox was provisioned at AssignTurn but NOT reaped (SessionEnd was
+    // rejected as a protocol violation during the active turn).
+    expect(lstatSync(join(sandboxParent, sandboxId)).isDirectory()).toBe(true);
+  }, 5_000);
 
   it("intersects workspace_tools with the pool maximum (ARCH-016 interim residual)", async () => {
     let assignTurnSent = false;

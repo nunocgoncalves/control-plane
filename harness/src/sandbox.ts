@@ -17,7 +17,7 @@
 // root is refused with a typed SandboxError → FAILED (never auto-fixed). Repo
 // CoW/reflink checkouts remain deferred (HOR-381).
 
-import { lstatSync, mkdirSync, chmodSync, chownSync } from "node:fs";
+import { lstatSync, mkdirSync, chmodSync, chownSync, rmSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
 export class SandboxError extends Error {
@@ -118,6 +118,62 @@ export function provisionSandbox(sandboxRoot: string, uid: number, gid: number):
   assertOwnedDir(paths.session, uid, gid, "sandbox session");
   assertOwnedDir(paths.workspace, uid, gid, "sandbox workspace");
   return paths;
+}
+
+/**
+ * Reap (recursively remove) a terminated session's sandbox from the shared RWX
+ * PVC. Called by the supervisor on `SessionEnd` (the HOR-245 cleanup owner —
+ * the supervisor that provisioned the sandbox also reaps it). Symmetric with
+ * {@link provisionSandbox} and the same trust boundary applies: only the
+ * supervisor (root) can modify entries under the 0711 root-owned mount root,
+ * so a session-UID child cannot swap the sandbox root for a symlink or forge a
+ * sibling to be deleted.
+ *
+ * Safety contract:
+ *  - Missing root → no-op (idempotent: never provisioned, or already reaped).
+ *  - Symlink / non-directory root → typed SandboxError (refused; never follows).
+ *  - Root owned by a (uid, gid) other than the session's → typed SandboxError
+ *    (refused; never reaps a foreign/mismatched path). (uid, gid) come from the
+ *    durable SessionEnd, never child-supplied.
+ *  - Removal is recursive but does NOT follow symlinks inside the sandbox: a
+ *    child-owned symlink entry is unlinked, never its target. The root itself
+ *    cannot be swapped (0711 root-owned parent), so there is no root-level
+ *    TOCTOU.
+ *  - After removal, the root is re-stat'd; if it persists (e.g. a foreign file
+ *    was recreated, or EPERM on a root-squashed volume) → typed SandboxError so
+ *    the leak is surfaced rather than silently accepted.
+ *
+ * Reaping is best-effort relative to dispatch state: the CP MUST NOT recycle a
+ * sandbox_id before the worker has ACKed reaping (v1: the CP simply waits for
+ * the next Ready / a bounded grace). A transient IO error is surfaced as a
+ * SandboxError so the supervisor can fail-closed rather than leak silently.
+ */
+export function reapSandbox(sandboxRoot: string, uid: number, gid: number): void {
+  let st;
+  try {
+    st = lstatSync(sandboxRoot);
+  } catch (err) {
+    // Missing root: idempotent no-op (never provisioned or already reaped).
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new SandboxError(`reap stat failed for ${sandboxRoot}: ${(err as Error).message}`);
+  }
+  if (st.isSymbolicLink()) throw new SandboxError(`sandbox root is a symlink (refused): ${sandboxRoot}`);
+  if (!st.isDirectory()) throw new SandboxError(`sandbox root is not a directory (refused): ${sandboxRoot}`);
+  if (st.uid !== uid || st.gid !== gid)
+    throw new SandboxError(`sandbox root owned by ${st.uid}:${st.gid}, not session ${uid}:${gid} (refused): ${sandboxRoot}`);
+  try {
+    rmSync(sandboxRoot, { recursive: true, force: false });
+  } catch (err) {
+    throw new SandboxError(`reap failed for ${sandboxRoot}: ${(err as Error).message}`);
+  }
+  // VERIFY: the root is gone. A root-squashed/EPERM volume may silently ignore
+  // the removal; surface the leak rather than accept it.
+  try {
+    lstatSync(sandboxRoot);
+    throw new SandboxError(`sandbox root persists after reap (refused): ${sandboxRoot}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 }
 
 /**

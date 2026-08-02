@@ -25,7 +25,7 @@ option go_package = "github.com/nunocgoncalves/control-plane/internal/harnessrpc
 service Harness {
   // Work is the one long-lived bidi stream per worker. Worker->CP: Hello,
   // Ready, Heartbeat, TurnEvent (durable), TokenDelta (ephemeral). CP->worker:
-  // Welcome, AssignTurn, AbortTurn, EventAck.
+  // Welcome, AssignTurn, AbortTurn, EventAck, SessionEnd.
   rpc Work(stream WorkerMessage) returns (stream ControlMessage);
 }
 
@@ -265,6 +265,7 @@ message ControlMessage {
     AssignTurn assign_turn = 2;
     AbortTurn abort_turn = 3;
     EventAck event_ack = 4;
+    SessionEnd session_end = 5;
   }
 }
 
@@ -348,4 +349,21 @@ enum AbortReason {
 message EventAck {
   string turn_id = 1;
   uint64 through_sequence = 2;
+}
+
+// SessionEnd tells the worker a session has terminated and its per-session
+// sandbox may be reaped from the shared RWX PVC. The supervisor (which
+// provisioned the sandbox at AssignTurn under the HOR-245 provisioning
+// rescope) recursively removes `<sandbox-id>/` only after verifying it is a
+// non-symlink directory owned by the session (uid, gid); it never removes a
+// foreign-owned or mismatched path. Legal only when no turn is active (idle /
+// armed); a SessionEnd during an active turn is a protocol violation
+// (dispatch sequences it after the final outcome ACK). Idempotent: a missing
+// sandbox (never provisioned, or already reaped) is a no-op. Reaping is
+// best-effort relative to dispatch state — the CP MUST NOT rely on the worker
+// having reaped before recycling the sandbox_id.
+message SessionEnd {
+  string sandbox_id = 1;
+  uint32 uid = 2;  // session UID that owns the sandbox (verified before reaping)
+  uint32 gid = 3;
 }
