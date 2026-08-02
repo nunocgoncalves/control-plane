@@ -43,10 +43,10 @@ message WorkerMessage {
 
 // Hello is the first message on every stream. The authenticated client cert is
 // authoritative: the Go server verifies worker_id/pool_id against a URI SAN
-// such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-uid>. A
+// such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-name>. A
 // mismatch terminates the stream with PermissionDenied.
 message Hello {
-  string worker_id = 1;  // Kubernetes Pod UID
+  string worker_id = 1;  // Kubernetes Pod name (stable warm-worker slot, e.g. <pool>-worker-0)
   string pool_id = 2;    // owning pool CR UID
   string build_version = 3;
   string protocol_version = 4;

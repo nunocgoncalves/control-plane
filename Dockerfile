@@ -17,13 +17,15 @@ ENV LDFLAGS="-X github.com/nunocgoncalves/control-plane/internal/version.version
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/manager ./cmd/manager && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/api ./cmd/api && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/gateway ./cmd/gateway
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/gateway ./cmd/gateway && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$LDFLAGS" -o /out/dispatch ./cmd/dispatch
 
-# Runtime stage: one image, three binaries. Each Deployment selects its binary
-# via `command` (manager: ["/manager"]; api: ["/api", "serve"]; gateway: ["/gateway", "serve"]).
+# Runtime stage: one image, four binaries. Each Deployment selects its binary
+# via `command` (manager: ["/manager"]; api: ["/api", "serve"]; gateway: ["/gateway", "serve"]; dispatch: ["/dispatch", "serve"]).
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /out/manager /manager
 COPY --from=builder /out/api /api
 COPY --from=builder /out/gateway /gateway
+COPY --from=builder /out/dispatch /dispatch
 USER 65532:65532

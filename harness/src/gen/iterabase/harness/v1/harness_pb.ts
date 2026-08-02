@@ -66,14 +66,14 @@ export const WorkerMessageSchema: GenMessage<WorkerMessage> = /*@__PURE__*/
 /**
  * Hello is the first message on every stream. The authenticated client cert is
  * authoritative: the Go server verifies worker_id/pool_id against a URI SAN
- * such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-uid>. A
+ * such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-name>. A
  * mismatch terminates the stream with PermissionDenied.
  *
  * @generated from message iterabase.harness.v1.Hello
  */
 export type Hello = Message<"iterabase.harness.v1.Hello"> & {
   /**
-   * Kubernetes Pod UID
+   * Kubernetes Pod name (stable warm-worker slot, e.g. <pool>-worker-0)
    *
    * @generated from field: string worker_id = 1;
    */

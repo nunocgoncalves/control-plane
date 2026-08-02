@@ -673,12 +673,13 @@ func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, re
 	switch id.Kind {
 	case spiffe.KindSupervisor:
 		// Pool is resolved from the verified SPIFFE id (prefix match), then
-		// cross-checked against the active turn + run assignment.
+		// cross-checked against the active turn + run assignment + the active
+		// turn-assignment worker binding (HOR-249).
 		pool, err := s.store.ResolvePoolBySpiffePrefix(ctx, id.SPIFFEID)
 		if err != nil {
 			return CallerResolution{}, ErrScopeDenied
 		}
-		return s.store.ResolveTurnScope(ctx, pool.ID, req.AttemptId, req.CallerScopeId)
+		return s.store.ResolveTurnScope(ctx, pool.ID, req.AttemptId, req.CallerScopeId, id.WorkerID)
 	case spiffe.KindControlPlaneWorkflow:
 		// The run_step + run are validated; the workflow binding is derived
 		// from the run's definition_key (NOT a caller-supplied key).

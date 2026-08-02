@@ -73,10 +73,11 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 ##@ Build
 
 .PHONY: build
-build: vet ## Build manager, api, and gateway binaries.
+build: vet ## Build manager, api, gateway, and dispatch binaries.
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/manager ./cmd/manager
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/api ./cmd/api
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/gateway ./cmd/gateway
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/dispatch ./cmd/dispatch
 
 .PHONY: run-manager
 run-manager: ## Run the operator from your host.
@@ -89,6 +90,10 @@ run-api: ## Run the API (serve) from your host. Requires DATABASE_URL.
 .PHONY: run-gateway
 run-gateway: ## Run the tool gateway (serve) from your host. Requires DATABASE_URL + mTLS certs.
 	go run ./cmd/gateway serve
+
+.PHONY: run-dispatch
+run-dispatch: ## Run the dispatch Work server (serve) from your host. Requires DATABASE_URL + mTLS certs.
+	go run ./cmd/dispatch serve
 
 .PHONY: migrate-up
 migrate-up: ## Apply database migrations.

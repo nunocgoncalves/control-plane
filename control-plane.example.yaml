@@ -32,6 +32,18 @@ gateway:
   # gateway reads only named K8s Secrets in this namespace.
   kube_namespace: "${GATEWAY_KUBE_NAMESPACE}"
 
+# Dispatch Work server (cmd/dispatch, HOR-249). mTLS is REQUIRED. The dispatch
+# server serves the iterabase.harness.v1.Harness.Work bidi stream over HTTP/2,
+# verifying warm-worker (supervisor) SPIFFE identities against client_ca_file.
+# Env vars DISPATCH_ADDR / DISPATCH_TLS_CERT_FILE / DISPATCH_TLS_KEY_FILE /
+# DISPATCH_CLIENT_CA_FILE / DISPATCH_TRUST_DOMAIN override these.
+dispatch:
+  addr: ":8091"
+  tls_cert_file: "${DISPATCH_TLS_CERT_FILE}"   # the dispatch server's workload leaf
+  tls_key_file: "${DISPATCH_TLS_KEY_FILE}"
+  client_ca_file: "${DISPATCH_CLIENT_CA_FILE}"  # SPIFFE/workload-identity CA bundle
+  trust_domain: "iterabase.local"
+
 database:
   url: "${DATABASE_URL}"      # required; e.g. postgres://cp:cp@postgres:5432/controlplane?sslmode=disable
   max_open_conns: 25

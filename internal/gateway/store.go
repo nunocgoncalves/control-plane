@@ -476,8 +476,13 @@ func (s *Store) GetWorkflowPoolBinding(ctx context.Context, workflowDefinitionKe
 // state. The supervisor's pool (resolved by the service from the verified
 // SPIFFE id) is cross-checked: the supplied turn_id (caller_scope_id) and
 // attempt_id (the run id) must match an active turn whose run is durably
-// assigned to that same pool. Fail closed otherwise (ARCH-004).
-func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID string) (CallerResolution, error) {
+// assigned to that same pool. The verified worker (cert SAN pod name) must
+// match the turn's active assignment (runtime.turn_assignments) — a
+// still-valid supervisor cert from a different same-pool worker, or a
+// fenced/old-generation caller whose assignment is no longer active, is
+// denied (HOR-249 / HOR-398 DEC-041 residual). Fail closed otherwise
+// (ARCH-004/010).
+func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID, workerID string) (CallerResolution, error) {
 	var runID string
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.run_id::text
@@ -491,6 +496,22 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID 
 			return CallerResolution{}, ErrScopeDenied
 		}
 		return CallerResolution{}, fmt.Errorf("resolve turn scope: %w", err)
+	}
+	// Active-assignment cross-check (HOR-249): the turn's active assignment must
+	// be bound to this verified worker. A fenced/terminal assignment (no active
+	// row) or a different same-pool worker is denied.
+	var assignedWorker string
+	err = s.pool.QueryRow(ctx, `
+		SELECT worker_id FROM runtime.turn_assignments
+		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CallerResolution{}, ErrScopeDenied
+		}
+		return CallerResolution{}, fmt.Errorf("resolve turn assignment: %w", err)
+	}
+	if assignedWorker != workerID {
+		return CallerResolution{}, ErrScopeDenied
 	}
 	pool, err := s.getPoolByID(ctx, poolID)
 	if err != nil {

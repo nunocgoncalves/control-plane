@@ -21,7 +21,7 @@ export interface HarnessConfig {
   };
   /** Worker identity (cert-SAN-bound; verified against Hello in HOR-249). */
   worker: {
-    workerId: string; // Kubernetes Pod UID
+    workerId: string; // Kubernetes Pod name (stable warm-worker slot, verified cert SAN)
     poolId: string; // owning pool CR UID
   };
   /** Optional pool scope identity (defense-in-depth: validate AssignTurn's scope_identity_id). */

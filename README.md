@@ -24,7 +24,11 @@ warm-worker pods (SPIFFE certs via the cert-manager CSI driver, shared RWX
 sandbox PVC, deny-by-default NetworkPolicy, deny-by-default workspace-tool
 switch, maximum gateway grants + credential-slot bindings) and removes the
 superseded per-sandbox egress proxy (ARCH-009). Sandbox reconciliation (HOR-245)
-lands in its own ticket.
+lands in its own ticket. HOR-249 adds the durable-dispatch Work server
+(`cmd/dispatch`): the warm-worker mTLS bidi stream, worker fencing, one-credit
+dispatch, durable TurnEvent ACK/dedup, cancellation/worker-loss, the
+active-assignment context (`runtime.turn_assignments`) that binds a running turn
+to the verified worker + fencing generation, and the dispatch reconciler.
 
 ## Binaries
 
@@ -35,10 +39,11 @@ Two Go images + one Node image:
 | `manager` | `cmd/manager` | `control-plane` | controller-runtime operator: reconcilers, webhooks, probes, metrics |
 | `api` | `cmd/api` | `control-plane` | HTTP API (chi) + durable runtime (later); subcommands `serve`, `migrate up`, `migrate down`, `bootstrap` |
 | `gateway` | `cmd/gateway` | `control-plane` | tool gateway gRPC server (HOR-392): mTLS `RunnerService` + `GatewayService` |
+| `dispatch` | `cmd/dispatch` | `control-plane` | durable-dispatch Work gRPC server (HOR-249): mTLS `Harness.Work` bidi stream, worker fencing, one-credit dispatch, TurnEvent ACK/dedup, cancellation/worker-loss |
 
-The `control-plane` image (manager + api + gateway) runs in the platform
+The `control-plane` image (manager + api + gateway + dispatch) runs in the platform
 namespace. The harness image is Node (`harness/Dockerfile`). See `Dockerfile`
-(manager/api/gateway) and `harness/Dockerfile` (harness).
+(manager/api/gateway/dispatch) and `harness/Dockerfile` (harness).
 
 `migrate` runs as an RBAC-less init container before `serve`/`manager` start.
 
@@ -54,6 +59,7 @@ internal/identity/  identity store, API keys, JWT/JWKS issuer, resolver
 internal/permissions/ permission store + effective_capabilities view (HOR-243)
 internal/catalog/   model catalog store (backends + models) + effective_catalog view (HOR-306/268)
 internal/gateway/   tool gateway: registry, authorization, credential resolution, durable invocation ledger (HOR-392)
+internal/dispatch/  durable dispatch Work server: warm-worker bidi stream, one-credit dispatch, worker fencing, active-assignment context, TurnEvent ACK/dedup, cancellation/worker-loss (HOR-249)
 internal/spiffe/    shared SPIFFE/mTLS identity verifier (HOR-392; reused by HOR-249)
 internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permissionpolicy, modelbackend, model
 internal/runtime/   durable turn runtime store (run/step/turn SM + event log) — HOR-246
@@ -262,6 +268,40 @@ HOR-249; `worker_id` = pod name (stable slot), recorded as an amendment to the
 HOR-381/249 identity contract. Real-cluster PSS/CSI/RWX/isolation validation is
 the ticket's stated real-cluster gate (envtest covers assembly + structural
 validation).
+
+## Dispatch (HOR-249)
+
+The dispatch Work server (`cmd/dispatch`) is the native-gRPC mTLS endpoint warm
+workers connect to (`iterabase.harness.v1.Harness.Work` bidi stream). It owns
+worker fencing, one-credit dispatch, durable `TurnEvent` ACK/dedup, cancellation
+and worker-loss semantics, and the dispatch reconciler that drives pending
+runs/steps/turns to eligible idle workers.
+
+A worker connects (Hello), the server verifies the cert SAN (pool UID + pod name)
+against Hello and sends a `Welcome` with a fresh fencing generation. A reconnect
+for the same (pool, worker) fences the prior generation and terminalizes its
+active turn as worker loss (aborted). `Ready` advertises one dispatch credit; the
+reconciler assigns a pending turn (whose run is durably assigned to the worker's
+pool via `runtime.run_pool_assignments`) to an idle worker and sends
+`AssignTurn`. `TurnEvent`s are committed to the append-only `runtime.events` log
+with per-turn sequence dedup and cumulatively ACKed; a terminal `WorkerOutcome`
+terminalizes the turn/step/run (the CP is first-terminal-writer; a late outcome
+is after-terminal audit only). Cancellation sends `AbortTurn` and terminalizes
+the turn aborted; an ambiguous non-idempotent turn is never auto-redelivered.
+
+The active-assignment context (`runtime.turn_assignments`) is the durable record
+binding a running turn to the specific verified worker (cert SAN pod name) +
+current fencing generation under one AgentPool, with the immutable
+attempt/model/capability/tool-version snapshot. The tool gateway (this repo,
+`ResolveTurnScope`) and the inference gateway (cross-repo, HOR-398) read it
+fail-closed to deny a still-valid supervisor cert from a different same-pool
+worker or a fenced/old-generation caller for a running turn — closing the
+HOR-398 / DEC-041 interim residual.
+
+Trigger sources are NOT in scope: email (HOR-356), UI (HOR-396), operator-artifact
+(HOR-393), workflow definitions (HOR-252), and the work-item/attempt model
+(HOR-254) write the runtime rows the dispatch consumes; `cmd/dispatch` is the
+pure dispatch/Work-server/assignment/fencing engine beneath them.
 
 ## CRD landscape
 

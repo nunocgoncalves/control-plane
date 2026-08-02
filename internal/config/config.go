@@ -19,6 +19,7 @@ import (
 type Config struct {
 	API      APIConfig      `yaml:"api"`
 	Gateway  GatewayConfig  `yaml:"gateway"`
+	Dispatch DispatchConfig `yaml:"dispatch"`
 	Database DatabaseConfig `yaml:"database"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	JWT      JWTConfig      `yaml:"jwt"`
@@ -50,6 +51,19 @@ type GatewayConfig struct {
 	// (ARCH-008). The gateway reads only named K8s Secrets in this namespace.
 	KubeNamespace string `yaml:"kube_namespace"`
 	InlineLimit   int    `yaml:"inline_limit"`
+}
+
+// DispatchConfig configures the dispatch Work gRPC server (cmd/dispatch,
+// HOR-249): the warm-worker bidi stream + one-credit dispatch + worker
+// fencing. mTLS is REQUIRED: the server cert + key serve HTTP/2, and
+// ClientCAFile is the SPIFFE/workload-identity CA bundle that verifies warm
+// worker (supervisor) caller certs.
+type DispatchConfig struct {
+	Addr         string `yaml:"addr"`
+	TLSCertFile  string `yaml:"tls_cert_file"`
+	TLSKeyFile   string `yaml:"tls_key_file"`
+	ClientCAFile string `yaml:"client_ca_file"`
+	TrustDomain  string `yaml:"trust_domain"`
 }
 
 // DatabaseConfig configures the Postgres connection pool.
@@ -128,6 +142,7 @@ func defaults() *Config {
 	return &Config{
 		API:      APIConfig{Addr: ":8080"},
 		Gateway:  GatewayConfig{Addr: ":8090", TrustDomain: "iterabase.local"},
+		Dispatch: DispatchConfig{Addr: ":8091", TrustDomain: "iterabase.local"},
 		Database: DatabaseConfig{MaxOpenConns: 25, MaxIdleConns: 10},
 		Logging:  LoggingConfig{Level: "info", Format: "json"},
 		JWT:      JWTConfig{TTL: "15m"},
@@ -184,6 +199,21 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GATEWAY_KUBE_NAMESPACE"); v != "" {
 		cfg.Gateway.KubeNamespace = v
+	}
+	if v := os.Getenv("DISPATCH_ADDR"); v != "" {
+		cfg.Dispatch.Addr = v
+	}
+	if v := os.Getenv("DISPATCH_TLS_CERT_FILE"); v != "" {
+		cfg.Dispatch.TLSCertFile = v
+	}
+	if v := os.Getenv("DISPATCH_TLS_KEY_FILE"); v != "" {
+		cfg.Dispatch.TLSKeyFile = v
+	}
+	if v := os.Getenv("DISPATCH_CLIENT_CA_FILE"); v != "" {
+		cfg.Dispatch.ClientCAFile = v
+	}
+	if v := os.Getenv("DISPATCH_TRUST_DOMAIN"); v != "" {
+		cfg.Dispatch.TrustDomain = v
 	}
 }
 
@@ -245,6 +275,23 @@ func ValidateGatewayServe(cfg *Config) error {
 	}
 	if g.KubeNamespace == "" {
 		return fmt.Errorf("gateway.kube_namespace is required (Secret-read scope for credential resolution)")
+	}
+	return nil
+}
+
+// ValidateDispatchServe checks dispatch-serve requirements (cmd/dispatch). mTLS
+// is required: server cert + key + the client CA bundle that verifies warm
+// worker (supervisor) caller certs (ARCH-010).
+func ValidateDispatchServe(cfg *Config) error {
+	d := cfg.Dispatch
+	if d.Addr == "" {
+		return fmt.Errorf("dispatch.addr (or DISPATCH_ADDR) is required for dispatch serve")
+	}
+	if d.TLSCertFile == "" || d.TLSKeyFile == "" {
+		return fmt.Errorf("dispatch.tls_cert_file + dispatch.tls_key_file are required (mTLS is mandatory for the Work server)")
+	}
+	if d.ClientCAFile == "" {
+		return fmt.Errorf("dispatch.client_ca_file is required (mTLS client verification)")
 	}
 	return nil
 }

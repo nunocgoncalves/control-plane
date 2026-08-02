@@ -483,11 +483,11 @@ func (*WorkerMessage_TokenDelta) isWorkerMessage_Kind() {}
 
 // Hello is the first message on every stream. The authenticated client cert is
 // authoritative: the Go server verifies worker_id/pool_id against a URI SAN
-// such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-uid>. A
+// such as spiffe://iterabase.local/pools/<pool-uid>/workers/<pod-name>. A
 // mismatch terminates the stream with PermissionDenied.
 type Hello struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId        string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"` // Kubernetes Pod UID
+	WorkerId        string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"` // Kubernetes Pod name (stable warm-worker slot, e.g. <pool>-worker-0)
 	PoolId          string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`       // owning pool CR UID
 	BuildVersion    string                 `protobuf:"bytes,3,opt,name=build_version,json=buildVersion,proto3" json:"build_version,omitempty"`
 	ProtocolVersion string                 `protobuf:"bytes,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`

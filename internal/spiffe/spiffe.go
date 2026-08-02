@@ -12,7 +12,7 @@
 // Trust domain is `iterabase.local` by default (configurable). Three caller
 // classes (ARCH-012):
 //
-//   - Supervisor (turn-scoped):    spiffe://<td>/pools/<pool-uid>/workers/<pod-uid>
+//   - Supervisor (turn-scoped):    spiffe://<td>/pools/<pool-uid>/workers/<pod-name>
 //   - Tool runner:                 spiffe://<td>/tool-runners/<namespace>/<runner-id>
 //   - Control-plane workflow step: spiffe://<td>/control-plane/workflow-runtime
 package spiffe
@@ -58,7 +58,7 @@ type Identity struct {
 	TrustDomain string
 	// Supervisor fields.
 	PoolUID  string
-	WorkerID string
+	WorkerID string // pod name (stable warm-worker slot, verified cert SAN)
 	// Runner fields.
 	Namespace string
 	RunnerID  string
