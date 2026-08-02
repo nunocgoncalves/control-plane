@@ -163,6 +163,16 @@ func seedTurnAttempt(t *testing.T, env *testEnv) (runID, turnID string) {
 		INSERT INTO runtime.turns (run_id, session_id, state, started_at)
 		VALUES ($1::uuid, $2, 'running', now()) RETURNING id::text`,
 		runID, sid).Scan(&turnID))
+	// Active assignment (HOR-249): the verified supervisor cert is
+	// spiffe://.../workers/worker-1; the gateway cross-checks the turn's active
+	// assignment worker_id against it.
+	_, err := env.pgpool.Exec(ctx, `
+		INSERT INTO runtime.turn_assignments
+		    (turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+		     scope_identity_id, agent_pool_key, state)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'worker-1', 1, $2, $4::uuid, 'pool-1', 'active')`,
+		turnID, runID, env.poolID, identID)
+	require.NoError(t, err)
 	require.NoError(t, env.store.SnapshotAttemptTools(ctx, runID, env.poolID, nil))
 	return runID, turnID
 }
