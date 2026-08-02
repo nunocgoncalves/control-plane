@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,7 +35,12 @@ const (
 	gpuResourceName       = corev1.ResourceName("nvidia.com/gpu")
 	gpuNodeLabel          = "nvidia.com/gpu.present"
 	nvidiaRuntimeClass    = "nvidia"
-	healthRequeueSeconds  = 30
+	// healthRequeueInterval is the requeue cadence for refreshing observed
+	// state (Ready pod counts, health) as pods come and go. It is a
+	// time.Duration (not an untyped int): ctrl.Result.RequeueAfter is a
+	// Duration measured in nanoseconds, so a bare `30` would requeue every
+	// 30ns and hot-loop the API server.
+	healthRequeueInterval = 30 * time.Second
 	// defaultTerminationGracePeriodSeconds lets vLLM drain in-flight requests on
 	// SIGTERM before releasing the GPU during a GPU-safe rollout (HOR-378).
 	defaultTerminationGracePeriodSeconds = 180
@@ -159,7 +165,7 @@ func (r *ModelBackendReconciler) reconcileVLLM(ctx context.Context, mb *v1alpha1
 	}
 	logger.Info("reconciled vLLM backend", "key", backendKey(mb), "healthy", healthy)
 	// Requeue to re-evaluate health as pods come and go.
-	return ctrl.Result{RequeueAfter: healthRequeueSeconds}, nil
+	return ctrl.Result{RequeueAfter: healthRequeueInterval}, nil
 }
 
 // reconcileExternal records an external provider backend. No workload is

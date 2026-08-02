@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +38,13 @@ const (
 	// (session UID, supplementary groups cleared, no_new_privs) cannot read the
 	// root-owned key. PSS baseline permits runAsUser=0 + CAP_SETUID/SETGID.
 	supervisorUID int64 = 0
+
+	// workerTemplateHashAnnotation records a hash of the desired worker pod
+	// template. PodSpec is largely immutable; on hash mismatch (pool spec
+	// changed) the reconciler deletes and recreates the pod rather than
+	// attempting a forbidden spec mutation that also drops scheduler-owned
+	// state (e.g. nodeName).
+	workerTemplateHashAnnotation = "platform.iterabase.com/pod-template-hash"
 )
 
 // AgentPoolReconciler maintains a bounded set of isolated warm-worker pods +
@@ -44,6 +54,10 @@ const (
 type AgentPoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader is an uncached reader used only for Secret existence checks,
+	// so raw credential/CA values are never retained in (nor a Secret informer
+	// started by) this reconciler (ARCH-008/010). It must be set by the caller.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=agentpools,verbs=get;list;watch;create;update;patch;delete
@@ -52,7 +66,7 @@ type AgentPoolReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile handles AgentPool create/update/delete events.
@@ -125,7 +139,7 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	logger.Info("reconciled AgentPool", "replicas", pool.Spec.Replicas, "ready", readyReplicas)
 	// Requeue to refresh readyReplicas as pods come and go (envtest has no
 	// kubelet, so Ready stays false there; real readiness is on-cluster).
-	return ctrl.Result{RequeueAfter: healthRequeueSeconds}, nil
+	return ctrl.Result{RequeueAfter: healthRequeueInterval}, nil
 }
 
 // validateSpec validates structural correctness (ARCH-018): required fields,
@@ -226,9 +240,13 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 }
 
 // secretExists returns nil if the Secret is present, or a descriptive error.
+// It uses the uncached APIReader with a metadata-only object, so raw Secret
+// values (customer credentials, the platform-ca key) are never retained in the
+// operator process nor cached in a Secret informer (ARCH-008/010).
 func (r *AgentPoolReconciler) secretExists(ctx context.Context, ns, name string) error {
-	var s corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &s); err != nil {
+	var meta metav1.PartialObjectMetadata
+	meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &meta); err != nil {
 		if errors.IsNotFound(err) {
 			return fmt.Errorf("secret %s/%s not found", ns, name)
 		}
@@ -313,17 +331,74 @@ func (r *AgentPoolReconciler) ensureWorkerConfig(ctx context.Context, pool *v1al
 }
 
 func (r *AgentPoolReconciler) ensureWorkerPod(ctx context.Context, pool *v1alpha1.AgentPool, name string) error {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pod, func() error {
-		if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
+	desiredHash := workerPodTemplateHash(pool, name)
+	var pod corev1.Pod
+	err := r.Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: name}, &pod)
+	if errors.IsNotFound(err) {
+		return r.createWorkerPod(ctx, pool, name, desiredHash)
+	}
+	if err != nil {
+		return err
+	}
+	// A pod already terminating (e.g. a rollout in progress) is left to finish;
+	// it is recreated once fully gone. The owned-pod watch requeues us.
+	if !pod.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	// PodSpec is largely immutable. Reconcile template changes by deleting and
+	// recreating the pod rather than overwriting Spec in place, which would both
+	// attempt forbidden immutable-field mutations (e.g. nodeName) and silently
+	// drop scheduler/API-defaulted state. Recreation happens on the next
+	// reconcile once the old pod is gone.
+	if got := pod.Annotations[workerTemplateHashAnnotation]; got != desiredHash {
+		if err := r.Delete(ctx, &pod); err != nil && !errors.IsNotFound(err) {
 			return err
 		}
-		pod.Labels = poolLabels(pool)
-		pod.Labels["platform.iterabase.com/worker"] = name
-		pod.Spec = buildWorkerPodSpec(pool, name)
 		return nil
-	})
-	return err
+	}
+	return nil
+}
+
+// createWorkerPod builds and creates a worker pod tagged with its template
+// hash. The hash lets later reconciles detect spec changes and recreate the
+// (largely immutable) pod instead of mutating it.
+func (r *AgentPoolReconciler) createWorkerPod(ctx context.Context, pool *v1alpha1.AgentPool, name, hash string) error {
+	pod := buildWorkerPod(pool, name, hash)
+	if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, pod)
+}
+
+// buildWorkerPod assembles the desired worker Pod object (labels, template-hash
+// annotation, spec). The controller reference is set by the caller.
+func buildWorkerPod(pool *v1alpha1.AgentPool, name, hash string) *corev1.Pod {
+	labels := poolLabels(pool)
+	labels["platform.iterabase.com/worker"] = name
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   pool.Namespace,
+			Labels:      labels,
+			Annotations: map[string]string{workerTemplateHashAnnotation: hash},
+		},
+		Spec: buildWorkerPodSpec(pool, name),
+	}
+}
+
+// workerPodTemplateHash is a stable hash of the desired worker pod template,
+// used to detect spec changes that require pod recreation. It is computed
+// from the marshaled desired PodSpec.
+func workerPodTemplateHash(pool *v1alpha1.AgentPool, name string) string {
+	spec := buildWorkerPodSpec(pool, name)
+	b, err := json.Marshal(spec)
+	if err != nil {
+		// PodSpec always marshals; fall back to a constant so creation proceeds.
+		return "unhashable"
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // countReadyWorkers counts worker pods reporting Ready.
@@ -432,7 +507,13 @@ func buildWorkerPodSpec(pool *v1alpha1.AgentPool, name string) corev1.PodSpec {
 			RunAsGroup:     int64Ptr(supervisorUID),
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
-		Volumes: volumes,
+		// init-wal provisions the supervisor-only WAL directory before the
+		// supervisor starts: the WAL emptyDir defaults to a root-owned 0777
+		// mount, which a session-UID child (with cleared supplementary groups)
+		// could traverse to read other turns' audit records. chmod 0700 makes
+		// it supervisor-only (HOR-381 isolation contract).
+		InitContainers: []corev1.Container{walInitContainer(pool, walDir)},
+		Volumes:        volumes,
 		Containers: []corev1.Container{
 			{
 				Name:           "supervisor",
@@ -607,6 +688,27 @@ func (r *AgentPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
+}
+
+// walInitContainer renders the init container that provisions the
+// supervisor-only 0700 WAL directory (HOR-381). It runs as root (the
+// supervisor UID) and only chmods the WAL emptyDir mount before the supervisor
+// starts; the session-UID child then cannot traverse the directory to read
+// other turns' WAL records.
+func walInitContainer(pool *v1alpha1.AgentPool, walDir string) corev1.Container {
+	return corev1.Container{
+		Name:    "init-wal",
+		Image:   pool.Spec.WorkerImage,
+		Command: []string{"/bin/sh", "-c", fmt.Sprintf("mkdir -p %q && chmod 0700 %q", walDir, walDir)},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "wal", MountPath: walDir},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:                int64Ptr(supervisorUID),
+			RunAsGroup:               int64Ptr(supervisorUID),
+			AllowPrivilegeEscalation: boolPtr(false),
+		},
+	}
 }
 
 // boolPtr/int64Ptr helpers.

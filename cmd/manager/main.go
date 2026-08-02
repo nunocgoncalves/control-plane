@@ -246,8 +246,9 @@ func run() int {
 	}
 
 	if err = (&controller.AgentPoolReconciler{
-		Client: mgr.GetClient(),
-		Scheme: scheme,
+		Client:    mgr.GetClient(),
+		Scheme:    scheme,
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up AgentPool reconciler")
 		return 1

@@ -61,8 +61,9 @@ func newAgentPoolTestEnv(t *testing.T) (client.Client, context.Context) {
 	mgr, err := ctrl.NewManager(saCfg, ctrl.Options{Scheme: scheme})
 	require.NoError(t, err)
 	require.NoError(t, (&AgentPoolReconciler{
-		Client: mgr.GetClient(),
-		Scheme: scheme,
+		Client:    mgr.GetClient(),
+		Scheme:    scheme,
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr))
 
 	// Surface controller-runtime errors on the test log.
@@ -231,7 +232,7 @@ func TestAgentPoolValidation(t *testing.T) {
 		_ = clientgoscheme.AddToScheme(scheme)
 		_ = v1alpha1.AddToScheme(scheme)
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secrets...).Build()
-		return &AgentPoolReconciler{Client: c, Scheme: scheme}
+		return &AgentPoolReconciler{Client: c, Scheme: scheme, APIReader: c}
 	}
 	ctx := context.Background()
 
