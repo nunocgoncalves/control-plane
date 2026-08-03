@@ -36,6 +36,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/version"
+	"github.com/nunocgoncalves/control-plane/internal/workflow"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -253,6 +254,17 @@ func run() int {
 		Store:     gateway.NewStore(pool),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up AgentPool reconciler")
+		return 1
+	}
+
+	if err = (&controller.WorkflowReconciler{
+		Client:     mgr.GetClient(),
+		Scheme:     scheme,
+		Store:      workflow.NewStore(pool),
+		Pools:      gateway.NewStore(pool),
+		Identities: identity.NewStore(pool),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up Workflow reconciler")
 		return 1
 	}
 

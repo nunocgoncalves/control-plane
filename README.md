@@ -308,7 +308,46 @@ pure dispatch/Work-server/assignment/fencing engine beneath them.
 All CRDs use group `platform.iterabase.com` / `v1alpha1`, reconciled by this
 operator: `AgentPool` (HOR-245), `ModelBackend` (HOR-306), `Model`
 (HOR-268), `IdentityMapping` (HOR-242, **defined here**), `PermissionPolicy`
-(HOR-243, **defined here**), `Tool` (HOR-271). The others land with their tickets.
+(HOR-243, **defined here**), `Workflow` (HOR-252, **defined here**), `Tool`
+(HOR-271). The others land with their tickets.
+
+## Workflow definitions (HOR-252)
+
+A `Workflow` is an operator-defined, versioned customer operational workflow
+(REQ-001). The operator deploys one from product/client overlay artifacts:
+its source adapter/trigger, deterministic steps + agent tasks, requested
+gateway capabilities, customer-facing workflow/persona labels, completion
+rule, blocker behavior, and value-model reference.
+
+- Definitions are **immutable per version** (ARCH-007): `(key, version)` and
+  `(key, digest)` are unique. A content change must be published under a new
+  `spec.version`; the reconciler rejects a content change under an
+  already-registered version. Re-registering the same digest is idempotent.
+- **Validation runs before execution**: unknown source type / step kind /
+  capability / completion rule / binding fails with an inspectable
+  `validationStatus: invalid`. v1 source types are `graph_email` (Walter) and
+  `operator_artifact` (XBS) — no customer-specific schema.
+- A workflow **cannot request capabilities beyond its `poolRef` AgentPool**:
+  each requested tool must be granted and its effect class must not exceed the
+  pool grant's maximum (ARCH-016/018; REQ-010).
+- **Trigger bindings carry only non-secret routing identifiers** (mailbox,
+  artifact source id). Customer secret values are never embedded; they resolve
+  through the AgentPool's `credentialBindings` via the gateway (ARCH-008).
+- The reconciler materializes: an immutable `workflow.definitions` row,
+  non-secret `workflow.trigger_bindings`, a `kind=workflow` scope identity
+  (HOR-242), and a `toolgateway.workflow_pool_binding` (permitted tools). The
+  `definition_key` wire format `<key>:<version>` is the stable cross-schema
+  reference stored in `runtime.workflow_runs.definition_key` (HOR-246) and
+  `toolgateway.workflow_pool_bindings.workflow_definition_key` (HOR-392).
+- `ResolveForAttempt(key, version)` returns the exact versioned definition +
+  trigger bindings + scope identity + permitted tools for attempt creation
+  (HOR-254 composes it with the gateway's `SnapshotAttemptTools`).
+- Customer-facing metadata (workflow title, persona name/avatar, locale)
+  supports the single-workflow Dashboard **without a separate Persona CRD**
+  (REQ-021; HOR-363 canceled).
+
+See `config/samples/platform_v1alpha1_workflow.yaml` for Walter `graph_email`
+and XBS `operator_artifact` examples.
 
 ## Git workflow
 

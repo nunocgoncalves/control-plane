@@ -57,6 +57,7 @@ rules:
   - modelbackends
   - models
   - permissionpolicies
+  - workflows
   verbs:
   - create
   - delete
@@ -73,6 +74,7 @@ rules:
   - modelbackends/finalizers
   - models/finalizers
   - permissionpolicies/finalizers
+  - workflows/finalizers
   verbs:
   - update
 - apiGroups:
@@ -83,6 +85,7 @@ rules:
   - modelbackends/status
   - models/status
   - permissionpolicies/status
+  - workflows/status
   verbs:
   - get
   - patch

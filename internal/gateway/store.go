@@ -1268,6 +1268,37 @@ func (s *Store) UpsertWorkflowPoolBinding(ctx context.Context, workflowKey, pool
 	return nil
 }
 
+// GetPoolByKey fetches an active pool by its natural key ("<ns>/<name>").
+// Used by the Workflow reconciler (HOR-252) to resolve the pool_id for a
+// workflow_pool_binding from the referenced AgentPool's key.
+func (s *Store) GetPoolByKey(ctx context.Context, key string) (Pool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, key, name, spiffe_id_prefix
+		FROM toolgateway.pools WHERE key = $1 AND deleted_at IS NULL`, key)
+	var p Pool
+	if err := row.Scan(&p.ID, &p.Key, &p.Name, &p.SpiffeIDPrefix); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Pool{}, ErrNotFound
+		}
+		return Pool{}, err
+	}
+	return p, nil
+}
+
+// SoftDeleteWorkflowPoolBindingByKey soft-deletes the workflow_pool_binding
+// for a definition key on Workflow CR deletion (HOR-252). Revokes the
+// workflow's permitted-tool binding; the row is retained for history. A no-op
+// if already soft-deleted or never existed.
+func (s *Store) SoftDeleteWorkflowPoolBindingByKey(ctx context.Context, workflowDefinitionKey string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE toolgateway.workflow_pool_bindings SET deleted_at = now()
+		WHERE workflow_definition_key = $1 AND deleted_at IS NULL`, workflowDefinitionKey)
+	if err != nil {
+		return fmt.Errorf("soft-delete workflow pool binding: %w", err)
+	}
+	return nil
+}
+
 // UpsertApprovedRunner inserts/revives a runner approval (operator-seed;
 // runner materializer HOR-397/245 later).
 func (s *Store) UpsertApprovedRunner(ctx context.Context, namespace, runnerID, spiffeID string, allowedNs []string) error {

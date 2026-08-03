@@ -1,0 +1,112 @@
+apiVersion: platform.iterabase.com/v1alpha1
+kind: Workflow
+metadata:
+  name: walter-quotation
+  namespace: platform
+spec:
+  # key is the stable workflow key across versions; version is the immutable
+  # version identity. A content change MUST be published under a new version.
+  key: walter/quotation
+  version: "1"
+
+  # poolRef names the AgentPool (in this namespace) that is the deployable
+  # security/integration boundary. Requested capabilities are validated against
+  # its gatewayGrants; the workflow's permitted tools bind to this pool.
+  poolRef: walter-pool
+
+  # source: Microsoft Graph email (Walter). Public ingress validates/persists/
+  # acknowledges/starts in the control plane; authenticated reads/actions use
+  # the gateway. Trigger bindings carry ONLY non-secret routing identifiers —
+  # customer secret values resolve through the AgentPool's credentialBindings.
+  source:
+    type: graph_email
+    triggerBindings:
+      - name: walter-inbox
+        bindingKey: inbox@walter.example
+        config:
+          folder: Inbox
+          filter: "quotation"
+
+  # steps: the ordered deterministic plan. Kinds mirror runtime.run_steps.
+  steps:
+    - name: classify
+      kind: agent_task
+      config:
+        prompt: "Classify the quotation email as engineering or pricing."
+    - name: extract
+      kind: agent_task
+      config:
+        prompt: "Extract the agreed fields from the quotation."
+    - name: write-excel
+      kind: tool_call
+      config:
+        tool: graph.excel.write
+    - name: review
+      kind: approval_gate
+      config:
+        approverScope: walter-ops
+
+  # requestedCapabilities: validated against the AgentPool's gatewayGrants.
+  # Each tool must be granted and its effect class must not exceed the grant.
+  requestedCapabilities:
+    - tool: graph.read
+      maxEffectClass: read_only
+      actions: [read, list]
+    - tool: graph.excel.write
+      maxEffectClass: idempotent_write
+
+  # completionRule: the run completes when all non-skipped steps succeed.
+  # Completion is not correctness (REQ-006/007).
+  completionRule:
+    type: all_steps
+
+  # blocker: the review approval_gate produces a customer-actionable Blocked
+  # state asking for a decision (REQ-020).
+  blocker:
+    step: review
+    behavior: decision
+
+  # valueModelRef: references the transparent value model (REQ-028).
+  valueModelRef: walter/manual-handling
+
+  # presentation: customer-facing workflow/persona labels for the single-
+  # workflow Dashboard (REQ-021). No separate Persona CRD.
+  presentation:
+    workflowTitle: Quotation Processing
+    personaName: Walter Ops
+    personaAvatar: ""
+    locale: en
+---
+# XBS-generic example: an operator-supplied exported-artifact workflow. The
+# customer-specific input/output mapping is defined from real artifacts rather
+# than a pre-invented schema (REQ-004/037). Source type operator_artifact.
+apiVersion: platform.iterabase.com/v1alpha1
+kind: Workflow
+metadata:
+  name: xbs-shipment-map
+  namespace: platform
+spec:
+  key: xbs/shipment-map
+  version: "1"
+  poolRef: xbs-pool
+  source:
+    type: operator_artifact
+    triggerBindings:
+      - name: xbs-exports
+        bindingKey: xbs-exports
+        config:
+          artifactPath: exports/shipments
+  steps:
+    - name: map
+      kind: agent_task
+      config:
+        prompt: "Build the shipment map from the exported artifact."
+  requestedCapabilities:
+    - tool: graph.read
+      maxEffectClass: read_only
+  completionRule:
+    type: all_steps
+  presentation:
+    workflowTitle: Shipment Map
+    personaName: XBS Ops
+    locale: pt

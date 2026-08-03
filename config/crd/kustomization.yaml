@@ -7,3 +7,4 @@ resources:
 - bases/platform.iterabase.com_identitymappings.yaml
 - bases/platform.iterabase.com_modelbackends.yaml
 - bases/platform.iterabase.com_permissionpolicies.yaml
+- bases/platform.iterabase.com_workflows.yaml
