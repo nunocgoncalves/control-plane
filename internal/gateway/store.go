@@ -169,10 +169,9 @@ type SecretRef struct {
 // objects (ARCH-016). The gateway intersects it with deployed registry
 // availability and AgentPool grants at discovery/authorization so a workflow
 // narrowed to read_only / a subset of actions is not widened back to the pool
-// ceiling at runtime (REQ-001/REQ-010). Actions is a persisted declaration
-// (validated ⊆ pool grant at registration); v1 invocations carry no action
-// field, so runtime enforcement is at tool-name + effect-class granularity
-// until tool descriptors declare action decomposition.
+// ceiling at runtime (REQ-001/REQ-010). Actions is enforced at discovery and
+// invocation using the approved v1 effective-action contract: an undecomposed
+// descriptor's action is its tool name; empty means effect-class-only.
 type Capability struct {
 	Tool           string   `json:"tool"`
 	MaxEffectClass string   `json:"maxEffectClass"`
@@ -741,16 +740,19 @@ func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID st
 		if err != nil {
 			return nil, err
 		}
-		// Workflow-requested effect-class ceiling (ARCH-016): a workflow narrowed
-		// to read_only must not discover a higher-effect tool even when the pool
-		// grant ceiling allows it, so the narrowing is not widened back to the
-		// pool ceiling at runtime (REQ-001/REQ-010). nil permitted = turn path.
+		// Workflow-requested effect/action ceiling (ARCH-016): a workflow narrowed
+		// to read_only or a subset of actions must not discover a broader tool even
+		// when the pool grant ceiling allows it (REQ-001/REQ-010). nil permitted =
+		// turn path. V1's undecomposed effective action is the tool name.
 		if permitted != nil {
 			cap, ok := capByTool[tv.Name]
 			if !ok {
 				continue
 			}
 			if cap.MaxEffectClass != "" && effectRank(tv.EffectClass) > effectRank(EffectClass(cap.MaxEffectClass)) {
+				continue
+			}
+			if !capabilityAllowsAction(cap, tv) {
 				continue
 			}
 		}

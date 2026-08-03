@@ -41,10 +41,14 @@ func insertPool(t *testing.T, pool *pgxpool.Pool, key string) string {
 
 func sampleDefinition(key, version, scopeID string) workflow.Definition {
 	return workflow.Definition{
-		Key:              key,
-		Version:          version,
-		Digest:           "digest-" + key + "-" + version,
-		SpecJSON:         []byte(`{"key":"` + key + `"}`),
+		Key:     key,
+		Version: version,
+		Digest:  "digest-" + key + "-" + version,
+		SpecJSON: []byte(`{"key":"` + key + `","scopeIdentityKey":"workflow:default/walter-quotation",` +
+			`"skills":[{"name":"walter-quotation","version":"1.0.0","digest":"sha256:skill-v1"}],` +
+			`"steps":[{"name":"write","kind":"tool_call","tool":"graph.excel.write"}],` +
+			`"completionRule":{"type":"all_steps"},"presentation":{"workflowTitle":"Quotation","personaName":"Walter Ops"},` +
+			`"poolRef":"walter-pool","source":{"type":"graph_email"}}`),
 		ValidationStatus: workflow.ValidationValid,
 		ScopeIdentityID:  scopeID,
 		SourceType:       "graph_email",
@@ -143,7 +147,7 @@ func TestTriggerBindings_ReplaceAndList(t *testing.T) {
 	require.NoError(t, err)
 
 	bindings := []workflow.TriggerBindingInput{
-		{Name: "inbox", BindingKey: "inbox@walter.example", Config: []byte(`{"folder":"Inbox"}`)},
+		{Name: "inbox", BindingKey: "inbox@walter.example"},
 		{Name: "archive", BindingKey: "archive@walter.example"},
 	}
 	require.NoError(t, store.ReplaceTriggerBindings(ctx, def.ID, "graph_email", bindings))
@@ -153,9 +157,6 @@ func TestTriggerBindings_ReplaceAndList(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "archive", got[0].Name) // ordered by name
 	assert.Equal(t, "inbox@walter.example", got[1].BindingKey)
-	var cfg map[string]string
-	require.NoError(t, json.Unmarshal(got[1].Config, &cfg))
-	assert.Equal(t, "Inbox", cfg["folder"])
 
 	// Replace shrinks to one binding; the other is soft-deleted.
 	require.NoError(t, store.ReplaceTriggerBindings(ctx, def.ID, "graph_email",
@@ -195,7 +196,7 @@ func TestResolveForAttempt(t *testing.T) {
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.workflow_pool_bindings (workflow_definition_key, pool_id, permitted_tools)
 		VALUES ($1, $2, $3)`, defKey, poolID, []workflow.CanonicalCapability{
-		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"read", "list"}},
+		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"graph.read"}},
 		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 	})
 	require.NoError(t, err)
@@ -207,6 +208,10 @@ func TestResolveForAttempt(t *testing.T) {
 	assert.Equal(t, scopeID, resolved.Definition.ScopeIdentityID)
 	require.Len(t, resolved.TriggerBindings, 1)
 	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, resolved.PermittedTools)
+	require.Len(t, resolved.Skills, 1)
+	assert.Equal(t, "sha256:skill-v1", resolved.Skills[0].Digest)
+	assert.Equal(t, "graph.excel.write", resolved.Spec.Steps[0].Tool)
+	assert.Equal(t, "workflow:default/walter-quotation", resolved.Spec.ScopeIdentityKey)
 
 	// Resolve latest when version empty.
 	resolvedLatest, err := store.ResolveForAttempt(ctx, "walter/quotation", "")
@@ -216,6 +221,25 @@ func TestResolveForAttempt(t *testing.T) {
 	// Unknown key => ErrNotFound.
 	_, err = store.ResolveForAttempt(ctx, "nope/missing", "1")
 	assert.ErrorIs(t, err, workflow.ErrNotFound)
+}
+
+func TestResolveForAttempt_RejectsIncompleteCanonicalSpec(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	scopeID := insertWorkflowIdentity(t, pool, "wf/test-malformed")
+	malformed := sampleDefinition("walter/quotation", "1", scopeID)
+	malformed.SpecJSON = []byte(`{}`)
+	def, err := store.RegisterDefinition(ctx, malformed)
+	require.NoError(t, err)
+	poolID := insertPool(t, pool, "default/walter-pool")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO toolgateway.workflow_pool_bindings (workflow_definition_key, pool_id, permitted_tools)
+		VALUES ($1, $2, '[]'::jsonb)`, workflow.DefinitionKey(def.Key, def.Version), poolID)
+	require.NoError(t, err)
+
+	_, err = store.ResolveForAttempt(ctx, "walter/quotation", "1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve canonical workflow spec")
 }
 
 func TestResolveForAttempt_RejectsInvalidDefinition(t *testing.T) {
@@ -257,11 +281,13 @@ func TestDefinitionKey_WireFormat(t *testing.T) {
 // Ensure the CanonicalSpec marshals deterministically (digest stability).
 func TestCanonicalSpec_DeterministicMarshal(t *testing.T) {
 	s := workflow.CanonicalSpec{
-		Key:            "walter/quotation",
-		PoolRef:        "walter-pool",
-		Steps:          []workflow.CanonicalStep{{Name: "classify", Kind: "agent_task"}},
-		CompletionRule: workflow.CanonicalCompletion{Type: "all_steps"},
-		Presentation:   workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Walter Ops"},
+		Key:              "walter/quotation",
+		ScopeIdentityKey: "workflow:default/walter-quotation",
+		PoolRef:          "walter-pool",
+		Skills:           []workflow.CanonicalSkill{{Name: "walter", Version: "1", Digest: "sha256:skill"}},
+		Steps:            []workflow.CanonicalStep{{Name: "write", Kind: "tool_call", Tool: "graph.excel.write"}},
+		CompletionRule:   workflow.CanonicalCompletion{Type: "all_steps"},
+		Presentation:     workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Walter Ops"},
 	}
 	b1, err := json.Marshal(s)
 	require.NoError(t, err)

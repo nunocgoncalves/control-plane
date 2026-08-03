@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,8 +74,11 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 			Source: v1alpha1.WorkflowSource{
 				Type: v1alpha1.SourceGraphEmail,
 				TriggerBindings: []v1alpha1.TriggerBinding{
-					{Name: "inbox", BindingKey: "inbox@walter.example", Config: jsonConfig(`{"folder":"Inbox"}`)},
+					{Name: "inbox", GraphEmail: &v1alpha1.GraphEmailTriggerBinding{MailboxAddress: "inbox@walter.example"}},
 				},
+			},
+			Skills: []v1alpha1.SkillReference{
+				{Name: "walter-quotation", Version: "1.0.0", Digest: "sha256:walter-skill-v1"},
 			},
 			Steps: []v1alpha1.WorkflowStep{
 				{Name: "classify", Kind: v1alpha1.WorkflowStepAgentTask, Config: jsonConfig(`{"prompt":"classify"}`)},
@@ -82,7 +86,7 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 				{Name: "review", Kind: v1alpha1.WorkflowStepApprovalGate},
 			},
 			RequestedCapabilities: []v1alpha1.RequestedCapability{
-				{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"read", "list"}},
+				{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"graph.read"}},
 				{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 			},
 			CompletionRule: v1alpha1.CompletionRule{Type: v1alpha1.CompletionAllSteps},
@@ -99,7 +103,7 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 func TestWorkflowValidation(t *testing.T) {
 	ns := "default"
 	pool := poolWithGrants("walter-pool", ns,
-		v1alpha1.GatewayGrant{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"read", "list"}},
+		v1alpha1.GatewayGrant{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"graph.read"}},
 		v1alpha1.GatewayGrant{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 	)
 
@@ -108,7 +112,12 @@ func TestWorkflowValidation(t *testing.T) {
 		_ = clientgoscheme.AddToScheme(scheme)
 		_ = v1alpha1.AddToScheme(scheme)
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-		return &WorkflowReconciler{Client: c, Scheme: scheme}
+		return &WorkflowReconciler{
+			Client: c, Scheme: scheme,
+			SourceAdapters: StaticSourceAdapterRegistry{
+				v1alpha1.SourceGraphEmail: {}, v1alpha1.SourceOperatorArtifact: {},
+			},
+		}
 	}
 	ctx := context.Background()
 
@@ -119,6 +128,13 @@ func TestWorkflowValidation(t *testing.T) {
 	badSource := validWalterWorkflow("w", ns, "walter-pool")
 	badSource.Spec.Source.Type = "slack"
 	require.Error(t, newReconciler(pool).validateSpec(ctx, badSource))
+
+	// Recognized but not installed source adapter -> rejected before Ready.
+	missingAdapter := newReconciler(pool)
+	missingAdapter.SourceAdapters = StaticSourceAdapterRegistry{v1alpha1.SourceOperatorArtifact: {}}
+	err := missingAdapter.validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no installed source adapter")
 
 	// Unknown step kind -> rejected.
 	badStep := validWalterWorkflow("w", ns, "walter-pool")
@@ -148,14 +164,14 @@ func TestWorkflowValidation(t *testing.T) {
 	// Duplicate trigger binding name -> rejected.
 	dupBinding := validWalterWorkflow("w", ns, "walter-pool")
 	dupBinding.Spec.Source.TriggerBindings = append(dupBinding.Spec.Source.TriggerBindings,
-		v1alpha1.TriggerBinding{Name: "inbox", BindingKey: "other@walter.example"})
+		v1alpha1.TriggerBinding{Name: "inbox", GraphEmail: &v1alpha1.GraphEmailTriggerBinding{MailboxAddress: "other@walter.example"}})
 	require.Error(t, newReconciler(pool).validateSpec(ctx, dupBinding))
 
 	// Capability beyond pool: tool not granted -> rejected.
 	ungranted := validWalterWorkflow("w", ns, "walter-pool")
 	ungranted.Spec.RequestedCapabilities = append(ungranted.Spec.RequestedCapabilities,
 		v1alpha1.RequestedCapability{Tool: "graph.mail.send", MaxEffectClass: "idempotent_write"})
-	err := newReconciler(pool).validateSpec(ctx, ungranted)
+	err = newReconciler(pool).validateSpec(ctx, ungranted)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not granted")
 
@@ -172,12 +188,20 @@ func TestWorkflowValidation(t *testing.T) {
 	// Capability action not in pool's allowedActions -> rejected.
 	badAction := validWalterWorkflow("w", ns, "walter-pool")
 	badAction.Spec.RequestedCapabilities = []v1alpha1.RequestedCapability{
-		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"send"}}, // pool allows read,list
-		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},              // keep tool_call step authorized
+		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"*"}}, // pool allows only graph.read
+		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},           // keep tool_call step authorized
 	}
 	err = newReconciler(pool).validateSpec(ctx, badAction)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not allowed by AgentPool grant")
+
+	// V1 descriptors are undecomposed, so a non-empty workflow action set must
+	// include the effective action (the tool name) or wildcard.
+	badEffectiveAction := validWalterWorkflow("w", ns, "walter-pool")
+	badEffectiveAction.Spec.RequestedCapabilities[0].Actions = []string{"read"}
+	err = newReconciler(pool).validateSpec(ctx, badEffectiveAction)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "v1 undecomposed tool action")
 
 	// Referenced AgentPool not found -> rejected.
 	err = newReconciler().validateSpec(ctx, validWalterWorkflow("w", ns, "missing-pool"))
@@ -198,12 +222,22 @@ func TestWorkflowValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a requested capability")
 
-	// Trigger binding config with a secret-named key -> rejected (ARCH-008).
-	secretCfg := validWalterWorkflow("w", ns, "walter-pool")
-	secretCfg.Spec.Source.TriggerBindings[0].Config = jsonConfig(`{"clientSecret":"shh"}`)
-	err = newReconciler(pool).validateSpec(ctx, secretCfg)
+	// Trigger binding must use the source-specific typed payload. There is no
+	// opaque config field through which a renamed/nested secret can be persisted.
+	wrongBindingShape := validWalterWorkflow("w", ns, "walter-pool")
+	wrongBindingShape.Spec.Source.TriggerBindings[0] = v1alpha1.TriggerBinding{
+		Name: "inbox", OperatorArtifact: &v1alpha1.OperatorArtifactTriggerBinding{SourceID: "secret-shaped-route"},
+	}
+	err = newReconciler(pool).validateSpec(ctx, wrongBindingShape)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "secret")
+	assert.Contains(t, err.Error(), "graphEmail must be set exclusively")
+
+	// Skill identity must be exact and immutable.
+	missingSkillDigest := validWalterWorkflow("w", ns, "walter-pool")
+	missingSkillDigest.Spec.Skills[0].Digest = ""
+	err = newReconciler(pool).validateSpec(ctx, missingSkillDigest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "digest is required")
 
 	// key containing ":" -> rejected (definition_key wire format ambiguity, REQ-010).
 	colonKey := validWalterWorkflow("w", ns, "walter-pool")
@@ -227,7 +261,7 @@ func TestWorkflowValidation(t *testing.T) {
 			Source: v1alpha1.WorkflowSource{
 				Type: v1alpha1.SourceOperatorArtifact,
 				TriggerBindings: []v1alpha1.TriggerBinding{
-					{Name: "exports", BindingKey: "xbs-exports", Config: jsonConfig(`{"artifactPath":"exports"}`)},
+					{Name: "exports", OperatorArtifact: &v1alpha1.OperatorArtifactTriggerBinding{SourceID: "xbs-exports"}},
 				},
 			},
 			Steps:          []v1alpha1.WorkflowStep{{Name: "map", Kind: v1alpha1.WorkflowStepAgentTask}},
@@ -236,6 +270,30 @@ func TestWorkflowValidation(t *testing.T) {
 		},
 	}
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, xbs), "XBS operator_artifact workflow should be representable")
+}
+
+func TestWorkflowCanonicalSpecIncludesAllExecutionIdentityInputs(t *testing.T) {
+	base := validWalterWorkflow("workflow-a", "default", "walter-pool")
+	baseJSON, err := json.Marshal(buildCanonicalSpec(base))
+	require.NoError(t, err)
+
+	toolChanged := base.DeepCopy()
+	toolChanged.Spec.Steps[1].Tool = "graph.excel.write.v2"
+	toolJSON, err := json.Marshal(buildCanonicalSpec(toolChanged))
+	require.NoError(t, err)
+	assert.NotEqual(t, string(baseJSON), string(toolJSON), "tool_call tool semantics must affect the immutable digest input")
+
+	skillChanged := base.DeepCopy()
+	skillChanged.Spec.Skills[0].Digest = "sha256:walter-skill-v2"
+	skillJSON, err := json.Marshal(buildCanonicalSpec(skillChanged))
+	require.NoError(t, err)
+	assert.NotEqual(t, string(baseJSON), string(skillJSON), "skill identity must affect the immutable digest input")
+
+	otherCR := base.DeepCopy()
+	otherCR.Name = "workflow-b"
+	otherJSON, err := json.Marshal(buildCanonicalSpec(otherCR))
+	require.NoError(t, err)
+	assert.NotEqual(t, string(baseJSON), string(otherJSON), "metadata-derived scope identity must affect immutable definition identity")
 }
 
 // newWorkflowTestEnv stands up envtest (RBAC enforced) with the CRDs installed
@@ -283,6 +341,9 @@ func newWorkflowTestEnv(t *testing.T) (client.Client, context.Context, *workflow
 		Store:      wfStore,
 		Pools:      gwStore,
 		Identities: idStore,
+		SourceAdapters: StaticSourceAdapterRegistry{
+			v1alpha1.SourceGraphEmail: {}, v1alpha1.SourceOperatorArtifact: {},
+		},
 	}).SetupWithManager(mgr))
 
 	mgrCtx, cancel := context.WithCancel(ctx)
@@ -303,7 +364,7 @@ func TestWorkflowReconcile(t *testing.T) {
 	// Create an AgentPool CR (the policy ceiling) and pre-materialize its pool
 	// row in toolgateway (simulating the AgentPool reconciler having run).
 	pool := poolWithGrants("walter-pool", ns,
-		v1alpha1.GatewayGrant{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"read", "list"}},
+		v1alpha1.GatewayGrant{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"graph.read"}},
 		v1alpha1.GatewayGrant{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 	)
 	require.NoError(t, adminClient.Create(ctx, pool))
@@ -349,7 +410,7 @@ func TestWorkflowReconcile(t *testing.T) {
 	binding, err := gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/quotation", "1"))
 	require.NoError(t, err)
 	assert.Equal(t, []gateway.Capability{
-		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"read", "list"}},
+		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"graph.read"}},
 		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 	}, binding.PermittedCapabilities)
 
@@ -358,6 +419,10 @@ func TestWorkflowReconcile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, def.ID, resolved.Definition.ID)
 	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, resolved.PermittedTools)
+	require.Len(t, resolved.Skills, 1)
+	assert.Equal(t, "sha256:walter-skill-v1", resolved.Skills[0].Digest)
+	assert.Equal(t, "graph.excel.write", resolved.Spec.Steps[1].Tool)
+	assert.Equal(t, "workflow:default/walter-quotation", resolved.Spec.ScopeIdentityKey)
 
 	// An invalid overlay (capability beyond pool) is rejected with inspectable
 	// validation status and does not materialize a new definition version.

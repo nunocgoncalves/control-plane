@@ -154,19 +154,21 @@ spec:
                 description: |-
                   requestedCapabilities are the gateway tools the workflow requests
                   (REQ-010). Each is validated against the referenced AgentPool's
-                  gatewayGrants: a workflow cannot request a tool or effect class beyond
-                  its pool. The permitted tool names are bound via
+                  gatewayGrants: a workflow cannot request a tool, effect class, or action
+                  beyond its pool. The complete narrowing is bound via
                   toolgateway.workflow_pool_bindings.
                 items:
                   description: |-
                     RequestedCapability is one gateway tool the workflow requests (REQ-010).
                     Validated against the AgentPool's gatewayGrants: the tool must be granted and
-                    the requested effect class must not exceed the pool's maximum.
+                    the requested effect class/action set must not exceed the pool's maximum.
                   properties:
                     actions:
                       description: |-
-                        actions is an optional action narrowing (e.g. ["read", "list"]). The
-                        gateway intersects it with pool/customer policy at discovery.
+                        actions is an optional action narrowing. The gateway intersects it with
+                        pool/customer policy at discovery and invocation. Under the approved v1
+                        descriptor contract an undecomposed tool's effective action is its tool
+                        name; an empty list applies only the effect-class ceiling.
                       items:
                         type: string
                       type: array
@@ -189,6 +191,40 @@ spec:
                   - tool
                   type: object
                 type: array
+              skills:
+                description: |-
+                  skills are the exact immutable skill artifacts this workflow may load.
+                  Each reference carries a logical name plus version and content digest so
+                  attempt creation can snapshot skill identity alongside the immutable
+                  workflow/config and gateway-tool pins (REQ-003/REQ-011; HOR-252).
+                items:
+                  description: |-
+                    SkillReference identifies one immutable overlay-delivered skill. Name is the
+                    logical skill identity; version and digest together make updates explicit and
+                    attributable instead of silently changing an existing attempt (REQ-003/011).
+                    Skill-specific non-secret configuration belongs in the immutable workflow
+                    step config and is therefore included in the workflow definition digest.
+                  properties:
+                    digest:
+                      description: digest is the immutable skill artifact content
+                        digest.
+                      minLength: 1
+                      type: string
+                    name:
+                      description: name is the logical skill name/path in the product/client
+                        overlay.
+                      minLength: 1
+                      type: string
+                    version:
+                      description: version is the operator-published skill version.
+                      minLength: 1
+                      type: string
+                  required:
+                  - digest
+                  - name
+                  - version
+                  type: object
+                type: array
               source:
                 description: |-
                   source defines the source adapter/trigger that starts a run of this
@@ -205,30 +241,44 @@ spec:
                       credentialBindings via the gateway (ARCH-008).
                     items:
                       description: |-
-                        TriggerBinding is one non-secret trigger route registration. No secret values
-                        are embedded; the gateway resolves credentials from the AgentPool's
-                        credentialBindings at invocation (ARCH-008).
+                        TriggerBinding is one source-specific, non-secret trigger route registration.
+                        Exactly one source payload must be set and it must match WorkflowSource.type.
+                        There is deliberately no opaque config field: raw credential values cannot
+                        enter the Workflow CR or Postgres through trigger registration (ARCH-008).
                       properties:
-                        bindingKey:
+                        graphEmail:
                           description: |-
-                            bindingKey is the non-secret routing identifier for this trigger (e.g. a
-                            mailbox address for graph_email, an artifact source id for
-                            operator_artifact). It MUST NOT carry secret values.
-                          minLength: 1
-                          type: string
-                        config:
-                          description: |-
-                            config is opaque non-secret trigger configuration. Secret values are
-                            never embedded here; they resolve through the AgentPool's
-                            credentialBindings via the gateway.
-                          x-kubernetes-preserve-unknown-fields: true
+                            graphEmail identifies a Microsoft Graph mailbox route. It is required when
+                            source.type=graph_email and forbidden for other source types.
+                          properties:
+                            mailboxAddress:
+                              description: mailboxAddress is the mailbox whose validated
+                                notifications start work.
+                              minLength: 3
+                              type: string
+                          required:
+                          - mailboxAddress
+                          type: object
                         name:
                           description: name is the logical binding name, unique within
                             the workflow.
                           minLength: 1
                           type: string
+                        operatorArtifact:
+                          description: |-
+                            operatorArtifact identifies a generic operator-supplied artifact source.
+                            It is required when source.type=operator_artifact and forbidden for other
+                            source types; it does not encode customer-specific artifact schema.
+                          properties:
+                            sourceID:
+                              description: sourceID identifies the configured artifact
+                                intake route.
+                              minLength: 1
+                              type: string
+                          required:
+                          - sourceID
+                          type: object
                       required:
-                      - bindingKey
                       - name
                       type: object
                     type: array

@@ -60,10 +60,17 @@ type WorkflowSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	Steps []WorkflowStep `json:"steps"`
 
+	// skills are the exact immutable skill artifacts this workflow may load.
+	// Each reference carries a logical name plus version and content digest so
+	// attempt creation can snapshot skill identity alongside the immutable
+	// workflow/config and gateway-tool pins (REQ-003/REQ-011; HOR-252).
+	// +optional
+	Skills []SkillReference `json:"skills,omitempty"`
+
 	// requestedCapabilities are the gateway tools the workflow requests
 	// (REQ-010). Each is validated against the referenced AgentPool's
-	// gatewayGrants: a workflow cannot request a tool or effect class beyond
-	// its pool. The permitted tool names are bound via
+	// gatewayGrants: a workflow cannot request a tool, effect class, or action
+	// beyond its pool. The complete narrowing is bound via
 	// toolgateway.workflow_pool_bindings.
 	// +optional
 	RequestedCapabilities []RequestedCapability `json:"requestedCapabilities,omitempty"`
@@ -112,9 +119,10 @@ type WorkflowSource struct {
 	TriggerBindings []TriggerBinding `json:"triggerBindings,omitempty"`
 }
 
-// TriggerBinding is one non-secret trigger route registration. No secret values
-// are embedded; the gateway resolves credentials from the AgentPool's
-// credentialBindings at invocation (ARCH-008).
+// TriggerBinding is one source-specific, non-secret trigger route registration.
+// Exactly one source payload must be set and it must match WorkflowSource.type.
+// There is deliberately no opaque config field: raw credential values cannot
+// enter the Workflow CR or Postgres through trigger registration (ARCH-008).
 // +kubebuilder:object:generate=true
 type TriggerBinding struct {
 	// name is the logical binding name, unique within the workflow.
@@ -122,20 +130,36 @@ type TriggerBinding struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// bindingKey is the non-secret routing identifier for this trigger (e.g. a
-	// mailbox address for graph_email, an artifact source id for
-	// operator_artifact). It MUST NOT carry secret values.
+	// graphEmail identifies a Microsoft Graph mailbox route. It is required when
+	// source.type=graph_email and forbidden for other source types.
+	// +optional
+	GraphEmail *GraphEmailTriggerBinding `json:"graphEmail,omitempty"`
+
+	// operatorArtifact identifies a generic operator-supplied artifact source.
+	// It is required when source.type=operator_artifact and forbidden for other
+	// source types; it does not encode customer-specific artifact schema.
+	// +optional
+	OperatorArtifact *OperatorArtifactTriggerBinding `json:"operatorArtifact,omitempty"`
+}
+
+// GraphEmailTriggerBinding is the typed, non-secret Graph email route config.
+// Credentials remain in AgentPool credentialBindings and K8s Secrets.
+// +kubebuilder:object:generate=true
+type GraphEmailTriggerBinding struct {
+	// mailboxAddress is the mailbox whose validated notifications start work.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=3
+	MailboxAddress string `json:"mailboxAddress"`
+}
+
+// OperatorArtifactTriggerBinding is the typed, non-secret exported-artifact
+// route config. sourceID is a logical registration identity, not customer data.
+// +kubebuilder:object:generate=true
+type OperatorArtifactTriggerBinding struct {
+	// sourceID identifies the configured artifact intake route.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	BindingKey string `json:"bindingKey"`
-
-	// config is opaque non-secret trigger configuration. Secret values are
-	// never embedded here; they resolve through the AgentPool's
-	// credentialBindings via the gateway.
-	//
-	// +kubebuilder:pruning:NonPrefixed
-	// +optional
-	Config *apiextensionsv1.JSON `json:"config,omitempty"`
+	SourceID string `json:"sourceID"`
 }
 
 // WorkflowStep is one step of the workflow's deterministic plan. Kinds mirror
@@ -170,9 +194,32 @@ type WorkflowStep struct {
 	Tool string `json:"tool,omitempty"`
 }
 
+// SkillReference identifies one immutable overlay-delivered skill. Name is the
+// logical skill identity; version and digest together make updates explicit and
+// attributable instead of silently changing an existing attempt (REQ-003/011).
+// Skill-specific non-secret configuration belongs in the immutable workflow
+// step config and is therefore included in the workflow definition digest.
+// +kubebuilder:object:generate=true
+type SkillReference struct {
+	// name is the logical skill name/path in the product/client overlay.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// version is the operator-published skill version.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// digest is the immutable skill artifact content digest.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Digest string `json:"digest"`
+}
+
 // RequestedCapability is one gateway tool the workflow requests (REQ-010).
 // Validated against the AgentPool's gatewayGrants: the tool must be granted and
-// the requested effect class must not exceed the pool's maximum.
+// the requested effect class/action set must not exceed the pool's maximum.
 // +kubebuilder:object:generate=true
 type RequestedCapability struct {
 	// tool is the logical gateway tool/capability name (e.g. "graph.read").
@@ -186,8 +233,10 @@ type RequestedCapability struct {
 	// +kubebuilder:validation:Required
 	MaxEffectClass string `json:"maxEffectClass"`
 
-	// actions is an optional action narrowing (e.g. ["read", "list"]). The
-	// gateway intersects it with pool/customer policy at discovery.
+	// actions is an optional action narrowing. The gateway intersects it with
+	// pool/customer policy at discovery and invocation. Under the approved v1
+	// descriptor contract an undecomposed tool's effective action is its tool
+	// name; an empty list applies only the effect-class ceiling.
 	// +optional
 	Actions []string `json:"actions,omitempty"`
 }

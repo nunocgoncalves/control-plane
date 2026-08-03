@@ -709,25 +709,11 @@ func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, 
 	// maxEffectClass is enforced here so a workflow narrowed to read_only cannot
 	// invoke a tool whose effect exceeds it, even when the pool grant ceiling is
 	// higher — the narrowing is not widened back to the pool ceiling at runtime
-	// (REQ-001/REQ-010). Actions is a persisted declaration; v1 invocations carry
-	// no action field, so action-subset enforcement awaits tool-descriptor action
-	// decomposition (HOR-392) and is validated ⊆ pool grant at registration.
-	if permitted != nil {
-		var cap *Capability
-		found := false
-		for i := range permitted {
-			if permitted[i].Tool == tv.Name {
-				found = true
-				cap = &permitted[i]
-				break
-			}
-		}
-		if !found {
-			return false, errors.New("tool not in workflow-permitted set")
-		}
-		if cap.MaxEffectClass != "" && effectRank(tv.EffectClass) > effectRank(EffectClass(cap.MaxEffectClass)) {
-			return false, fmt.Errorf("tool effect_class %s exceeds workflow-requested ceiling %s", tv.EffectClass, cap.MaxEffectClass)
-		}
+	// (REQ-001/REQ-010). The workflow action allow-list is enforced using the
+	// same approved effective-action rule as pool grants: an undecomposed v1
+	// descriptor's action is its tool name; empty means effect-class-only.
+	if err := authorizeWorkflowCapability(permitted, tv); err != nil {
+		return false, err
 	}
 	grant, err := s.store.GetPoolGrant(ctx, poolID, tv.Name)
 	if err != nil {
@@ -759,10 +745,49 @@ func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, 
 	return true, nil
 }
 
+// authorizeWorkflowCapability enforces the workflow-requested tool/effect/action
+// intersection. nil means no workflow narrowing (turn path); an empty slice
+// denies every tool on the workflow-step path.
+func authorizeWorkflowCapability(permitted []Capability, tv ToolVersion) error {
+	if permitted == nil {
+		return nil
+	}
+	for _, cap := range permitted {
+		if cap.Tool != tv.Name {
+			continue
+		}
+		if cap.MaxEffectClass != "" && effectRank(tv.EffectClass) > effectRank(EffectClass(cap.MaxEffectClass)) {
+			return fmt.Errorf("tool effect_class %s exceeds workflow-requested ceiling %s", tv.EffectClass, cap.MaxEffectClass)
+		}
+		if !capabilityAllowsAction(cap, tv) {
+			return fmt.Errorf("action %q not permitted by workflow capability", actionForTool(tv))
+		}
+		return nil
+	}
+	return errors.New("tool not in workflow-permitted set")
+}
+
 // actionForTool derives the effective action a tool invocation targets. v1
 // treats an undeclared action as the single action "<tool_name>" (SD-3); tool
 // descriptors may declare action decomposition in a later revision.
 func actionForTool(tv ToolVersion) string { return tv.Name }
+
+// capabilityAllowsAction applies a workflow capability's action narrowing to a
+// concrete tool descriptor. Empty actions means effect-class-only; otherwise
+// the approved effective action (v1 undecomposed descriptor = tool name) or a
+// wildcard must be explicitly present.
+func capabilityAllowsAction(cap Capability, tv ToolVersion) bool {
+	if len(cap.Actions) == 0 {
+		return true
+	}
+	action := actionForTool(tv)
+	for _, allowed := range cap.Actions {
+		if allowed == action || allowed == "*" {
+			return true
+		}
+	}
+	return false
+}
 
 // toolNamespace returns the namespace prefix of a tool name — the segment
 // before the first '.' (e.g. "graph.read_mail" -> "graph"), or the whole name

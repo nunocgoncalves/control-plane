@@ -9,11 +9,11 @@
 -- version, digest) row; the same (key, version) with different content is
 -- rejected in Go. Re-registering the same digest is idempotent.
 --
--- Trigger bindings carry ONLY non-secret routing identifiers (mailbox address,
--- artifact source id). Customer secret VALUES are never embedded here;
+-- Trigger bindings carry ONLY source-specific, typed non-secret routing
+-- identifiers (mailbox address or artifact source id). There is no opaque config
+-- column through which raw credential values could enter Postgres;
 -- authenticated source access resolves credentials through the AgentPool's
--- credentialBindings via the gateway (ARCH-008). The Workflow CRD has no
--- secret-value fields by design.
+-- credentialBindings via the gateway (ARCH-008).
 --
 -- The definition_key wire format is "<key>:<version>" (stable across schemas).
 -- It is stored in:
@@ -67,18 +67,19 @@ CREATE INDEX idx_definitions_key ON workflow.definitions (key) WHERE deleted_at 
 CREATE INDEX idx_definitions_scope_identity ON workflow.definitions (scope_identity_id);
 
 -- ---------------------------------------------------------------------------
--- trigger_bindings: non-secret trigger route registrations (ARCH-012/REQ-002).
--- One row per (definition, binding name). config is opaque non-secret JSONB.
--- No secret values are stored; credentials resolve via the AgentPool's
--- credentialBindings through the gateway (ARCH-008).
+-- trigger_bindings: typed non-secret trigger route registrations
+-- (ARCH-012/REQ-002). One row per (definition, binding name). Source-specific
+-- CRD validation maps graph_email.mailboxAddress or
+-- operator_artifact.sourceID to binding_key. No opaque config/secret values are
+-- stored; credentials resolve via the AgentPool's credentialBindings through
+-- the gateway (ARCH-008).
 -- ---------------------------------------------------------------------------
 CREATE TABLE workflow.trigger_bindings (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     definition_id uuid NOT NULL REFERENCES workflow.definitions(id) ON DELETE CASCADE,
     name          text NOT NULL,                 -- logical binding name, unique per definition
     source_type   text NOT NULL CHECK (source_type IN ('graph_email', 'operator_artifact')),
-    binding_key   text NOT NULL,                 -- non-secret routing identifier (mailbox/artifact source id)
-    config        jsonb NOT NULL DEFAULT '{}'::jsonb,  -- opaque non-secret trigger config
+    binding_key   text NOT NULL,                 -- typed non-secret routing identifier (mailbox/artifact source id)
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
     deleted_at    timestamptz,

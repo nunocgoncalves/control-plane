@@ -846,6 +846,42 @@ func TestGateway_WorkflowEffectClassCeilingNarrowsDiscovery(t *testing.T) {
 	assert.NotContains(t, names, "send_email", "workflow narrowed to read_only must not discover a non_idempotent_write tool (ARCH-016)")
 }
 
+// TestGateway_WorkflowActionCeilingNarrowsDiscoveryAndInvocation verifies the
+// workflow action set is enforced, not merely persisted. Under the approved v1
+// undecomposed descriptor contract echo's effective action is "echo".
+func TestGateway_WorkflowActionCeilingNarrowsDiscoveryAndInvocation(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		t.Error("workflow-action-denied tool must not be dispatched")
+		return nil, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	// Pool permits echo, but this workflow explicitly permits a different action.
+	require.NoError(t, env.store.UpsertWorkflowPoolBinding(context.Background(), wfKey, env.poolID, []gateway.Capability{
+		{Tool: "echo", MaxEffectClass: string(gateway.EffectReadOnly), Actions: []string{"other_action"}},
+	}))
+	runID, stepID := seedWorkflowStepAttempt(t, env, []string{"echo"})
+	gc := gatewayClient(env, env.wfStep)
+
+	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: stepID,
+	}))
+	require.NoError(t, err)
+	assert.Empty(t, dresp.Msg.Descriptors, "workflow action narrowing must filter discovery")
+
+	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: stepID,
+		ToolCallId: "call-action-denied", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
+		ArgumentsJson: []byte(`{}`), IdempotencyKey: "workflow-action-denied",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_FAILED, iresp.Msg.State)
+	assert.Equal(t, "permission_denied", iresp.Msg.Error.Code)
+	assert.Contains(t, iresp.Msg.Error.Message, "not permitted by workflow capability")
+}
+
 func TestGateway_UnapprovedRunnerRejected(t *testing.T) {
 	env := newTestEnv(t, nil)
 	// Build a runner cert for an unapproved SPIFFE id.

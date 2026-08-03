@@ -16,16 +16,20 @@ spec:
 
   # source: Microsoft Graph email (Walter). Public ingress validates/persists/
   # acknowledges/starts in the control plane; authenticated reads/actions use
-  # the gateway. Trigger bindings carry ONLY non-secret routing identifiers —
-  # customer secret values resolve through the AgentPool's credentialBindings.
+  # the gateway. Trigger bindings use a source-specific typed route with no
+  # opaque config/secret field; credentials resolve through AgentPool bindings.
   source:
     type: graph_email
     triggerBindings:
       - name: walter-inbox
-        bindingKey: inbox@walter.example
-        config:
-          folder: Inbox
-          filter: "quotation"
+        graphEmail:
+          mailboxAddress: inbox@walter.example
+
+  # Exact immutable overlay skill identity snapshot input (REQ-003/REQ-011).
+  skills:
+    - name: walter-quotation
+      version: "1.0.0"
+      digest: sha256:replace-with-bundle-digest
 
   # steps: the ordered deterministic plan. Kinds mirror runtime.run_steps.
   steps:
@@ -51,7 +55,8 @@ spec:
   requestedCapabilities:
     - tool: graph.read
       maxEffectClass: read_only
-      actions: [read, list]
+      # V1 undecomposed descriptors use the tool name as the effective action.
+      actions: [graph.read]
     - tool: graph.excel.write
       maxEffectClass: idempotent_write
 
@@ -93,9 +98,12 @@ spec:
     type: operator_artifact
     triggerBindings:
       - name: xbs-exports
-        bindingKey: xbs-exports
-        config:
-          artifactPath: exports/shipments
+        operatorArtifact:
+          sourceID: xbs-exports
+  skills:
+    - name: xbs-shipment-map
+      version: "1.0.0"
+      digest: sha256:replace-with-bundle-digest
   steps:
     - name: map
       kind: agent_task

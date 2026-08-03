@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -53,6 +55,24 @@ type IdentityMaterializer interface {
 	SoftDeleteIdentityByKey(ctx context.Context, key string) error
 }
 
+// SourceAdapterRegistry reports the source adapters actually installed in this
+// control-plane deployment. Recognizing a source enum is not enough to mark a
+// workflow Ready: its ingress adapter must be present (HOR-252 acceptance).
+type SourceAdapterRegistry interface {
+	IsInstalled(sourceType string) bool
+}
+
+// StaticSourceAdapterRegistry is the compile/deployment-time adapter set used by
+// the manager. Downstream ingress slices add their source only when the adapter
+// implementation is wired into the running control plane.
+type StaticSourceAdapterRegistry map[string]struct{}
+
+// IsInstalled reports whether sourceType has an installed implementation.
+func (s StaticSourceAdapterRegistry) IsInstalled(sourceType string) bool {
+	_, ok := s[sourceType]
+	return ok
+}
+
 // WorkflowReconciler materializes Workflow CRs into the Postgres workflow store
 // (Git -> DB bridge, HOR-252): it validates the definition before execution,
 // registers an immutable versioned definition + non-secret trigger bindings,
@@ -61,10 +81,11 @@ type IdentityMaterializer interface {
 // soft-deletes the definition, bindings, pool binding, and scope identity.
 type WorkflowReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	Store      *workflow.Store
-	Pools      PoolBindingStore     // *gateway.Store
-	Identities IdentityMaterializer // *identity.Store
+	Scheme         *runtime.Scheme
+	Store          *workflow.Store
+	Pools          PoolBindingStore     // *gateway.Store
+	Identities     IdentityMaterializer // *identity.Store
+	SourceAdapters SourceAdapterRegistry
 }
 
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=workflows,verbs=get;list;watch;create;update;patch;delete
@@ -146,7 +167,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Replace the non-secret trigger bindings.
-	if err := r.Store.ReplaceTriggerBindings(ctx, def.ID, wf.Spec.Source.Type, toTriggerBindingInputs(wf.Spec.Source.TriggerBindings)); err != nil {
+	if err := r.Store.ReplaceTriggerBindings(ctx, def.ID, wf.Spec.Source.Type, toTriggerBindingInputs(wf.Spec.Source.Type, wf.Spec.Source.TriggerBindings)); err != nil {
 		_ = r.patchStatus(ctx, &wf, false, v1alpha1.ValidationValid, fmt.Sprintf("replace trigger bindings: %v", err), false)
 		return ctrl.Result{}, err
 	}
@@ -249,17 +270,21 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 	if wf.Spec.PoolRef == "" {
 		return fmt.Errorf("spec.poolRef is required")
 	}
-	// Source type.
+	// Source type + installed adapter availability. A recognized enum is only a
+	// schema value; it must not become Ready until this deployment has the
+	// corresponding ingress implementation installed (HOR-252 acceptance).
 	switch wf.Spec.Source.Type {
 	case v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact:
 	default:
 		return fmt.Errorf("spec.source.type must be %q or %q", v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact)
 	}
-	// Trigger bindings: unique names, non-empty bindingKey, and a non-secret
-	// config (ARCH-008: raw credential values never enter Postgres). config is
-	// validated as a flat JSON object whose keys do not match a secret denylist;
-	// an opaque payload is not accepted because it cannot guarantee secrets are
-	// excluded.
+	if r.SourceAdapters == nil || !r.SourceAdapters.IsInstalled(wf.Spec.Source.Type) {
+		return fmt.Errorf("spec.source.type %q has no installed source adapter", wf.Spec.Source.Type)
+	}
+	// Trigger bindings use a source-specific typed payload and contain no opaque
+	// config field. This makes raw credential persistence structurally
+	// impossible; credentials remain in AgentPool bindings/K8s Secrets
+	// (ARCH-008).
 	seenBindings := make(map[string]bool)
 	for i, b := range wf.Spec.Source.TriggerBindings {
 		if b.Name == "" {
@@ -269,13 +294,27 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 			return fmt.Errorf("spec.source.triggerBindings[%d].name %q is duplicated", i, b.Name)
 		}
 		seenBindings[b.Name] = true
-		if b.BindingKey == "" {
-			return fmt.Errorf("spec.source.triggerBindings[%d].bindingKey is required", i)
+		if _, err := triggerBindingKey(wf.Spec.Source.Type, b); err != nil {
+			return fmt.Errorf("spec.source.triggerBindings[%d]: %w", i, err)
 		}
-		if b.Config != nil {
-			if err := validateNonSecretConfig(fmt.Sprintf("spec.source.triggerBindings[%d].config", i), b.Config.Raw); err != nil {
-				return err
-			}
+	}
+	// Skills: every declared skill has an exact immutable version/digest and a
+	// unique logical identity, so attempt snapshotting cannot silently follow a
+	// mutable overlay skill (REQ-003/REQ-011).
+	seenSkills := make(map[string]bool)
+	for i, skill := range wf.Spec.Skills {
+		if skill.Name == "" {
+			return fmt.Errorf("spec.skills[%d].name is required", i)
+		}
+		if seenSkills[skill.Name] {
+			return fmt.Errorf("spec.skills[%d].name %q is duplicated", i, skill.Name)
+		}
+		seenSkills[skill.Name] = true
+		if skill.Version == "" {
+			return fmt.Errorf("spec.skills[%d].version is required", i)
+		}
+		if skill.Digest == "" {
+			return fmt.Errorf("spec.skills[%d].digest is required", i)
 		}
 	}
 	// Steps: at least one, unique names, valid kinds; index approval_gate steps
@@ -328,10 +367,17 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 		default:
 			return fmt.Errorf("spec.requestedCapabilities[%d].maxEffectClass must be read_only, idempotent_write, or non_idempotent_write", i)
 		}
+		workflowActionAllowed := len(c.Actions) == 0
 		for _, a := range c.Actions {
 			if a == "" {
 				return fmt.Errorf("spec.requestedCapabilities[%d].actions contains an empty value", i)
 			}
+			if a == c.Tool || a == "*" {
+				workflowActionAllowed = true
+			}
+		}
+		if !workflowActionAllowed {
+			return fmt.Errorf("spec.requestedCapabilities[%d].actions must include %q or \"*\" for the v1 undecomposed tool action", i, c.Tool)
 		}
 	}
 	// Completion rule.
@@ -482,9 +528,10 @@ func (r *WorkflowReconciler) registerDefinition(ctx context.Context, wf *v1alpha
 // itself is excluded — it is the version identity component, not content.
 func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 	spec := workflow.CanonicalSpec{
-		Key:           wf.Spec.Key,
-		PoolRef:       wf.Spec.PoolRef,
-		ValueModelRef: wf.Spec.ValueModelRef,
+		Key:              wf.Spec.Key,
+		PoolRef:          wf.Spec.PoolRef,
+		ValueModelRef:    wf.Spec.ValueModelRef,
+		ScopeIdentityKey: workflowScopeIdentityKey(wf),
 		Source: workflow.CanonicalSource{
 			Type: wf.Spec.Source.Type,
 		},
@@ -500,16 +547,22 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 		},
 	}
 	for _, b := range wf.Spec.Source.TriggerBindings {
+		bindingKey, _ := triggerBindingKey(wf.Spec.Source.Type, b) // validated before canonicalization
 		spec.Source.TriggerBindings = append(spec.Source.TriggerBindings, workflow.CanonicalTrigger{
 			Name:       b.Name,
-			BindingKey: b.BindingKey,
-			Config:     rawJSON(b.Config),
+			BindingKey: bindingKey,
+		})
+	}
+	for _, skill := range wf.Spec.Skills {
+		spec.Skills = append(spec.Skills, workflow.CanonicalSkill{
+			Name: skill.Name, Version: skill.Version, Digest: skill.Digest,
 		})
 	}
 	for _, s := range wf.Spec.Steps {
 		spec.Steps = append(spec.Steps, workflow.CanonicalStep{
 			Name:   s.Name,
 			Kind:   s.Kind,
+			Tool:   s.Tool,
 			Config: rawJSON(s.Config),
 		})
 	}
@@ -529,37 +582,31 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 	return spec
 }
 
-// secretKeyDenylist are case-insensitive substrings that indicate a config
-// key names a credential/secret. Trigger-binding config carrying such a key is
-// rejected so raw credential values never enter Postgres (ARCH-008). This is
-// an enforceable boundary on the opaque config payload: config must be a flat
-// JSON object of non-secret routing fields, never a secret value.
-var secretKeyDenylist = []string{
-	"secret", "token", "password", "passwd", "credential", "credential",
-	"apikey", "api_key", "privatekey", "private_key", "accesskey", "access_key",
-	"clientsecret", "client_secret",
-}
-
-// validateNonSecretConfig enforces the ARCH-008 boundary that raw credential
-// values never enter Postgres on an opaque trigger-binding config payload. The
-// payload must be a JSON object (not a scalar/array/secret blob) whose keys do
-// not match the secret denylist. It does not interpret the fields (downstream
-// ingress tickets HOR-356/393 define their own non-secret schemas); it only
-// guarantees no secret-named value is persisted.
-func validateNonSecretConfig(field string, raw []byte) error {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return fmt.Errorf("%s must be a JSON object of non-secret routing fields: %w", field, err)
-	}
-	for k := range obj {
-		lk := strings.ToLower(k)
-		for _, bad := range secretKeyDenylist {
-			if strings.Contains(lk, bad) {
-				return fmt.Errorf("%s key %q looks like a secret; raw credential values must not be embedded (ARCH-008)", field, k)
-			}
+// triggerBindingKey validates a source-specific non-secret trigger payload and
+// returns the normalized routing identifier persisted in Postgres. There is no
+// opaque payload or credential-shaped field (ARCH-008).
+func triggerBindingKey(sourceType string, b v1alpha1.TriggerBinding) (string, error) {
+	switch sourceType {
+	case v1alpha1.SourceGraphEmail:
+		if b.GraphEmail == nil || b.OperatorArtifact != nil {
+			return "", fmt.Errorf("graphEmail must be set exclusively for source type %q", sourceType)
 		}
+		parsed, err := mail.ParseAddress(b.GraphEmail.MailboxAddress)
+		if err != nil || parsed.Address != b.GraphEmail.MailboxAddress {
+			return "", fmt.Errorf("graphEmail.mailboxAddress must be a plain valid email address")
+		}
+		return parsed.Address, nil
+	case v1alpha1.SourceOperatorArtifact:
+		if b.OperatorArtifact == nil || b.GraphEmail != nil {
+			return "", fmt.Errorf("operatorArtifact must be set exclusively for source type %q", sourceType)
+		}
+		if errs := utilvalidation.IsDNS1123Subdomain(b.OperatorArtifact.SourceID); len(errs) > 0 {
+			return "", fmt.Errorf("operatorArtifact.sourceID must be a DNS-1123 subdomain: %s", strings.Join(errs, "; "))
+		}
+		return b.OperatorArtifact.SourceID, nil
+	default:
+		return "", fmt.Errorf("unknown source type %q", sourceType)
 	}
-	return nil
 }
 
 // rawJSON returns the raw bytes of an apiextensionsv1.JSON, or nil.
@@ -570,28 +617,22 @@ func rawJSON(j *apiextensionsv1.JSON) json.RawMessage {
 	return json.RawMessage(j.Raw)
 }
 
-// toTriggerBindingInputs maps CRD trigger bindings to store inputs.
-func toTriggerBindingInputs(in []v1alpha1.TriggerBinding) []workflow.TriggerBindingInput {
+// toTriggerBindingInputs maps validated source-specific CRD bindings to the
+// exact non-secret store shape.
+func toTriggerBindingInputs(sourceType string, in []v1alpha1.TriggerBinding) []workflow.TriggerBindingInput {
 	out := make([]workflow.TriggerBindingInput, 0, len(in))
 	for _, b := range in {
-		var cfg []byte
-		if b.Config != nil {
-			cfg = b.Config.Raw
-		}
-		out = append(out, workflow.TriggerBindingInput{
-			Name:       b.Name,
-			BindingKey: b.BindingKey,
-			Config:     cfg,
-		})
+		bindingKey, _ := triggerBindingKey(sourceType, b) // validated before materialization
+		out = append(out, workflow.TriggerBindingInput{Name: b.Name, BindingKey: bindingKey})
 	}
 	return out
 }
 
 // permittedCapabilities maps the workflow's requested capabilities to the
 // gateway capability narrowing persisted in workflow_pool_bindings.permitted_tools
-// (tool + maxEffectClass + actions). The gateway enforces the maxEffectClass
-// ceiling at discovery/authorization so the workflow is not widened back to the
-// pool ceiling (ARCH-016; REQ-001/REQ-010).
+// (tool + maxEffectClass + actions). The gateway enforces both effect and action
+// ceilings at discovery/authorization so the workflow is not widened back to
+// the pool ceiling (ARCH-016; REQ-001/REQ-010).
 func permittedCapabilities(caps []v1alpha1.RequestedCapability) []gateway.Capability {
 	out := make([]gateway.Capability, 0, len(caps))
 	for _, c := range caps {

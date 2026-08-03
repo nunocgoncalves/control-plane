@@ -64,25 +64,24 @@ type Definition struct {
 	UpdatedAt        time.Time
 }
 
-// TriggerBindingRow is a row from workflow.trigger_bindings: a non-secret
-// trigger route registration.
+// TriggerBindingRow is a row from workflow.trigger_bindings: an exact typed,
+// non-secret trigger route registration. Source-specific CRD validation maps
+// the route to BindingKey; no opaque config/secret persistence path exists.
 type TriggerBindingRow struct {
 	ID           string
 	DefinitionID string
 	Name         string
 	SourceType   string
 	BindingKey   string
-	Config       []byte // JSONB non-secret config
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
 
-// TriggerBindingInput is a CR-sourced trigger binding (HOR-252). Config is the
-// non-secret JSONB stored in workflow.trigger_bindings.config.
+// TriggerBindingInput is the validated source-specific trigger route store
+// shape (HOR-252). It deliberately has no opaque config field (ARCH-008).
 type TriggerBindingInput struct {
 	Name       string
 	BindingKey string
-	Config     []byte
 }
 
 // ResolvedDefinition is the exact versioned definition resolved for an attempt
@@ -96,6 +95,15 @@ type TriggerBindingInput struct {
 type ResolvedDefinition struct {
 	Definition      Definition
 	TriggerBindings []TriggerBindingRow
+	// Spec is the exact canonical workflow/config snapshot input. It includes
+	// step tool semantics, scope identity key, versioned skill references,
+	// source bindings, behavior, presentation, and capability narrowing. HOR-254
+	// persists this with Definition's immutable key/version/digest at attempt
+	// creation (REQ-003/REQ-011).
+	Spec CanonicalSpec
+	// Skills is the exact immutable skill identity set, surfaced directly for
+	// attempt snapshotting in addition to its canonical presence in Spec.
+	Skills []CanonicalSkill
 	// PermittedTools are the gateway tool names the workflow is bound to (the
 	// validated requested capabilities). nil = no narrowing is not valid for the
 	// workflow path; the binding always carries an explicit set (empty = deny
@@ -244,8 +252,9 @@ func (s *Store) ListDefinitionsByKey(ctx context.Context, key string) ([]Definit
 
 // ReplaceTriggerBindings atomically replaces a definition's trigger bindings
 // with the given set (soft-delete stale + upsert-revive desired within one tx),
-// mirroring the gateway store's ReplacePoolGrants semantics. Each binding's
-// config is non-secret JSONB (ARCH-008). source_type is denormalized per row.
+// mirroring the gateway store's ReplacePoolGrants semantics. The input has no
+// opaque config field, so trigger registration cannot persist raw credentials
+// (ARCH-008). source_type is denormalized per row.
 func (s *Store) ReplaceTriggerBindings(ctx context.Context, definitionID, sourceType string, bindings []TriggerBindingInput) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -270,19 +279,14 @@ func (s *Store) ReplaceTriggerBindings(ctx context.Context, definitionID, source
 			return fmt.Errorf("replace trigger bindings: binding name %q is duplicated", b.Name)
 		}
 		seen[b.Name] = true
-		cfg := b.Config
-		if cfg == nil {
-			cfg = []byte("{}")
-		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO workflow.trigger_bindings (definition_id, name, source_type, binding_key, config)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO workflow.trigger_bindings (definition_id, name, source_type, binding_key)
+			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (definition_id, name) DO UPDATE
 				SET source_type = EXCLUDED.source_type,
 				    binding_key = EXCLUDED.binding_key,
-				    config = EXCLUDED.config,
 				    deleted_at = NULL, updated_at = now()`,
-			definitionID, b.Name, sourceType, b.BindingKey, cfg); err != nil {
+			definitionID, b.Name, sourceType, b.BindingKey); err != nil {
 			return fmt.Errorf("replace trigger bindings: upsert %s: %w", b.Name, err)
 		}
 	}
@@ -295,7 +299,7 @@ func (s *Store) ReplaceTriggerBindings(ctx context.Context, definitionID, source
 // ListTriggerBindings returns a definition's active trigger bindings.
 func (s *Store) ListTriggerBindings(ctx context.Context, definitionID string) ([]TriggerBindingRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, definition_id, name, source_type, binding_key, config, created_at, updated_at
+		SELECT id, definition_id, name, source_type, binding_key, created_at, updated_at
 		FROM workflow.trigger_bindings
 		WHERE definition_id = $1::uuid AND deleted_at IS NULL
 		ORDER BY name`, definitionID)
@@ -306,7 +310,7 @@ func (s *Store) ListTriggerBindings(ctx context.Context, definitionID string) ([
 	var out []TriggerBindingRow
 	for rows.Next() {
 		var b TriggerBindingRow
-		if err := rows.Scan(&b.ID, &b.DefinitionID, &b.Name, &b.SourceType, &b.BindingKey, &b.Config, &b.CreatedAt, &b.UpdatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.DefinitionID, &b.Name, &b.SourceType, &b.BindingKey, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -379,17 +383,53 @@ func (s *Store) ResolveForAttempt(ctx context.Context, key, version string) (Res
 	if permitted == nil {
 		permitted = []string{}
 	}
-	// Parse the complete workflow-requested capability narrowing (tool +
-	// maxEffectClass + actions) from the immutable definition's spec_json so
-	// HOR-254 can enforce it at the gateway boundary (ARCH-016) without widening
-	// back to the pool ceiling (REQ-001/REQ-010). A malformed spec_json is a
-	// data-layer invariant violation, not a runtime authorization decision.
+	// Decode the complete immutable workflow/config/skill snapshot contract. A
+	// malformed spec_json is a data-layer invariant violation and fails closed;
+	// attempt creation must never continue with missing execution semantics.
 	var spec CanonicalSpec
-	var caps []CanonicalCapability
-	if err := json.Unmarshal(d.SpecJSON, &spec); err == nil {
-		caps = spec.RequestedCapabilities
+	if err := json.Unmarshal(d.SpecJSON, &spec); err != nil {
+		return ResolvedDefinition{}, fmt.Errorf("resolve canonical workflow spec: %w", err)
 	}
-	return ResolvedDefinition{Definition: d, TriggerBindings: bindings, PermittedTools: permitted, RequestedCapabilities: caps}, nil
+	if err := validateCanonicalSpecForAttempt(d, spec); err != nil {
+		return ResolvedDefinition{}, fmt.Errorf("resolve canonical workflow spec: %w", err)
+	}
+	return ResolvedDefinition{
+		Definition: d, TriggerBindings: bindings, Spec: spec, Skills: spec.Skills,
+		PermittedTools: permitted, RequestedCapabilities: spec.RequestedCapabilities,
+	}, nil
+}
+
+// validateCanonicalSpecForAttempt checks the execution identity fields that
+// attempt creation must never infer or silently omit. Postgres guarantees valid
+// JSON syntax; this closes the semantic fail-open path for incomplete legacy or
+// corrupted spec_json.
+func validateCanonicalSpecForAttempt(d Definition, spec CanonicalSpec) error {
+	if spec.Key == "" || spec.Key != d.Key {
+		return fmt.Errorf("key must match definition key %q", d.Key)
+	}
+	if spec.ScopeIdentityKey == "" {
+		return errors.New("scopeIdentityKey is required")
+	}
+	if spec.Source.Type == "" {
+		return errors.New("source.type is required")
+	}
+	if len(spec.Steps) == 0 {
+		return errors.New("steps must not be empty")
+	}
+	for i, step := range spec.Steps {
+		if step.Name == "" || step.Kind == "" {
+			return fmt.Errorf("steps[%d] name and kind are required", i)
+		}
+		if step.Kind == "tool_call" && step.Tool == "" {
+			return fmt.Errorf("steps[%d].tool is required for tool_call", i)
+		}
+	}
+	for i, skill := range spec.Skills {
+		if skill.Name == "" || skill.Version == "" || skill.Digest == "" {
+			return fmt.Errorf("skills[%d] requires name, version, and digest", i)
+		}
+	}
+	return nil
 }
 
 // readPermittedTools reads the permitted tool names bound to a definition from
@@ -438,7 +478,9 @@ func scanDefinition(row pgx.Row) (Definition, error) {
 // reconciler builds this from the CR spec.
 type CanonicalSpec struct {
 	Key                   string                `json:"key"`
+	ScopeIdentityKey      string                `json:"scopeIdentityKey"`
 	Source                CanonicalSource       `json:"source"`
+	Skills                []CanonicalSkill      `json:"skills,omitempty"`
 	Steps                 []CanonicalStep       `json:"steps"`
 	RequestedCapabilities []CanonicalCapability `json:"requestedCapabilities,omitempty"`
 	CompletionRule        CanonicalCompletion   `json:"completionRule"`
@@ -456,15 +498,23 @@ type CanonicalSource struct {
 
 // CanonicalTrigger is a non-secret trigger binding.
 type CanonicalTrigger struct {
-	Name       string          `json:"name"`
-	BindingKey string          `json:"bindingKey"`
-	Config     json.RawMessage `json:"config,omitempty"`
+	Name       string `json:"name"`
+	BindingKey string `json:"bindingKey"`
 }
 
-// CanonicalStep is one workflow step.
+// CanonicalSkill is one exact immutable overlay skill identity.
+type CanonicalSkill struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Digest  string `json:"digest"`
+}
+
+// CanonicalStep is one workflow step. Tool is included in the immutable digest
+// because it defines tool_call execution semantics.
 type CanonicalStep struct {
 	Name   string          `json:"name"`
 	Kind   string          `json:"kind"`
+	Tool   string          `json:"tool,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 }
 

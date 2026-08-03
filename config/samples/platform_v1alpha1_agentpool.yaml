@@ -71,10 +71,11 @@ spec:
   gatewayGrants:
     - tool: graph.read
       maxEffectClass: read_only
-      allowedActions: [read, list]
+      # V1 undecomposed descriptors use the tool name as effective action.
+      allowedActions: [graph.read]
     - tool: graph.mail.send
       maxEffectClass: idempotent_write
-      allowedActions: [send]
+      allowedActions: [graph.mail.send]
 
   # ARCH-008/018: logical credential slots -> scheme-specific K8s Secret refs.
   # VALUES never enter the CRD; the gateway resolves them at invocation.
