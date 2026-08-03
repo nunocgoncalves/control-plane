@@ -317,6 +317,74 @@ func (s *Store) AppendTurnEvent(ctx context.Context, turnID string, workerSeq ui
 	return true, nil
 }
 
+// AppendAfterTerminalEvent durably records a late worker observation for a
+// turn whose assignment is no longer active (fenced/terminal) — after-terminal
+// audit (HOR-381: durable observations are never dropped). It is one atomic
+// transaction that dedups by (turn, sequence) against the assignment's
+// committed watermark, appends the runtime audit event, and advances the
+// watermark before returning, so the caller may ACK cumulatively only after
+// Postgres commit. An ACK lost after this commit is safe: the next replay sees
+// the advanced watermark and dedups (sequence <= highest). Returns applied=false
+// for a replayed (already-applied) sequence. Returns ErrNotFound if the turn
+// has no assignment row at all (gone/never assigned). The HOR-381 source-order
+// contract (strictly monotonic, one-based, gapless) is enforced: a gap is a
+// sender bug and is rejected without advancing the watermark (fail-closed).
+func (s *Store) AppendAfterTerminalEvent(ctx context.Context, turnID string, workerSeq uint64, kind string, payload json.RawMessage) (applied bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var runID string
+	var highest uint64
+	// Lock the assignment row in ANY state (active rows reach here only via a
+	// concurrent terminalization race; fenced/terminal rows are the common case).
+	// Unlike AppendTurnEvent, no state='active' filter: the turn is terminal.
+	if err := tx.QueryRow(ctx, `
+		SELECT run_id::text, highest_applied_sequence
+		FROM runtime.turn_assignments WHERE turn_id = $1::uuid
+		FOR UPDATE`, turnID).Scan(&runID, &highest); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrNotFound // turn gone; nothing to audit against.
+		}
+		return false, fmt.Errorf("lock assignment: %w", err)
+	}
+	if workerSeq <= highest {
+		// Dedup: a replayed/resent event already applied. The caller still ACKs
+		// through the watermark so the worker clears its retained outbox.
+		return false, nil
+	}
+	// HOR-381 source-order contract: strictly monotonic, one-based, gapless. A
+	// gap is a sender bug; reject without advancing the watermark so the
+	// intermediate sequences cannot be silently ACKed away.
+	if workerSeq != highest+1 {
+		return false, ErrOutOfOrderSequence
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO runtime.events (run_id, turn_id, seq, kind, payload)
+		VALUES ($1::uuid, $2::uuid,
+			(SELECT COALESCE(MAX(seq), 0) + 1 FROM runtime.events WHERE run_id = $1::uuid),
+			$3, $4)`,
+		runID, turnID, kind, jsonB(payload)); err != nil {
+		return false, fmt.Errorf("insert after-terminal event: %w", err)
+	}
+
+	// Advance the cumulative ACK watermark so an ACK lost after this commit
+	// dedups the event on the next replay (HOR-381 durable ACK/dedup).
+	if _, err := tx.Exec(ctx, `
+		UPDATE runtime.turn_assignments SET highest_applied_sequence = $2
+		WHERE turn_id = $1::uuid`, turnID, workerSeq); err != nil {
+		return false, fmt.Errorf("advance watermark: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+	return true, nil
+}
+
 // AckWatermark returns the current highest-applied worker sequence for a turn
 // (the cumulative ACK value to send on reconnect/heartbeat). Returns
 // ErrAssignmentNotActive if the turn has no active assignment.
@@ -358,23 +426,27 @@ var ErrUIDExhausted = errors.New("dispatch: session UID range exhausted")
 // AllocateSessionUID allocates a stable, unique UID (gid = uid) for a session,
 // idempotent per session. A UID is reusable only after it has been released
 // (SessionEnd reaped) AND a bounded grace exceeding max reap latency has
-// elapsed; in-use and within-grace UIDs are never recycled. Fail-closed on
-// exhaustion. base..base+range-1 is the UID space.
+// elapsed; in-use and within-grace UIDs are never recycled — including for the
+// owning session, because the prior sandbox may still be reaping (HOR-245
+// reuse-safety floor: the (sandbox_id, uid, gid) triple is non-recyclable until
+// reaping is confirmed). Fail-closed on exhaustion. base..base+range-1 is the
+// UID space.
 func (s *Store) AllocateSessionUID(ctx context.Context, sessionID string, base, n uint32, grace time.Duration) (uint32, error) {
 	if n == 0 {
 		return 0, ErrUIDExhausted
 	}
-	// Idempotent fast path: this session already holds a UID. Reclaim it
-	// regardless of state (an in_use UID is reused; a freed UID being
-	// re-allocated for the same session is the same (uid, session) triple and
-	// is ownership-safe). This also guarantees the candidate-claim path below
-	// never hits a session_id unique conflict for a session that already has a
-	// row, so its only conflict target is the recyclable uid PK.
+	graceBefore := time.Now().Add(-grace)
+	// Idempotent fast path: this session already holds an IN-USE UID (a retry
+	// or concurrent allocation for the same session). Reclaim it. A FREED row
+	// is NOT reactivated here: even for the owning session, a freed UID is
+	// non-recyclable until freed_at + grace, because the prior sandbox may
+	// still be reaping and re-provisioning the same (uid, session) triple would
+	// let a new child collide with the live sandbox being reaped (HOR-245).
 	var uid uint32
 	err := s.pool.QueryRow(ctx, `
 		UPDATE runtime.session_uid_allocations
 		   SET state = 'in_use', freed_at = NULL
-		 WHERE session_id = $1
+		 WHERE session_id = $1 AND state = 'in_use'
 		RETURNING uid`, sessionID).Scan(&uid)
 	if err == nil {
 		return uid, nil
@@ -382,7 +454,35 @@ func (s *Store) AllocateSessionUID(ctx context.Context, sessionID string, base, 
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("read session uid: %w", err)
 	}
-	// No row for this session: claim the lowest free UID. Retry on a uid PK
+	// The session has a FREED row. Past grace the reap is complete and the
+	// same (uid, session) triple may be reactivated (ownership-safe); within
+	// grace the UID is non-recyclable and the allocation must fail closed so a
+	// new sandbox is not provisioned on a UID still being reaped.
+	err = s.pool.QueryRow(ctx, `
+		UPDATE runtime.session_uid_allocations
+		   SET state = 'in_use', freed_at = NULL
+		 WHERE session_id = $1 AND state = 'freed' AND freed_at < $2
+		RETURNING uid`, sessionID, graceBefore).Scan(&uid)
+	if err == nil {
+		return uid, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("reclaim freed session uid: %w", err)
+	}
+	// No in-use row and no freed-past-grace row. If a freed-within-grace row
+	// exists, the prior sandbox is still reaping: fail closed (non-recyclable).
+	// Otherwise this is a genuinely new session with no row at all.
+	var blocked bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM runtime.session_uid_allocations
+		               WHERE session_id = $1 AND state = 'freed' AND freed_at >= $2)`,
+		sessionID, graceBefore).Scan(&blocked); err != nil {
+		return 0, fmt.Errorf("check freed session uid: %w", err)
+	}
+	if blocked {
+		return 0, ErrUIDExhausted // prior sandbox still reaping; non-recyclable.
+	}
+	// New session (no row): claim the lowest free UID. Retry on a uid PK
 	// conflict (two sessions racing the same recyclable candidate) or a
 	// session_id conflict (concurrent allocation for the same session); the
 	// retry re-selects now that the winner is recorded.

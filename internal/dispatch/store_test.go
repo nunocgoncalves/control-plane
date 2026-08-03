@@ -222,3 +222,64 @@ func TestStore_AppendTurnEventDedupAndWatermark(t *testing.T) {
 	_, err = store.AppendTurnEvent(ctx, turnID, 3, runtime.EvAssistantMessage, json.RawMessage(`{}`))
 	assert.ErrorIs(t, err, dispatch.ErrAssignmentNotActive)
 }
+
+// TestStore_AppendAfterTerminalEventDedup: after a turn is fenced/terminal, late
+// worker observations are durably appended as after-terminal audit with
+// (turn, sequence) dedup + watermark advance in one transaction, so an ACK lost
+// after the commit dedups the event on the next replay (HOR-381 cumulative ACK
+// only after Postgres commit).
+func TestStore_AppendAfterTerminalEventDedup(t *testing.T) {
+	store, rt, pool := newTestStore(t)
+	ctx := context.Background()
+	var poolID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO toolgateway.pools (key, name, spiffe_id_prefix)
+		VALUES ('ns/pool-1', 'pool-1', 'spiffe://iterabase.local/pools/pool-1/') RETURNING id::text`).Scan(&poolID))
+	identID := insertIdentity(t, pool, "ident-at")
+	runID, _, turnID := seedRunTurn(t, rt, pool, "sess-at")
+	_, err := store.CreateAssignment(ctx, dispatch.AssignmentInput{
+		TurnID: turnID, RunID: runID, PoolID: poolID, WorkerID: "worker-1",
+		FencingGeneration: 1, AttemptID: runID, ScopeIdentityID: identID, AgentPoolKey: "ns/pool-1",
+	})
+	require.NoError(t, err)
+	// Apply seq 1 while active, then fence (turn becomes non-active).
+	_, err = store.AppendTurnEvent(ctx, turnID, 1, runtime.EvAssistantMessage, json.RawMessage(`{"text":"a"}`))
+	require.NoError(t, err)
+	_, err = store.FenceWorkerGeneration(ctx, poolID, "worker-1")
+	require.NoError(t, err)
+
+	// Late seq 2 (after-terminal audit): applied + watermark advances to 2.
+	applied, err := store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`))
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	// Replay seq 2 (ACK lost after commit): deduped, not re-appended.
+	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`))
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	// Late seq 3 applied; watermark is now 3.
+	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 3, runtime.EvAssistantMessage, json.RawMessage(`{"text":"c"}`))
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	// Exactly two after-terminal audit events were appended (seq 2, 3); no
+	// duplicate for the replayed seq 2.
+	evs, err := rt.ListEvents(ctx, runID)
+	require.NoError(t, err)
+	count := 0
+	for _, e := range evs {
+		if e.Kind == runtime.EvAssistantMessage {
+			count++
+		}
+	}
+	assert.Equal(t, 3, count, "one active + two after-terminal assistant_message events, no duplicate")
+
+	// Gap (seq jumps to 5 while highest is 3): rejected without advancing.
+	_, err = store.AppendAfterTerminalEvent(ctx, turnID, 5, runtime.EvAssistantMessage, json.RawMessage(`{}`))
+	assert.ErrorIs(t, err, dispatch.ErrOutOfOrderSequence)
+
+	// A turn with no assignment row at all -> ErrNotFound (nothing to audit).
+	_, err = store.AppendAfterTerminalEvent(ctx, "00000000-0000-0000-0000-000000000000", 1, runtime.EvAssistantMessage, json.RawMessage(`{}`))
+	assert.ErrorIs(t, err, dispatch.ErrNotFound)
+}

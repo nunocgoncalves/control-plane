@@ -65,13 +65,38 @@ func newDispatchEnv(t *testing.T) *dispatchEnv {
 
 	ca, err := testca.New()
 	require.NoError(t, err)
-	serverCert, err := ca.Leaf(testca.LeafOpts{SPIFFEID: "spiffe://" + dispatchTD + "/control-plane/dispatch", DNSNames: []string{"localhost", "127.0.0.1"}, IsServer: true})
-	require.NoError(t, err)
 	supervisor, err := ca.Leaf(testca.LeafOpts{SPIFFEID: dispatchSupvSPI})
 	require.NoError(t, err)
 
+	srv := startDispatchServer(t, store, dispatchTD, ca, supervisor)
+	return &dispatchEnv{
+		store: store, rt: rt, pgpool: pgpool, svc: srv.svc,
+		srvURL: srv.srvURL, supervisor: supervisor, caPool: ca.Pool, poolID: poolID, stop: srv.stop,
+	}
+}
+
+// dispatchServer is a running dispatch HTTP/2 server + its service. startDispatchServer
+// is extracted from newDispatchEnv so a test can simulate a control-plane restart:
+// build a second server with a fresh in-memory workerPool backed by the SAME
+// durable store (same Postgres / pool row / CA), so a reconnecting worker hits
+// the `old == nil` path with a durable active assignment still present.
+type dispatchServer struct {
+	svc    *dispatch.Service
+	srvURL string
+	stop   func()
+}
+
+// startDispatchServer builds a dispatch service + mTLS HTTP/2 server backed by
+// the given store, with the reconciler + lease monitor running, and the given
+// supervisor cert material (issued by ca). The caller seeds the pool row and
+// CA before calling.
+func startDispatchServer(t *testing.T, store *dispatch.Store, td string, ca *testca.CA, supervisor tls.Certificate) *dispatchServer {
+	t.Helper()
+	serverCert, err := ca.Leaf(testca.LeafOpts{SPIFFEID: "spiffe://" + td + "/control-plane/dispatch", DNSNames: []string{"localhost", "127.0.0.1"}, IsServer: true})
+	require.NoError(t, err)
+
 	svc := dispatch.NewService(store, dispatch.Config{
-		TrustDomain:       dispatchTD,
+		TrustDomain:       td,
 		ReconcileInterval: 30 * time.Millisecond,
 		DefaultModel:      &v1.ModelConfig{Id: "gpt-4o", Api: "openai-completions"},
 	}, nil)
@@ -80,7 +105,7 @@ func newDispatchEnv(t *testing.T) *dispatchEnv {
 	svc.StartLeaseMonitor(recCtx)
 
 	mux := http.NewServeMux()
-	idmw := dispatch.IdentityMiddleware(dispatchTD)
+	idmw := dispatch.IdentityMiddleware(td)
 	path, handler := harnessv1connect.NewHarnessHandler(svc)
 	mux.Handle(path, idmw(handler))
 
@@ -99,11 +124,7 @@ func newDispatchEnv(t *testing.T) *dispatchEnv {
 	stop := func() { cancelRec(); _ = httpSrv.Shutdown(context.Background()) }
 	t.Cleanup(stop)
 
-	return &dispatchEnv{
-		store: store, rt: rt, pgpool: pgpool, svc: svc,
-		srvURL:     fmt.Sprintf("https://localhost:%d", port),
-		supervisor: supervisor, caPool: ca.Pool, poolID: poolID, stop: stop,
-	}
+	return &dispatchServer{svc: svc, srvURL: fmt.Sprintf("https://localhost:%d", port), stop: stop}
 }
 
 func (e *dispatchEnv) mTLSClient(cert tls.Certificate) *http.Client {
@@ -294,6 +315,54 @@ func TestDispatch_FencingOnReconnect(t *testing.T) {
 	run, err := env.rt.GetRun(ctx, runID)
 	require.NoError(t, err)
 	assert.Equal(t, runtime.RunAborted, run.State)
+}
+
+// TestDispatch_FencesDurablePriorGenOnRestart: a control-plane restart empties
+// the in-memory workerPool while runtime.turn_assignments still holds the
+// worker's active assignment. A newly-accepted connection (no in-memory prior
+// conn, so `old == nil`) MUST still resolve and fence the durable prior
+// assignment before Welcome is sent, and terminalize the prior turn as worker
+// loss (HOR-249 reconnect fencing; HOR-381: a newly accepted connection fences
+// any old active assignment). The new generation is advertised only after the
+// durable fence + loss terminalization succeeds.
+//
+// The post-restart durable state — an active assignment row with no in-memory
+// conn bound to it — is seeded directly; the env's workerPool is empty, so the
+// reconnecting worker hits the `old == nil` path. (The full in-memory
+// old!=nil reconnect fence is covered by TestDispatch_FencingOnReconnect.)
+func TestDispatch_FencesDurablePriorGenOnRestart(t *testing.T) {
+	env := newDispatchEnv(t)
+	ctx := context.Background()
+
+	// Seed a running run + running step + running turn and bind it to worker-1
+	// via a durable active assignment (generation 5) with NO connected worker —
+	// exactly the durable state left behind by a CP restart.
+	runID, _, turnID := seedRunTurn(t, env.rt, env.pgpool, dispatchSID())
+	identID := insertIdentity(t, env.pgpool, "ident-restart")
+	_, err := env.store.CreateAssignment(ctx, dispatch.AssignmentInput{
+		TurnID: turnID, RunID: runID, PoolID: env.poolID, WorkerID: "worker-1",
+		FencingGeneration: 5, AttemptID: runID, ScopeIdentityID: identID, AgentPoolKey: "ns/pool-1",
+		ModelPermission: json.RawMessage(`{"id":"gpt-4o"}`),
+	})
+	require.NoError(t, err)
+	prior, err := env.store.ResolveActiveAssignment(ctx, turnID)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), prior.FencingGeneration)
+
+	// A fresh service (empty in-memory workerPool) accepts the worker. The
+	// reconnect hits `old == nil` and must fence the durable prior assignment.
+	w := env.connectWorker(t)
+	defer w.close()
+
+	// The durable prior assignment was fenced + terminalized as worker loss
+	// before Welcome was sent; the run is aborted.
+	require.Eventually(t, func() bool {
+		_, err := env.store.ResolveActiveAssignment(ctx, turnID)
+		return errors.Is(err, dispatch.ErrAssignmentNotActive)
+	}, 2*time.Second, 20*time.Millisecond, "durable prior assignment not fenced on restart")
+	run, err := env.rt.GetRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, runtime.RunAborted, run.State, "prior turn terminalized as worker loss")
 }
 
 // TestDispatch_Cancel: CancelTurn propagates AbortTurn and terminalizes the
@@ -487,9 +556,17 @@ func TestDispatch_SessionUIDRecyclesAfterGrace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uidA, uidE, "freed UID past grace must be recycled to a new session")
 
-	// Idempotent: the same session re-claims its own UID regardless of state.
+	// A freed UID is non-recyclable even for the owning session until the grace
+	// elapses (HOR-245: the (sandbox_id, uid, gid) triple is non-recyclable until
+	// reaping is confirmed; re-provisioning the same UID while the prior sandbox
+	// may still be reaping would let a new child collide with the live sandbox).
 	require.NoError(t, env.store.ReleaseSessionUID(ctx, "sess-E"))
+	_, err = env.store.AllocateSessionUID(ctx, "sess-E", base, n, tinyGrace)
+	require.ErrorIs(t, err, dispatch.ErrUIDExhausted, "freed UID within grace must not be reactivated, even for the same session")
+
+	// Past grace, the same session reclaims its freed UID (reap complete).
+	time.Sleep(2 * tinyGrace)
 	uidE2, err := env.store.AllocateSessionUID(ctx, "sess-E", base, n, tinyGrace)
 	require.NoError(t, err)
-	assert.Equal(t, uidE, uidE2, "re-allocating the same session reclaims its UID")
+	assert.Equal(t, uidE, uidE2, "freed UID past grace is reclaimed by the same session")
 }

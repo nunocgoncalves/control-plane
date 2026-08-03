@@ -204,7 +204,15 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 	// (old.gen) and is a no-op once this fence succeeds. A detached bounded
 	// context is used so prior-gen loss cleanup completes even if this new
 	// connection's request ctx is canceled.
-	s.fenceOldGeneration(ctx, old, pool.ID, id.WorkerID)
+	if err := s.fenceOldGeneration(ctx, old, pool.ID, id.WorkerID); err != nil {
+		// A durable fence / loss-terminalization failure (transient DB error)
+		// must NOT advertise the new generation: HOR-249 requires reconnect
+		// fencing to prevent old-generation mutation, and the approved HOR-381
+		// contract says a newly accepted connection fences any old active
+		// assignment before becoming dispatchable. Fail the connection so the
+		// worker retries rather than proceeding with a still-active prior turn.
+		return fmt.Errorf("fence prior generation: %w", err)
+	}
 
 	if err := w.send(s.welcome(gen)); err != nil {
 		return fmt.Errorf("welcome send: %w", err)
@@ -266,34 +274,66 @@ func (s *Service) welcome(gen int64) *v1.ControlMessage {
 }
 
 // fenceOldGeneration closes any prior live connection for this (pool, worker)
-// and fences its active assignment as worker loss using a generation-qualified
-// CAS. The fence+terminalize runs BEFORE markClosed and synchronously, so it
-// wins the CAS ahead of the old handler's deferred handleWorkerLoss (which is
-// then a no-op: the assignment is already fenced). This avoids a race where
-// the old handler's async loss cleanup terminalizes after this handler has
-// already advertised the new generation's readiness.
+// and fences its active assignment as worker loss. The fence+terminalize runs
+// BEFORE markClosed and synchronously, so it wins the CAS ahead of the old
+// handler's deferred handleWorkerLoss (which is then a no-op: the assignment
+// is already fenced). This avoids a race where the old handler's async loss
+// cleanup terminalizes after this handler has already advertised the new
+// generation's readiness.
 //
-// A detached, bounded context is used: the prior generation's loss cleanup
-// must complete even if the new connection's request ctx is canceled, mirroring
-// the stream-loss cleanup path. Leaving the prior turn running behind a fenced
-// assignment would let the reconciler never advance it (HOR-249).
-func (s *Service) fenceOldGeneration(ctx context.Context, old *workerConn, poolID, workerID string) {
+// Two cases:
+//
+//   - old != nil (in-memory prior conn): a generation-qualified CAS fences only
+//     old.gen's assignment, never a replacement's.
+//   - old == nil (control-plane restart): workerPool was emptied by the
+//     restart while runtime.turn_assignments can still hold this worker's
+//     active assignment. Treat the durable prior assignment as a prior
+//     generation (the new gen has not been advertised yet) and fence it by
+//     (pool, worker) without a generation CAS. Otherwise the durable prior
+//     turn stays active + gateway-authorizable and the restarted in-memory
+//     generation counter can collide with it (HOR-249 reconnect fencing;
+//     HOR-381: a newly accepted connection fences any old active assignment).
+//
+// A detached, bounded context is used so prior-generation loss cleanup
+// completes even if the new connection's request ctx is canceled, mirroring
+// the stream-loss cleanup path. ErrNotFound (no active assignment) is a clean
+// connect; any other store error is returned so the caller does NOT advertise
+// the new generation until durable fence + loss terminalization succeeds.
+func (s *Service) fenceOldGeneration(ctx context.Context, old *workerConn, poolID, workerID string) error {
 	_ = ctx
-	if old == nil {
-		return // clean connect; no prior generation to fence.
-	}
 	lossCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if a, err := s.store.FenceWorkerGenerationIf(lossCtx, poolID, workerID, old.gen); err == nil {
-		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", old.gen)
-		s.terminalizeTurnLoss(lossCtx, a)
+
+	if old != nil {
+		a, err := s.store.FenceWorkerGenerationIf(lossCtx, poolID, workerID, old.gen)
+		if err == nil {
+			s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", old.gen)
+			s.terminalizeTurnLoss(lossCtx, a)
+		} else if !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("fence prior gen (cas): %w", err)
+		}
+		// Mark the old conn closed so its receive loop exits and its handler
+		// tears down promptly (it does not wait for the old TCP stream). Its
+		// deferred handleWorkerLoss is a no-op: the assignment was already
+		// fenced above, and it uses a generation-qualified CAS (old.gen) that
+		// cannot fence a replacement generation's assignment.
+		old.markClosed()
+		return nil
 	}
-	// Mark the old conn closed so its receive loop exits and its handler tears
-	// down promptly (it does not wait for the old TCP stream). Its deferred
-	// handleWorkerLoss is a no-op: the assignment was already fenced above, and
-	// it uses a generation-qualified CAS (old.gen) that cannot fence a
-	// replacement generation's assignment.
-	old.markClosed()
+
+	// CP restart: no in-memory prior conn. Fence any durable active assignment
+	// for (pool, worker) regardless of its recorded generation — it is by
+	// definition a prior generation, the new one not yet advertised.
+	a, err := s.store.FenceWorkerGeneration(lossCtx, poolID, workerID)
+	if err == nil {
+		s.log.Info("fenced durable prior generation after cp restart", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", a.FencingGeneration)
+		s.terminalizeTurnLoss(lossCtx, a)
+		return nil
+	}
+	if errors.Is(err, ErrNotFound) {
+		return nil // clean connect; no durable prior assignment.
+	}
+	return fmt.Errorf("fence durable prior gen: %w", err)
 }
 
 // ackReconnectWatermark sends a cumulative EventAck for the worker's prior
@@ -345,6 +385,15 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 	// recorded generation is authoritative.
 	a, err := s.store.ResolveActiveAssignment(ctx, turnID)
 	if err != nil {
+		// Distinguish a genuinely inactive assignment from a transient store
+		// failure. Only ErrAssignmentNotActive (turn already terminalized or
+		// never assigned) falls through to after-terminal audit; a store error
+		// must NOT be ACKed away — HOR-381 requires cumulative EventAck only
+		// after Postgres commit, and ACKing an un-persisted event would let an
+		// ACK lost after a failed append duplicate the event on the next replay.
+		if !errors.Is(err, ErrAssignmentNotActive) {
+			return fmt.Errorf("resolve active assignment: %w", err)
+		}
 		// No active assignment: the turn was already terminalized (CP
 		// first-terminal-writer) or never assigned. HOR-381 makes every durable
 		// observation (ModelCallStarted, ToolCallStarted, Compaction*, WorkerOutcome,
@@ -354,7 +403,9 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 		// has already terminalized; ACK through this event's sequence so it
 		// clears its outbox and may advertise Ready (HOR-381 cumulative ACK).
 		// The replayed events are after-terminal audit, not redelivered work.
-		_ = s.appendAfterTerminal(ctx, turnID, te)
+		if err := s.appendAfterTerminal(ctx, turnID, te); err != nil {
+			return fmt.Errorf("after-terminal audit: %w", err)
+		}
 		return s.ack(ctx, w, turnID, seq)
 	}
 	if a.WorkerID != w.workerID || a.FencingGeneration != w.gen {
@@ -378,8 +429,11 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 			// Terminalized concurrently between Resolve and Append: the event was
 			// not committed. Persist it as after-terminal audit (HOR-381 durable
 			// observations are never dropped) and ACK so the worker clears its
-			// outbox.
-			_ = s.appendAfterTerminal(ctx, turnID, te)
+			// outbox. The after-terminal append is itself a durable, dedup-by-
+			// (turn, sequence) commit; ACK only after it succeeds.
+			if err := s.appendAfterTerminal(ctx, turnID, te); err != nil {
+				return fmt.Errorf("after-terminal audit: %w", err)
+			}
 			return s.ack(ctx, w, turnID, seq)
 		}
 		return err
@@ -410,21 +464,27 @@ func (s *Service) ack(ctx context.Context, w *workerConn, turnID string, through
 }
 
 // appendAfterTerminal records a late worker observation as after-terminal audit
-// (appended to the run's event log without mutating turn/assignment state). The
-// turn must already exist; if it does not, the event is dropped (audit only).
+// in one durable transaction: it dedups by (turn, sequence) against the
+// assignment's committed watermark, appends the runtime audit event, and
+// advances the watermark — all before the caller ACKs (HOR-381: cumulative
+// EventAck only after Postgres commit). An ACK lost after this commit is safe:
+// the next replay sees the advanced watermark and dedups. Unknown/ignored event
+// kinds (no durable representation) are a no-op. A turn with no assignment row
+// at all (gone/never assigned) is a no-op: there is nothing to audit against,
+// and the caller ACKs through the sequence so the worker clears its outbox.
+// Any other store error is returned so the caller does NOT ACK.
 func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1.TurnEvent) error {
 	kind, payload, _ := turnEventToRuntime(te)
 	if kind == "" {
-		return nil
+		return nil // unknown/ignored kind: nothing durable to record.
 	}
-	// Resolve the run for the turn to append the audit event.
-	var runID string
-	err := s.store.pool.QueryRow(ctx, `SELECT run_id::text FROM runtime.turns WHERE id = $1::uuid`, turnID).Scan(&runID)
-	if err != nil {
-		return nil // turn gone; nothing to audit against.
+	if _, err := s.store.AppendAfterTerminalEvent(ctx, turnID, te.GetSequence(), kind, payload); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // turn gone; nothing to audit against.
+		}
+		return err
 	}
-	_, _ = s.store.Runtime().AppendEvent(ctx, runID, turnID, "", kind, payload)
-	s.log.Info("after-terminal audit", "turn", turnID, "kind", kind)
+	s.log.Info("after-terminal audit", "turn", turnID, "kind", kind, "seq", te.GetSequence())
 	return nil
 }
 
