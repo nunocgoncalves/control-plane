@@ -170,14 +170,15 @@ type Blocker struct {
 
 // Feedback is persisted against the original attempt and starts no work.
 type Feedback struct {
-	ID              string          `json:"id"`
-	WorkItemID      string          `json:"workItemId"`
-	AttemptID       string          `json:"attemptId"`
-	Category        string          `json:"category"`
-	Explanation     *string         `json:"explanation,omitempty"`
-	CorrectedResult json.RawMessage `json:"correctedResult,omitempty"`
-	CreatedBy       string          `json:"createdBy"`
-	CreatedAt       time.Time       `json:"createdAt"`
+	ID               string          `json:"id"`
+	WorkItemID       string          `json:"workItemId"`
+	AttemptID        string          `json:"attemptId"`
+	Category         string          `json:"category"`
+	Explanation      *string         `json:"explanation,omitempty"`
+	CorrectedResult  json.RawMessage `json:"correctedResult,omitempty"`
+	CreatedBy        string          `json:"createdBy"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	RevisedAttemptID *string         `json:"revisedAttemptId,omitempty"`
 }
 
 // TimelineEvent is a customer-safe, resumable business event.

@@ -363,6 +363,11 @@ value-model reference, and a single-active-node directed graph.
   workflow/config, immutable skill identities, typed trigger bindings, scope
   identity, and complete capability narrowing for attempt creation (HOR-254
   atomically composes it with deterministic latest-healthy tool pinning).
+  Skill digests are `sha256:<hex>` over the complete materialized skill tree:
+  for each sorted slash-separated relative file, hash
+  `file\\0<path>\\0<byte-length>\\0<exact-bytes>`; symlinks and non-regular
+  entries are rejected. The harness loads a named
+  product/client skill only when those bytes match the attempt's pinned digest.
 - Customer-facing metadata (workflow title, persona name/avatar, locale)
   supports the single-workflow Dashboard **without a separate Persona CRD**
   (REQ-021; HOR-363 canceled).
@@ -391,6 +396,7 @@ Work APIs require a `work`-scope bearer key and operation capability
 | `GET` | `/v1/work-items/{id}/consequences` | Customer-safe external-action tokens required by a revision |
 | `GET` | `/v1/work-items/{id}/blocker` | Current actionable request |
 | `POST` | `/v1/work-blockers/{id}/responses` | Resolve human/consequence gate |
+| `GET` | `/v1/work-items/{id}/feedback` / `/v1/work-items/{id}/feedback/{feedbackID}` | Original-attempt feedback and revised-attempt association |
 | `POST` | `/v1/work-items/{id}/feedback` | Save feedback without starting work |
 | `POST` | `/v1/work-items/{id}/revisions` | Explicit revised attempt with exact consequence confirmation |
 | `GET` | `/v1/work-dashboard` | State counts plus explainable estimated value/trend |

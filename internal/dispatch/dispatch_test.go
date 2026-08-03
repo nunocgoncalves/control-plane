@@ -289,6 +289,41 @@ func TestDispatch_EventDedupOnReplay(t *testing.T) {
 	assert.Equal(t, 1, count, "dedup: no duplicate assistant_message event")
 }
 
+// TestDispatch_ReplayedOutcomeRedrivesTerminalProjection covers the crash gap
+// where the WorkerOutcome audit event committed but terminal turn/run
+// projection did not. Replaying the already-applied sequence must terminalize
+// before ACK so reconnect fencing cannot turn completed work into Aborted.
+func TestDispatch_ReplayedOutcomeRedrivesTerminalProjection(t *testing.T) {
+	env := newDispatchEnv(t)
+	ctx := context.Background()
+	runID := env.seedPendingRun(t)
+
+	w := env.connectWorker(t)
+	defer w.close()
+	require.NoError(t, w.ready())
+	at := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetAssignTurn() != nil }).GetAssignTurn()
+	turnID := at.GetTurnId()
+
+	// Simulate AppendTurnEvent's transaction succeeding immediately before the
+	// dispatch process dies or loses its ACK path.
+	applied, err := env.store.AppendTurnEvent(ctx, turnID, 1, runtime.EvSettled, json.RawMessage(`{"outcome":"completed"}`))
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The worker retained seq 1 and replays it. AppendTurnEvent dedups it, but
+	// the service must still apply the terminal projection before acknowledging.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: turnID, Sequence: 1,
+		Kind: &v1.TurnEvent_WorkerOutcome{WorkerOutcome: &v1.WorkerOutcome{Outcome: v1.Outcome_OUTCOME_COMPLETED}}}))
+	ack := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetEventAck() != nil }).GetEventAck()
+	assert.Equal(t, uint64(1), ack.GetThroughSequence())
+
+	run, err := env.rt.GetRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, runtime.RunSucceeded, run.State)
+	_, err = env.store.ResolveActiveAssignment(ctx, turnID)
+	assert.ErrorIs(t, err, dispatch.ErrAssignmentNotActive)
+}
+
 // TestDispatch_FencingOnReconnect: a second connection for the same worker
 // fences the prior generation; the prior active turn is terminalized as worker
 // loss (aborted). The prior connection observes a closed stream.

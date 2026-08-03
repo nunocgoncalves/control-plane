@@ -296,13 +296,6 @@ func (s *Store) CompleteTurn(ctx context.Context, turnID, reason string, custome
 	if err != nil {
 		return "", err
 	}
-	var graphJSON, modelsJSON []byte
-	var definitionKey, definitionVersion string
-	if err := tx.QueryRow(ctx, `SELECT graph_snapshot, models_snapshot, definition_key, definition_version FROM work.attempts WHERE id=$1`, attemptID).
-		Scan(&graphJSON, &modelsJSON, &definitionKey, &definitionVersion); err != nil {
-		return "", err
-	}
-
 	if reason != "completed" || node.CompletionOutcome == nil || node.CompletionReportedAt == nil {
 		to := runtimestore.TurnFailed
 		runTo := runtimestore.RunFailed
@@ -336,62 +329,107 @@ func (s *Store) CompleteTurn(ctx context.Context, turnID, reason string, custome
 	if _, err := tx.Exec(ctx, `UPDATE runtime.node_executions SET state='succeeded', finished_at=now() WHERE id=$1`, nodeID); err != nil {
 		return "", err
 	}
-	var completedArtifacts []ArtifactRef
-	if len(node.ArtifactRefs) > 0 {
-		if err := json.Unmarshal(node.ArtifactRefs, &completedArtifacts); err != nil {
-			return "", err
-		}
-	}
-	if err := appendTimelineTx(ctx, tx, itemID, attemptID, nodeID, "node_completed",
-		map[string]any{"nodeKey": node.NodeKey, "visit": node.Visit, "outcome": *node.CompletionOutcome, "summary": deref(node.CompletionSummary)}, completedArtifacts, ""); err != nil {
+	runState, err := s.advanceGraphTx(ctx, tx, graphAdvanceInput{ItemID: itemID, AttemptID: attemptID, Node: node})
+	if err != nil {
 		return "", err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return runState, nil
+}
 
+type graphAdvanceInput struct {
+	ItemID    string
+	AttemptID string
+	Node      NodeExecution
+	ActorID   string
+}
+
+// advanceGraphTx is the single transaction-scoped graph router used after
+// both agent-task completion and human-gate resolution. Callers terminalize
+// their source node first, then this routine records identical customer events,
+// transition-limit failures, routing, visit numbering, context, and terminal
+// completion semantics regardless of node kind.
+//
+//nolint:gocyclo // Every graph route remains in one transaction-scoped semantic routine for agent and human nodes.
+func (s *Store) advanceGraphTx(ctx context.Context, tx pgx.Tx, in graphAdvanceInput) (string, error) {
+	if in.Node.CompletionOutcome == nil {
+		return "", fmt.Errorf("%w: node completion outcome is missing", ErrInvalidTransition)
+	}
+	var graphJSON, modelsJSON, specJSON []byte
+	var definitionKey, definitionVersion string
+	if err := tx.QueryRow(ctx, `
+		SELECT a.graph_snapshot,a.models_snapshot,a.definition_key,a.definition_version,d.spec_json
+		FROM work.attempts a JOIN workflow.definitions d ON d.id=a.definition_id WHERE a.id=$1`, in.AttemptID).
+		Scan(&graphJSON, &modelsJSON, &definitionKey, &definitionVersion, &specJSON); err != nil {
+		return "", err
+	}
 	var graph workflow.CanonicalGraph
+	var models map[string]modelSnapshot
+	var spec workflow.CanonicalSpec
 	if err := json.Unmarshal(graphJSON, &graph); err != nil {
 		return "", err
 	}
-	target, terminal, ok := route(graph, node.NodeKey, *node.CompletionOutcome)
+	if err := json.Unmarshal(modelsJSON, &models); err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		return "", err
+	}
+	def, ok := findNode(graph, in.Node.NodeKey)
+	if !ok || def.Kind != in.Node.Kind {
+		return "", fmt.Errorf("immutable graph node %q is missing or changed kind", in.Node.NodeKey)
+	}
+	if !contains(def.Outcomes, *in.Node.CompletionOutcome) {
+		return "", fmt.Errorf("%w: outcome %q is not declared", ErrInvalidInput, *in.Node.CompletionOutcome)
+	}
+	var completedArtifacts []ArtifactRef
+	if len(in.Node.ArtifactRefs) > 0 {
+		if err := json.Unmarshal(in.Node.ArtifactRefs, &completedArtifacts); err != nil {
+			return "", err
+		}
+	}
+	if err := appendTimelineTx(ctx, tx, in.ItemID, in.AttemptID, in.Node.ID, "node_completed",
+		map[string]any{"nodeKey": in.Node.NodeKey, "visit": in.Node.Visit, "outcome": *in.Node.CompletionOutcome, "summary": deref(in.Node.CompletionSummary)}, completedArtifacts, in.ActorID); err != nil {
+		return "", err
+	}
+
+	target, terminal, ok := route(graph, in.Node.NodeKey, *in.Node.CompletionOutcome)
 	if !ok {
-		return "", fmt.Errorf("immutable graph has no route for %s/%s", node.NodeKey, *node.CompletionOutcome)
+		return "", fmt.Errorf("immutable graph has no route for %s/%s", in.Node.NodeKey, *in.Node.CompletionOutcome)
 	}
 	if terminal {
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='succeeded', finished_at=now() WHERE id=$1`, attemptID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='succeeded', finished_at=now() WHERE id=$1`, in.AttemptID); err != nil {
 			return "", err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now() WHERE id=$1`, attemptID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now() WHERE id=$1`, in.AttemptID); err != nil {
 			return "", err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions (attempt_id,from_execution_id,outcome,terminal) VALUES ($1,$2,$3,true)`, attemptID, nodeID, *node.CompletionOutcome); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions (attempt_id,from_execution_id,outcome,terminal) VALUES ($1,$2,$3,true)`, in.AttemptID, in.Node.ID, *in.Node.CompletionOutcome); err != nil {
 			return "", err
 		}
-		if err := creditValueTx(ctx, tx, itemID, attemptID); err != nil {
+		if err := creditValueTx(ctx, tx, in.ItemID, in.AttemptID); err != nil {
 			return "", err
 		}
-		if err := appendTimelineTx(ctx, tx, itemID, attemptID, nodeID, "work_completed", map[string]any{"definitionKey": definitionKey, "definitionVersion": definitionVersion}, nil, ""); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := appendTimelineTx(ctx, tx, in.ItemID, in.AttemptID, in.Node.ID, "work_completed", map[string]any{"definitionKey": definitionKey, "definitionVersion": definitionVersion}, nil, in.ActorID); err != nil {
 			return "", err
 		}
 		return runtimestore.RunSucceeded, nil
 	}
 	var transitionCount int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM runtime.graph_transitions WHERE attempt_id=$1 AND NOT terminal`, attemptID).Scan(&transitionCount); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM runtime.graph_transitions WHERE attempt_id=$1 AND NOT terminal`, in.AttemptID).Scan(&transitionCount); err != nil {
 		return "", err
 	}
 	if transitionCount >= int(graph.MaxTransitions) {
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='failed', finished_at=now() WHERE id=$1`, attemptID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='failed', finished_at=now() WHERE id=$1`, in.AttemptID); err != nil {
 			return "", err
 		}
 		failure, _ := json.Marshal(map[string]any{"code": "transition_limit", "message": "The workflow could not complete within its configured transition limit."})
-		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now(), customer_failure_summary=$2 WHERE id=$1`, attemptID, failure); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now(), customer_failure_summary=$2 WHERE id=$1`, in.AttemptID, failure); err != nil {
 			return "", err
 		}
-		if err := appendTimelineTx(ctx, tx, itemID, attemptID, nodeID, "work_failed", map[string]any{"reason": "transition_limit"}, nil, ""); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := appendTimelineTx(ctx, tx, in.ItemID, in.AttemptID, in.Node.ID, "work_failed", map[string]any{"reason": "transition_limit"}, nil, in.ActorID); err != nil {
 			return "", err
 		}
 		return runtimestore.RunFailed, nil
@@ -402,38 +440,24 @@ func (s *Store) CompleteTurn(ctx context.Context, turnID, reason string, custome
 		return "", fmt.Errorf("target node %q missing", target)
 	}
 	var visit, seq int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(visit),0)+1 FROM runtime.node_executions WHERE attempt_id=$1 AND node_key=$2`, attemptID, target).Scan(&visit); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(visit),0)+1 FROM runtime.node_executions WHERE attempt_id=$1 AND node_key=$2`, in.AttemptID, target).Scan(&visit); err != nil {
 		return "", err
 	}
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(execution_seq),0)+1 FROM runtime.node_executions WHERE attempt_id=$1`, attemptID).Scan(&seq); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(execution_seq),0)+1 FROM runtime.node_executions WHERE attempt_id=$1`, in.AttemptID).Scan(&seq); err != nil {
 		return "", err
 	}
-	contextValue, err := buildContextTx(ctx, tx, attemptID, node)
+	contextValue, err := buildContextTx(ctx, tx, in.AttemptID, in.Node)
 	if err != nil {
 		return "", err
 	}
-	var models map[string]modelSnapshot
-	if err := json.Unmarshal(modelsJSON, &models); err != nil {
-		return "", err
-	}
-	var spec workflow.CanonicalSpec
-	// Only fields needed by insertion are reconstructed from immutable attempt
-	// snapshots; graph/skills/capabilities are loaded from the definition below.
-	var specJSON []byte
-	if err := tx.QueryRow(ctx, `SELECT spec_json FROM workflow.definitions d JOIN work.attempts a ON a.definition_id=d.id WHERE a.id=$1`, attemptID).Scan(&specJSON); err != nil {
-		return "", err
-	}
-	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return "", err
-	}
-	nextID, err := insertNodeExecutionTx(ctx, tx, attemptID, targetDef, visit, seq, contextValue, models, spec)
+	nextID, err := insertNodeExecutionTx(ctx, tx, in.AttemptID, targetDef, visit, seq, contextValue, models, spec)
 	if err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions (attempt_id,from_execution_id,outcome,to_execution_id,terminal) VALUES ($1,$2,$3,$4,false)`, attemptID, nodeID, *node.CompletionOutcome, nextID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions (attempt_id,from_execution_id,outcome,to_execution_id,terminal) VALUES ($1,$2,$3,$4,false)`, in.AttemptID, in.Node.ID, *in.Node.CompletionOutcome, nextID); err != nil {
 		return "", err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='running' WHERE id=$1 AND state IN ('running','awaiting_approval')`, in.AttemptID); err != nil {
 		return "", err
 	}
 	return runtimestore.RunRunning, nil

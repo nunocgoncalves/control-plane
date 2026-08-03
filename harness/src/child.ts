@@ -17,11 +17,10 @@
 // = 0) so there is exactly one observable retry layer — pi's own bounded
 // auto-retry (retry.maxRetries = HARNESS_MODEL_MAX_ATTEMPTS).
 
-import { writeSync } from "node:fs";
-import { existsSync, readdirSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createReadStream } from "node:fs";
 import { toJson, create } from "@bufbuild/protobuf";
 import { Type } from "typebox";
 import {
@@ -548,19 +547,56 @@ function buildImages(a: Assignment): { type: "image"; data: string; mimeType: st
   return out;
 }
 
-function resolveSkillPaths(skills: { name: string }[], piDirs: string[]): string[] {
+// Hash one materialized skill tree by sorted relative path + exact file bytes.
+// Symlinks and non-regular entries are rejected so the digest cannot depend on
+// mutable content outside the pinned overlay artifact. The published workflow
+// skill digest uses this canonical `sha256:<hex>` representation.
+export function skillContentDigest(root: string): string {
+  if (!lstatSync(root).isDirectory()) throw new Error(`assigned skill path is not a directory: ${root}`);
+  const hash = createHash("sha256");
+  const visit = (dir: string, prefix: string): void => {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`assigned skill contains a symlink: ${rel}`);
+      if (entry.isDirectory()) {
+        visit(path, rel);
+        continue;
+      }
+      if (!entry.isFile()) throw new Error(`assigned skill contains a non-regular entry: ${rel}`);
+      const content = readFileSync(path);
+      hash.update("file\0");
+      hash.update(rel);
+      hash.update("\0");
+      hash.update(String(content.length));
+      hash.update("\0");
+      hash.update(content);
+    }
+  };
+  visit(root, "");
+  return `sha256:${hash.digest("hex")}`;
+}
+
+export function resolveSkillPaths(skills: { name: string; version: string; digest: string }[], piDirs: string[]): string[] {
   const out: string[] = [];
   for (const skill of skills) {
     const rel = normalize(skill.name);
     if (!rel || rel === "." || rel.startsWith(".." + sep) || rel === ".." || rel.startsWith(sep)) throw new Error(`invalid assigned skill name: ${skill.name}`);
+    if (!/^sha256:[0-9a-f]{64}$/i.test(skill.digest)) throw new Error(`invalid assigned skill digest for ${skill.name}@${skill.version}`);
     let selected: string | undefined;
-    // Client paths later in piDirs supersede product paths, matching overlay
-    // precedence while exposing only the exact node-assigned skill names.
-    for (const root of piDirs) {
+    // Search in reverse overlay precedence, but select only bytes matching the
+    // durable pin. An updated same-name client skill cannot silently replace an
+    // active attempt's exact product/client skill version.
+    for (const root of [...piDirs].reverse()) {
       const candidate = join(root, "skills", rel);
-      if (existsSync(candidate)) selected = candidate;
+      if (!existsSync(candidate)) continue;
+      if (skillContentDigest(candidate).toLowerCase() === skill.digest.toLowerCase()) {
+        selected = candidate;
+        break;
+      }
     }
-    if (!selected) throw new Error(`assigned skill is unavailable: ${skill.name}`);
+    if (!selected) throw new Error(`assigned immutable skill is unavailable: ${skill.name}@${skill.version} (${skill.digest})`);
     out.push(selected);
   }
   return out;

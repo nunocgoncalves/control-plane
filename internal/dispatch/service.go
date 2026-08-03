@@ -480,20 +480,33 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 			}
 		}
 	}
+	var outcomeRunState string
+	if isOutcome {
+		// Project the terminal outcome before ACK. If the runtime/work projection
+		// fails, leave the event unacknowledged so replay re-drives this idempotent
+		// projection instead of allowing reconnect fencing to abort completed work.
+		outcomeRunState, err = s.terminalizeTurnOutcome(ctx, a, te.GetWorkerOutcome())
+		if err != nil {
+			return err
+		}
+	}
 	if !applied && !isCompletion {
-		// Dedup: already applied (replayed tail). ACK through the watermark.
-		return s.ack(ctx, w, turnID, seq)
+		// Dedup: the durable observation already exists. Terminal outcomes still
+		// reached the projection above; all other events only need a cumulative ACK.
+		if err := s.ack(ctx, w, turnID, seq); err != nil {
+			return err
+		}
+		if isOutcome {
+			s.finishTurnOutcome(ctx, a, outcomeRunState)
+		}
+		return nil
 	}
 
 	if err := s.ack(ctx, w, turnID, seq); err != nil {
 		return err
 	}
-
-	// Terminal outcome: the worker is done. First-terminal-writer: only the
-	// first terminal outcome commits the turn SM; a duplicate (deduped above)
-	// never re-terminalizes.
 	if isOutcome {
-		s.terminalizeTurnOutcome(ctx, a, te.GetWorkerOutcome())
+		s.finishTurnOutcome(ctx, a, outcomeRunState)
 	}
 	return nil
 }
@@ -530,13 +543,11 @@ func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1
 	return nil
 }
 
-// terminalizeTurnOutcome commits the turn SM terminal state from a worker
-// WorkerOutcome (first-terminal-writer), then terminalizes the assignment and
-// releases the worker (it will advertise Ready again when ready). When the run
-// reaches a terminal state and the worker is still connected, dispatch sends
-// SessionEnd so the supervisor reaps the session sandbox (HOR-245 cleanup), and
-// releases the session UID into its non-recycling reap grace.
-func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *v1.WorkerOutcome) {
+// terminalizeTurnOutcome durably projects a worker outcome into the turn/run
+// state machine and terminal assignment before the event is ACKed. It is safe
+// to re-drive for a replayed WorkerOutcome (first-terminal-writer + idempotent
+// assignment terminalization).
+func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *v1.WorkerOutcome) (string, error) {
 	var reason string
 	switch wo.GetOutcome() {
 	case v1.Outcome_OUTCOME_COMPLETED:
@@ -548,10 +559,16 @@ func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *
 	default:
 		reason = "failed"
 	}
-	runState, tErr := s.commitTurnTerminal(ctx, a, reason)
-	if tErr != nil {
-		s.log.Warn("terminalize turn outcome", "turn", a.TurnID, "error", tErr)
+	runState, err := s.commitTurnTerminal(ctx, a, reason)
+	if err != nil {
+		return "", fmt.Errorf("terminalize turn outcome: %w", err)
 	}
+	return runState, nil
+}
+
+// finishTurnOutcome runs connected-worker cleanup only after the durable
+// outcome event has been ACKed, preserving SessionEnd's ACK-before-reap order.
+func (s *Service) finishTurnOutcome(ctx context.Context, a Assignment, runState string) {
 	if w := s.pool.get(a.PoolID, a.WorkerID); w != nil {
 		w.releaseTurn()
 		if runtime.IsTerminalRun(runState) {

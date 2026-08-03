@@ -196,6 +196,30 @@ func (h *Handler) respondWorkBlocker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b)
 }
 
+func (h *Handler) listWorkFeedback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeWork(w, r, "read") {
+		return
+	}
+	feedback, err := h.work.ListFeedback(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, feedback)
+}
+
+func (h *Handler) getWorkFeedback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeWork(w, r, "read") {
+		return
+	}
+	feedback, err := h.work.GetFeedback(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "feedbackID"))
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, feedback)
+}
+
 type feedbackRequest struct {
 	AttemptID       string          `json:"attemptId"`
 	Category        string          `json:"category"`

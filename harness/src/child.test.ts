@@ -14,12 +14,12 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFrame, parseSupervisorFrame, type ChildFrame } from "./ipc.js";
-import { parseAssignment, captureShutdownErrors, createSession, StepCompletionState, type ExtensionErrorEmitter } from "./child.js";
+import { parseAssignment, captureShutdownErrors, createSession, resolveSkillPaths, skillContentDigest, StepCompletionState, type ExtensionErrorEmitter } from "./child.js";
 import { ChildRpc } from "./child-rpc.js";
 
 const HARNESS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -273,6 +273,33 @@ describe("parseAssignment", () => {
     expect(parseAssignment({ turnId: "t" })).toBeUndefined();
     expect(parseAssignment({ ...assignmentJson(), model: { id: "m" } })).toBeUndefined();
     expect(parseAssignment({ ...assignmentJson(), workspaceTools: "yes" })).toBeUndefined();
+  });
+});
+
+describe("immutable assigned skills (REQ-027)", () => {
+  it("loads only the overlay tree whose bytes match the pinned digest", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "harness-skills-"));
+    try {
+      const product = join(tmp, "product");
+      const client = join(tmp, "client");
+      const productSkill = join(product, "skills", "quotation");
+      const clientSkill = join(client, "skills", "quotation");
+      mkdirSync(productSkill, { recursive: true });
+      mkdirSync(clientSkill, { recursive: true });
+      writeFileSync(join(productSkill, "SKILL.md"), "product version\n");
+      writeFileSync(join(clientSkill, "SKILL.md"), "client version\n");
+      const digest = skillContentDigest(productSkill);
+      expect(resolveSkillPaths([{ name: "quotation", version: "1", digest }], [product, client])).toEqual([productSkill]);
+
+      writeFileSync(join(productSkill, "SKILL.md"), "mutated version\n");
+      expect(() => resolveSkillPaths([{ name: "quotation", version: "1", digest }], [product, client])).toThrow(/immutable skill is unavailable/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed digests instead of treating a name as a version pin", () => {
+    expect(() => resolveSkillPaths([{ name: "quotation", version: "1", digest: "sha256:not-a-digest" }], [])).toThrow(/invalid assigned skill digest/);
   });
 });
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -51,12 +52,25 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.CreateValueModel(ctx, valueInput)
 	assert.ErrorIs(t, err, workstore.ErrConflict)
+	unreferenced, err := store.Dashboard(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.False(t, unreferenced.Value.Configured, "an unreferenced registry row is not Dashboard configuration")
 
 	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`)})
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.Equal(t, workstore.StateTodo, item.State)
 	assert.True(t, item.ValueConfigured)
+	dashboard, err := store.Dashboard(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.True(t, dashboard.Value.Configured)
+	assert.True(t, dashboard.Value.Estimated)
+	require.Len(t, dashboard.Value.Models, 1)
+	assert.Equal(t, "labor_time_saved", dashboard.Value.Models[0].Formula)
+	assert.Equal(t, int64(1200), dashboard.Value.Models[0].BaselineSeconds)
+	assert.Equal(t, "30.000000", dashboard.Value.Models[0].LoadedHourlyCost)
+	assert.JSONEq(t, `{"source":"customer"}`, string(dashboard.Value.Models[0].Assumptions))
+	assert.JSONEq(t, `{"en":"20 minutes at EUR 30/hour"}`, string(dashboard.Value.Models[0].Explanation))
 	var valueModel map[string]any
 	require.NoError(t, json.Unmarshal(item.ValueModel, &valueModel))
 	assert.Equal(t, "labor_time_saved", valueModel["formula"])
@@ -144,6 +158,18 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 
 	feedback, err := restarted.SaveFeedback(ctx, workstore.FeedbackInput{WorkItemID: item.ID, AttemptID: attemptID, ActorIdentityID: actorID, Category: "incorrect_classification", Explanation: "Should be engineering", CorrectedResult: json.RawMessage(`{"classification":"engineering"}`)})
 	require.NoError(t, err)
+	feedbackHistory, err := restarted.ListFeedback(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, feedbackHistory, 1)
+	assert.Equal(t, "incorrect_classification", feedbackHistory[0].Category)
+	assert.Equal(t, "Should be engineering", *feedbackHistory[0].Explanation)
+	assert.JSONEq(t, `{"classification":"engineering"}`, string(feedbackHistory[0].CorrectedResult))
+	assert.Equal(t, attemptID, feedbackHistory[0].AttemptID)
+	assert.Equal(t, actorID, feedbackHistory[0].CreatedBy)
+	assert.Nil(t, feedbackHistory[0].RevisedAttemptID)
+	persistedFeedback, err := restarted.GetFeedback(ctx, item.ID, feedback.ID)
+	require.NoError(t, err)
+	assert.Equal(t, feedback.ID, persistedFeedback.ID)
 	attempts, err := restarted.ListAttempts(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Len(t, attempts, 1, "feedback must not start work")
@@ -173,6 +199,10 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, attempts, 2)
 	assert.Equal(t, attemptID, *attempts[1].RevisedFromAttemptID)
+	feedbackHistory, err = restarted.ListFeedback(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, feedbackHistory[0].RevisedAttemptID)
+	assert.Equal(t, revised.CurrentAttemptID, *feedbackHistory[0].RevisedAttemptID)
 
 	// Scope identity remains the workflow identity, never the initiating user.
 	assert.Equal(t, scopeID, revised.ScopeIdentityID)

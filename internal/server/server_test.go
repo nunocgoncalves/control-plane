@@ -227,6 +227,13 @@ func TestAPI(t *testing.T) {
 		rr = do(router, http.MethodGet, "/v1/work-items", authHeader(aliceWorkKey), nil)
 		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 		assert.JSONEq(t, `[]`, rr.Body.String())
+
+		itemID := "00000000-0000-0000-0000-000000000001"
+		feedbackID := "00000000-0000-0000-0000-000000000002"
+		rr = do(router, http.MethodGet, "/v1/work-items/"+itemID+"/feedback", authHeader(aliceWorkKey), nil)
+		assert.Equal(t, http.StatusNotFound, rr.Code, "feedback list route is item scoped")
+		rr = do(router, http.MethodGet, "/v1/work-items/"+itemID+"/feedback/"+feedbackID, authHeader(aliceWorkKey), nil)
+		assert.Equal(t, http.StatusNotFound, rr.Code, "feedback detail route is item scoped")
 	})
 
 	t.Run("admin creates immutable transparent value model", func(t *testing.T) {

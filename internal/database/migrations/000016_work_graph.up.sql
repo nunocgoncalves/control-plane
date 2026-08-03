@@ -190,6 +190,14 @@ CREATE TABLE work.feedback (
 CREATE INDEX idx_feedback_item ON work.feedback (work_item_id, created_at);
 CREATE INDEX idx_feedback_attempt ON work.feedback (attempt_id, created_at);
 
+-- The revised attempt points back to the exact feedback that requested it, so
+-- the customer read projection can reconstruct original attempt -> feedback ->
+-- revised attempt without interpreting timeline JSON.
+ALTER TABLE work.attempts
+    ADD COLUMN revision_feedback_id uuid REFERENCES work.feedback(id) ON DELETE RESTRICT;
+CREATE UNIQUE INDEX idx_attempts_revision_feedback ON work.attempts (revision_feedback_id)
+    WHERE revision_feedback_id IS NOT NULL;
+
 -- HOR-399 owns artifact metadata/bytes. This table records immutable trace
 -- relationships to opaque artifact IDs without pre-implementing that service.
 CREATE TABLE work.artifact_links (

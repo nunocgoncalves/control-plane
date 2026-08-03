@@ -135,6 +135,7 @@ type createAttemptInput struct {
 	Source                  json.RawMessage
 	SourceArtifacts         []ArtifactRef
 	RevisedFromAttemptID    string
+	RevisionFeedbackID      string
 	ActionableGuidance      string
 	ConsequenceConfirmation []string
 }
@@ -184,11 +185,11 @@ func (s *Store) createAttemptTx(ctx context.Context, tx pgx.Tx, in createAttempt
 			(id, work_item_id, number, definition_id, definition_key, definition_version,
 			 definition_digest, graph_snapshot, skills_snapshot, capabilities_snapshot,
 			 models_snapshot, value_model_id, value_model_snapshot, revised_from_attempt_id,
-			 actionable_guidance, consequence_confirmation)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			 revision_feedback_id, actionable_guidance, consequence_confirmation)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		in.ID, in.WorkItemID, in.Number, def.ID, def.Key, def.Version, def.Digest,
 		graphJSON, skillsJSON, capsJSON, modelsJSON, nullable(valueModelID), nullableJSON(valueSnapshot),
-		nullable(in.RevisedFromAttemptID), nullable(in.ActionableGuidance), confirmationJSON); err != nil {
+		nullable(in.RevisedFromAttemptID), nullable(in.RevisionFeedbackID), nullable(in.ActionableGuidance), confirmationJSON); err != nil {
 		return fmt.Errorf("insert attempt: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `

@@ -79,9 +79,23 @@ type DashboardSummary struct {
 	Trend  []ValueTrendPoint `json:"trend"`
 }
 type ValueSummary struct {
-	Configured bool             `json:"configured"`
-	Estimated  bool             `json:"estimated"`
-	Totals     []CurrencyAmount `json:"totals"`
+	Configured bool                 `json:"configured"`
+	Estimated  bool                 `json:"estimated"`
+	Totals     []CurrencyAmount     `json:"totals"`
+	Models     []ValueModelSnapshot `json:"models"`
+}
+
+// ValueModelSnapshot is the immutable, customer-safe explanation attached to
+// the attempts relevant to a Dashboard selection.
+type ValueModelSnapshot struct {
+	Ref              string          `json:"ref"`
+	Version          string          `json:"version"`
+	Formula          string          `json:"formula"`
+	Currency         string          `json:"currency"`
+	BaselineSeconds  int64           `json:"baselineSeconds"`
+	LoadedHourlyCost string          `json:"loadedHourlyCost"`
+	Assumptions      json.RawMessage `json:"assumptions"`
+	Explanation      json.RawMessage `json:"explanation"`
 }
 type CurrencyAmount struct {
 	Amount   string `json:"amount"`
@@ -93,6 +107,7 @@ type ValueTrendPoint struct {
 	Currency string `json:"currency"`
 }
 
+//nolint:gocyclo // Counts, relevant immutable model snapshots, totals, and trend form one read projection.
 func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSummary, error) {
 	out := DashboardSummary{
 		Counts: map[string]int64{StateTodo: 0, StateInProgress: 0, StateBlocked: 0, StateDone: 0, StateFailed: 0},
@@ -115,6 +130,58 @@ func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSum
 	if err := rows.Err(); err != nil {
 		return out, err
 	}
+	// Configuration comes only from immutable snapshots attached to work/value
+	// relevant to this selection. A globally registered but unreferenced model
+	// must never turn an honest "not configured" Dashboard into configured.
+	var relevant, configured int64
+	if err := s.pool.QueryRow(ctx, `
+		WITH relevant_attempts AS (
+			SELECT current_attempt_id AS id FROM work.current_work_items
+			WHERE created_at >= $1 AND created_at < $2
+			UNION
+			SELECT attempt_id AS id FROM work.value_ledger
+			WHERE created_at >= $1 AND created_at < $2
+		)
+		SELECT COUNT(*),COUNT(*) FILTER (WHERE a.value_model_id IS NOT NULL AND a.value_model_snapshot IS NOT NULL)
+		FROM relevant_attempts r JOIN work.attempts a ON a.id=r.id`, from, to).Scan(&relevant, &configured); err != nil {
+		return out, err
+	}
+	out.Value = ValueSummary{Configured: relevant > 0 && configured == relevant, Estimated: relevant > 0 && configured == relevant, Totals: make([]CurrencyAmount, 0), Models: make([]ValueModelSnapshot, 0)}
+	if !out.Value.Configured {
+		return out, nil
+	}
+	modelRows, err := s.pool.Query(ctx, `
+		WITH relevant_attempts AS (
+			SELECT current_attempt_id AS id FROM work.current_work_items
+			WHERE created_at >= $1 AND created_at < $2
+			UNION
+			SELECT attempt_id AS id FROM work.value_ledger
+			WHERE created_at >= $1 AND created_at < $2
+		)
+		SELECT a.value_model_snapshot
+		FROM relevant_attempts r JOIN work.attempts a ON a.id=r.id
+		GROUP BY a.value_model_snapshot ORDER BY a.value_model_snapshot::text`, from, to)
+	if err != nil {
+		return out, err
+	}
+	for modelRows.Next() {
+		var raw []byte
+		if err := modelRows.Scan(&raw); err != nil {
+			modelRows.Close()
+			return out, err
+		}
+		var model ValueModelSnapshot
+		if err := json.Unmarshal(raw, &model); err != nil {
+			modelRows.Close()
+			return out, err
+		}
+		out.Value.Models = append(out.Value.Models, model)
+	}
+	modelRows.Close()
+	if err := modelRows.Err(); err != nil {
+		return out, err
+	}
+
 	totals := make([]CurrencyAmount, 0)
 	valueRows, err := s.pool.Query(ctx, `
 		SELECT SUM(amount)::text,currency FROM work.value_ledger
@@ -134,11 +201,7 @@ func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSum
 	if err := valueRows.Err(); err != nil {
 		return out, err
 	}
-	var configured bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM work.value_models)`).Scan(&configured); err != nil {
-		return out, err
-	}
-	out.Value = ValueSummary{Configured: configured, Estimated: configured, Totals: totals}
+	out.Value.Totals = totals
 	trendRows, err := s.pool.Query(ctx, `
 		SELECT created_at::date::text,SUM(amount)::text,currency FROM work.value_ledger
 		WHERE created_at >= $1 AND created_at < $2

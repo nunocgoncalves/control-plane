@@ -102,6 +102,8 @@ func New(svc Services) http.Handler {
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/timeline", h.listWorkTimeline)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/consequences", h.getWorkConsequences)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/blocker", h.getWorkBlocker)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/feedback", h.listWorkFeedback)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/feedback/{feedbackID}", h.getWorkFeedback)
 	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-items/{id}/feedback", h.saveWorkFeedback)
 	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-items/{id}/revisions", h.createWorkRevision)
 	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-blockers/{id}/responses", h.respondWorkBlocker)

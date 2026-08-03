@@ -119,7 +119,6 @@ func (s *Store) RespondBlocker(ctx context.Context, in BlockerResponseInput) (Bl
 	return b, nil
 }
 
-//nolint:gocyclo // Human completion and graph advancement must remain one atomic state transition.
 func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, nodeID, outcome string, response json.RawMessage, actorID string) error {
 	node, err := scanNodeExecution(tx.QueryRow(ctx, nodeExecutionSelect+` WHERE id=$1 FOR UPDATE`, nodeID))
 	if err != nil {
@@ -127,31 +126,6 @@ func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, n
 	}
 	if node.State != NodeBlocked {
 		return fmt.Errorf("%w: human node state is %s", ErrInvalidTransition, node.State)
-	}
-	var graphJSON, modelsJSON, specJSON []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT a.graph_snapshot,a.models_snapshot,d.spec_json
-		FROM work.attempts a JOIN workflow.definitions d ON d.id=a.definition_id WHERE a.id=$1`, b.AttemptID).Scan(&graphJSON, &modelsJSON, &specJSON); err != nil {
-		return err
-	}
-	var graph workflow.CanonicalGraph
-	var spec workflow.CanonicalSpec
-	var models map[string]modelSnapshot
-	if err := json.Unmarshal(graphJSON, &graph); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(modelsJSON, &models); err != nil {
-		return err
-	}
-	def, ok := findNode(graph, node.NodeKey)
-	if !ok || def.Kind != workflow.NodeHumanGate {
-		return fmt.Errorf("human node definition missing")
-	}
-	if !contains(def.Outcomes, outcome) {
-		return fmt.Errorf("%w: outcome %q is not declared", ErrInvalidInput, outcome)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE runtime.node_executions SET state='succeeded',completion_outcome=$2,completion_summary='Human response received',
@@ -161,64 +135,13 @@ func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, n
 	if err := appendTimelineTx(ctx, tx, b.WorkItemID, b.AttemptID, nodeID, "blocker_resolved", map[string]any{"nodeKey": node.NodeKey, "outcome": outcome}, nil, actorID); err != nil {
 		return err
 	}
-	target, terminal, ok := route(graph, node.NodeKey, outcome)
-	if !ok {
-		return fmt.Errorf("graph route missing")
-	}
-	if terminal {
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions(attempt_id,from_execution_id,outcome,terminal)VALUES($1,$2,$3,true)`, b.AttemptID, nodeID, outcome); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='succeeded',finished_at=now() WHERE id=$1`, b.AttemptID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now() WHERE id=$1`, b.AttemptID); err != nil {
-			return err
-		}
-		if err := creditValueTx(ctx, tx, b.WorkItemID, b.AttemptID); err != nil {
-			return err
-		}
-		return appendTimelineTx(ctx, tx, b.WorkItemID, b.AttemptID, nodeID, "work_completed", map[string]any{}, nil, actorID)
-	}
-	var count int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM runtime.graph_transitions WHERE attempt_id=$1 AND NOT terminal`, b.AttemptID).Scan(&count); err != nil {
-		return err
-	}
-	if count >= int(graph.MaxTransitions) {
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='failed',finished_at=now() WHERE id=$1`, b.AttemptID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE work.attempts SET finished_at=now(),customer_failure_summary='{"code":"transition_limit"}' WHERE id=$1`, b.AttemptID); err != nil {
-			return err
-		}
-		return appendTimelineTx(ctx, tx, b.WorkItemID, b.AttemptID, nodeID, "work_failed", map[string]any{"reason": "transition_limit"}, nil, "")
-	}
-	targetDef, ok := findNode(graph, target)
-	if !ok {
-		return fmt.Errorf("target node missing")
-	}
-	var visit, seq int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(visit),0)+1 FROM runtime.node_executions WHERE attempt_id=$1 AND node_key=$2`, b.AttemptID, target).Scan(&visit); err != nil {
-		return err
-	}
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(execution_seq),0)+1 FROM runtime.node_executions WHERE attempt_id=$1`, b.AttemptID).Scan(&seq); err != nil {
-		return err
-	}
+	node.State = NodeSucceeded
 	node.CompletionOutcome = &outcome
 	node.CompletionSummary = strPtr("Human response received")
 	node.Output = response
-	contextValue, err := buildContextTx(ctx, tx, b.AttemptID, node)
-	if err != nil {
-		return err
-	}
-	nextID, err := insertNodeExecutionTx(ctx, tx, b.AttemptID, targetDef, visit, seq, contextValue, models, spec)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions(attempt_id,from_execution_id,outcome,to_execution_id,terminal)VALUES($1,$2,$3,$4,false)`, b.AttemptID, nodeID, outcome, nextID); err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state='running' WHERE id=$1 AND state='awaiting_approval'`, b.AttemptID)
+	_, err = s.advanceGraphTx(ctx, tx, graphAdvanceInput{
+		ItemID: b.WorkItemID, AttemptID: b.AttemptID, Node: node, ActorID: actorID,
+	})
 	return err
 }
 
@@ -361,7 +284,7 @@ func (s *Store) CreateRevision(ctx context.Context, in RevisionInput) (WorkItem,
 		return WorkItem{}, err
 	}
 	attemptID := uuid.NewString()
-	if err := s.createAttemptTx(ctx, tx, createAttemptInput{ID: attemptID, WorkItemID: in.WorkItemID, Number: number, ActorIdentityID: in.ActorIdentityID, Resolved: resolved, Source: source, SourceArtifacts: refs, RevisedFromAttemptID: currentAttempt, ActionableGuidance: in.ActionableGuidance, ConsequenceConfirmation: confirmed}); err != nil {
+	if err := s.createAttemptTx(ctx, tx, createAttemptInput{ID: attemptID, WorkItemID: in.WorkItemID, Number: number, ActorIdentityID: in.ActorIdentityID, Resolved: resolved, Source: source, SourceArtifacts: refs, RevisedFromAttemptID: currentAttempt, RevisionFeedbackID: in.FeedbackID, ActionableGuidance: in.ActionableGuidance, ConsequenceConfirmation: confirmed}); err != nil {
 		return WorkItem{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE work.work_items SET current_attempt_id=$2 WHERE id=$1`, in.WorkItemID, attemptID); err != nil {

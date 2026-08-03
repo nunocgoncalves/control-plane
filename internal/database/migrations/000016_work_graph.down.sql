@@ -13,6 +13,7 @@ DROP TRIGGER IF EXISTS node_executions_updated ON runtime.node_executions;
 DROP TABLE IF EXISTS work.timeline_events;
 DROP TABLE IF EXISTS work.value_ledger;
 DROP TABLE IF EXISTS work.artifact_links;
+ALTER TABLE work.attempts DROP COLUMN IF EXISTS revision_feedback_id;
 DROP TABLE IF EXISTS work.feedback;
 DROP TABLE IF EXISTS work.blockers;
 
