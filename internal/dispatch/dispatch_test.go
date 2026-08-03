@@ -46,6 +46,7 @@ type dispatchEnv struct {
 	svc        *dispatch.Service
 	srvURL     string
 	supervisor tls.Certificate // spiffe://td/pools/pool-1/workers/worker-1
+	ca         *testca.CA
 	caPool     *x509.CertPool
 	poolID     string
 	stop       func()
@@ -71,7 +72,7 @@ func newDispatchEnv(t *testing.T) *dispatchEnv {
 	srv := startDispatchServer(t, store, dispatchTD, ca, supervisor)
 	return &dispatchEnv{
 		store: store, rt: rt, pgpool: pgpool, svc: srv.svc,
-		srvURL: srv.srvURL, supervisor: supervisor, caPool: ca.Pool, poolID: poolID, stop: srv.stop,
+		srvURL: srv.srvURL, supervisor: supervisor, ca: ca, caPool: ca.Pool, poolID: poolID, stop: srv.stop,
 	}
 }
 
@@ -334,6 +335,12 @@ func TestDispatch_FencesDurablePriorGenOnRestart(t *testing.T) {
 	env := newDispatchEnv(t)
 	ctx := context.Background()
 
+	// Stop the first service before seeding the durable restart state. Otherwise
+	// its 30ms reconciler can race seedRunTurn's explicit pending->running
+	// transitions, making this restart test flaky for reasons unrelated to the
+	// reconnect fence.
+	env.stop()
+
 	// Seed a running run + running step + running turn and bind it to worker-1
 	// via a durable active assignment (generation 5) with NO connected worker —
 	// exactly the durable state left behind by a CP restart.
@@ -351,6 +358,8 @@ func TestDispatch_FencesDurablePriorGenOnRestart(t *testing.T) {
 
 	// A fresh service (empty in-memory workerPool) accepts the worker. The
 	// reconnect hits `old == nil` and must fence the durable prior assignment.
+	restarted := startDispatchServer(t, env.store, dispatchTD, env.ca, env.supervisor)
+	env.svc, env.srvURL, env.stop = restarted.svc, restarted.srvURL, restarted.stop
 	w := env.connectWorker(t)
 	defer w.close()
 
