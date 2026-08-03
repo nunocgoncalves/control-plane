@@ -92,6 +92,24 @@ func NewService(store *Store, cfg Config, log *slog.Logger) *Service {
 	return &Service{store: store, cfg: cfg.defaults(), pool: newWorkerPool(), log: log, reconcileCh: make(chan struct{}, 1)}
 }
 
+// SeedGeneration initializes the in-memory fencing-generation counter from the
+// durable high-water mark in runtime.turn_assignments so a restarted control
+// plane never reuses a prior generation value. The first connection after a
+// restart advertises max+1, strictly greater than any durable prior
+// assignment's gen; combined with the unconditional reconnect fence this
+// guarantees a fenced/terminal prior assignment can never be confused with
+// the new active one (HOR-249 reconnect fencing). Must be called once before
+// serving traffic; idempotent for tests.
+func (s *Service) SeedGeneration(ctx context.Context) error {
+	max, err := s.store.MaxFencingGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("seed fencing generation: %w", err)
+	}
+	s.gen.Store(max)
+	s.log.Info("seeded fencing generation counter", "from_durable_max", max)
+	return nil
+}
+
 // --- identity middleware (stamps the mTLS-verified SPIFFE identity into context) ---
 
 type identityKey struct{}

@@ -112,6 +112,24 @@ func NewStore(pool *pgxpool.Pool, rt *runtime.Store) *Store {
 // Runtime returns the composed runtime store (SM transitions).
 func (s *Store) Runtime() *runtime.Store { return s.runtime }
 
+// MaxFencingGeneration returns the highest fencing_generation ever persisted
+// to runtime.turn_assignments (any state), or 0 if none. It seeds the
+// in-memory generation counter on CP startup so a restarted control plane
+// never reuses a prior generation value: the first connection after a restart
+// advertises max+1, strictly greater than any durable prior assignment's gen,
+// so a fenced/terminal prior assignment can never be confused with the new
+// active one even before the unconditional reconnect fence runs (HOR-249
+// reconnect fencing).
+func (s *Store) MaxFencingGeneration(ctx context.Context) (uint64, error) {
+	var max uint64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(fencing_generation), 0) FROM runtime.turn_assignments`).Scan(&max)
+	if err != nil {
+		return 0, fmt.Errorf("max fencing generation: %w", err)
+	}
+	return max, nil
+}
+
 // CreateAssignment records the active assignment for a turn (state=active). A
 // turn may have at most one active assignment; a conflict (the turn is already
 // actively assigned) returns ErrAlreadyAssigned. Called by dispatch on

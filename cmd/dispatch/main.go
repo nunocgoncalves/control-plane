@@ -97,6 +97,13 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		DefaultModel: defaultModel,
 	}, logger)
 
+	// Seed the in-memory fencing-generation counter from the durable
+	// high-water mark so a restarted control plane never reuses a prior
+	// generation value (HOR-249 reconnect fencing).
+	if err := svc.SeedGeneration(ctx); err != nil {
+		return fmt.Errorf("seeding fencing generation: %w", err)
+	}
+
 	// Dispatch reconciler: drive pending runs to idle workers before accepting
 	// worker traffic, then on a ticker + Ready kick.
 	recCtx, cancelRec := context.WithCancel(ctx)
