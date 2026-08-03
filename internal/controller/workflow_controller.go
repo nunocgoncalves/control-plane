@@ -92,6 +92,7 @@ type WorkflowReconciler struct {
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=workflows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=workflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups=platform.iterabase.com,resources=agentpools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=platform.iterabase.com,resources=models,verbs=get;list;watch
 
 // Reconcile handles Workflow create/update/delete events.
 //
@@ -136,8 +137,8 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Validate before execution (acceptance: unknown source/step/capability/
-	// completion rule/binding fails before execution; a workflow cannot request
+	// Validate before execution (acceptance: unknown source/node/capability/
+	// route/binding fails before execution; a workflow cannot request
 	// capabilities beyond its AgentPool policy). A validation error is surfaced
 	// in status as invalid and does not requeue — the user must fix the CR.
 	if err := r.validateSpec(ctx, &wf); err != nil {
@@ -244,7 +245,7 @@ func (r *WorkflowReconciler) cleanupWorkflow(ctx context.Context, wf *v1alpha1.W
 }
 
 // validateSpec validates the Workflow spec before execution (acceptance:
-// unknown source/step/capability/completion rule/binding fails before
+// unknown source/node/capability/route/binding fails before
 // execution; a workflow cannot request capabilities beyond its AgentPool
 // policy). It reads the referenced AgentPool CR for the maximum gateway grants.
 //
@@ -317,46 +318,15 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 			return fmt.Errorf("spec.skills[%d].digest is required", i)
 		}
 	}
-	// Steps: at least one, unique names, valid kinds; index approval_gate steps
-	// for completion/blocker reference checks. A tool_call step must declare its
-	// tool and that tool must be a requested capability, so a workflow cannot
-	// register a tool_call for an unauthorized/unknown tool (REQ-010; acceptance:
-	// unknown tool fails before execution).
-	requestedTools := make(map[string]bool, len(wf.Spec.RequestedCapabilities))
-	for _, c := range wf.Spec.RequestedCapabilities {
-		requestedTools[c.Tool] = true
-	}
-	if len(wf.Spec.Steps) == 0 {
-		return fmt.Errorf("spec.steps must have at least one step")
-	}
-	seenSteps := make(map[string]string) // name -> kind
-	for i, s := range wf.Spec.Steps {
-		if s.Name == "" {
-			return fmt.Errorf("spec.steps[%d].name is required", i)
-		}
-		if _, ok := seenSteps[s.Name]; ok {
-			return fmt.Errorf("spec.steps[%d].name %q is duplicated", i, s.Name)
-		}
-		switch s.Kind {
-		case v1alpha1.WorkflowStepAgentTask, v1alpha1.WorkflowStepToolCall, v1alpha1.WorkflowStepApprovalGate:
-		default:
-			return fmt.Errorf("spec.steps[%d].kind %q is unknown (must be agent_task, tool_call, or approval_gate)", i, s.Kind)
-		}
-		if s.Kind == v1alpha1.WorkflowStepToolCall {
-			if s.Tool == "" {
-				return fmt.Errorf("spec.steps[%d].tool is required for kind=tool_call", i)
-			}
-			if !requestedTools[s.Tool] {
-				return fmt.Errorf("spec.steps[%d].tool %q is not a requested capability (tool_call must reference a requested gateway capability, REQ-010)", i, s.Tool)
-			}
-		}
-		seenSteps[s.Name] = s.Kind
-	}
-	// Requested capabilities: valid effect class, no duplicate tools.
+	// Requested capabilities: valid effect class, no duplicate tools. Graph
+	// nodes narrow this workflow-level ceiling by logical tool name.
 	seenCaps := make(map[string]bool)
 	for i, c := range wf.Spec.RequestedCapabilities {
 		if c.Tool == "" {
 			return fmt.Errorf("spec.requestedCapabilities[%d].tool is required", i)
+		}
+		if c.Tool == "complete_step" {
+			return fmt.Errorf("spec.requestedCapabilities[%d].tool complete_step is reserved by the platform", i)
 		}
 		if seenCaps[c.Tool] {
 			return fmt.Errorf("spec.requestedCapabilities[%d].tool %q is duplicated", i, c.Tool)
@@ -380,32 +350,31 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 			return fmt.Errorf("spec.requestedCapabilities[%d].actions must include %q or \"*\" for the v1 undecomposed tool action", i, c.Tool)
 		}
 	}
-	// Completion rule.
-	switch wf.Spec.CompletionRule.Type {
-	case v1alpha1.CompletionAllSteps:
-	case v1alpha1.CompletionStepSucceeded:
-		if wf.Spec.CompletionRule.Ref == "" {
-			return fmt.Errorf("spec.completionRule.ref is required when type=step_succeeded")
-		}
-		if _, ok := seenSteps[wf.Spec.CompletionRule.Ref]; !ok {
-			return fmt.Errorf("spec.completionRule.ref %q does not reference a known step", wf.Spec.CompletionRule.Ref)
-		}
-	default:
-		return fmt.Errorf("spec.completionRule.type must be all_steps or step_succeeded")
+	// Validate the complete graph after the workflow-level skill/capability sets
+	// are known. This covers outcome routing, cycles, terminal reachability,
+	// node narrowing, schemas, and agent/human node shape (ARCH-019/020).
+	if err := workflow.ValidateGraph(buildCanonicalSpec(wf)); err != nil {
+		return fmt.Errorf("spec.%w", err)
 	}
-	// Blocker: step must reference an approval_gate step; behavior valid.
-	if wf.Spec.Blocker != nil {
-		kind, ok := seenSteps[wf.Spec.Blocker.Step]
-		if !ok {
-			return fmt.Errorf("spec.blocker.step %q does not reference a known step", wf.Spec.Blocker.Step)
+	// Every referenced Model must exist in the Workflow namespace. Availability
+	// may change after registration; attempt creation resolves and snapshots the
+	// exact currently-available catalog entry again.
+	modelRefs := map[string]struct{}{}
+	if wf.Spec.DefaultModelRef != "" {
+		modelRefs[wf.Spec.DefaultModelRef] = struct{}{}
+	}
+	for _, node := range wf.Spec.Graph.Nodes {
+		if node.ModelRef != "" {
+			modelRefs[node.ModelRef] = struct{}{}
 		}
-		if kind != v1alpha1.WorkflowStepApprovalGate {
-			return fmt.Errorf("spec.blocker.step %q must be an approval_gate step", wf.Spec.Blocker.Step)
-		}
-		switch wf.Spec.Blocker.Behavior {
-		case v1alpha1.BlockerInformation, v1alpha1.BlockerDecision, v1alpha1.BlockerApproval, v1alpha1.BlockerArtifact:
-		default:
-			return fmt.Errorf("spec.blocker.behavior must be information, decision, approval, or artifact")
+	}
+	for ref := range modelRefs {
+		var model v1alpha1.Model
+		if err := r.Get(ctx, types.NamespacedName{Name: ref, Namespace: wf.Namespace}, &model); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("spec modelRef %q does not reference a Model in namespace %q", ref, wf.Namespace)
+			}
+			return fmt.Errorf("read Model %q: %w", ref, err)
 		}
 	}
 	// Presentation (REQ-021): customer-facing labels + persona; no separate
@@ -448,6 +417,11 @@ func (r *WorkflowReconciler) validateCapabilitiesAgainstPool(ctx context.Context
 	grants := make(map[string]v1alpha1.GatewayGrant, len(pool.Spec.GatewayGrants))
 	for _, g := range pool.Spec.GatewayGrants {
 		grants[g.Tool] = g
+	}
+	for _, node := range wf.Spec.Graph.Nodes {
+		if node.WorkspaceTools && !pool.Spec.WorkspaceTools {
+			return fmt.Errorf("graph node %q requests workspaceTools but AgentPool %q disables them", node.Key, wf.Spec.PoolRef)
+		}
 	}
 	for _, c := range wf.Spec.RequestedCapabilities {
 		g, ok := grants[c.Tool]
@@ -527,17 +501,22 @@ func (r *WorkflowReconciler) registerDefinition(ctx context.Context, wf *v1alpha
 // is hashed into the immutable version digest (ARCH-007). The version string
 // itself is excluded — it is the version identity component, not content.
 func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
+	maxTransitions := wf.Spec.Graph.MaxTransitions
+	if maxTransitions == 0 {
+		maxTransitions = 100
+	}
 	spec := workflow.CanonicalSpec{
 		Key:              wf.Spec.Key,
 		PoolRef:          wf.Spec.PoolRef,
+		DefaultModelRef:  wf.Spec.DefaultModelRef,
 		ValueModelRef:    wf.Spec.ValueModelRef,
 		ScopeIdentityKey: workflowScopeIdentityKey(wf),
 		Source: workflow.CanonicalSource{
 			Type: wf.Spec.Source.Type,
 		},
-		CompletionRule: workflow.CanonicalCompletion{
-			Type: wf.Spec.CompletionRule.Type,
-			Ref:  wf.Spec.CompletionRule.Ref,
+		Graph: workflow.CanonicalGraph{
+			EntryNode:      wf.Spec.Graph.EntryNode,
+			MaxTransitions: maxTransitions,
 		},
 		Presentation: workflow.CanonicalPresentation{
 			WorkflowTitle: wf.Spec.Presentation.WorkflowTitle,
@@ -558,13 +537,31 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 			Name: skill.Name, Version: skill.Version, Digest: skill.Digest,
 		})
 	}
-	for _, s := range wf.Spec.Steps {
-		spec.Steps = append(spec.Steps, workflow.CanonicalStep{
-			Name:   s.Name,
-			Kind:   s.Kind,
-			Tool:   s.Tool,
-			Config: rawJSON(s.Config),
-		})
+	for _, n := range wf.Spec.Graph.Nodes {
+		cn := workflow.CanonicalNode{
+			Key: n.Key, Kind: n.Kind, Prompt: n.Prompt, ModelRef: n.ModelRef,
+			Skills: n.Skills, Capabilities: n.Capabilities,
+			WorkspaceTools: n.WorkspaceTools, Outcomes: n.Outcomes,
+			OutputSchema: rawJSON(n.OutputSchema),
+		}
+		if n.Timeout != nil {
+			cn.Timeout = n.Timeout.Duration.String()
+		}
+		if n.HumanGate != nil {
+			cn.HumanGate = &workflow.CanonicalHumanGate{
+				Type:           n.HumanGate.Type,
+				Title:          workflow.CanonicalLocalizedText{EN: n.HumanGate.Title.EN, PT: n.HumanGate.Title.PT},
+				Description:    workflow.CanonicalLocalizedText{EN: n.HumanGate.Description.EN, PT: n.HumanGate.Description.PT},
+				ResponseSchema: rawJSON(n.HumanGate.ResponseSchema),
+			}
+		}
+		spec.Graph.Nodes = append(spec.Graph.Nodes, cn)
+	}
+	for _, e := range wf.Spec.Graph.Edges {
+		spec.Graph.Edges = append(spec.Graph.Edges, workflow.CanonicalEdge{From: e.From, Outcome: e.Outcome, To: e.To})
+	}
+	for _, t := range wf.Spec.Graph.TerminalOutcomes {
+		spec.Graph.TerminalOutcomes = append(spec.Graph.TerminalOutcomes, workflow.CanonicalTerminalOutcome{Node: t.Node, Outcome: t.Outcome})
 	}
 	for _, c := range wf.Spec.RequestedCapabilities {
 		spec.RequestedCapabilities = append(spec.RequestedCapabilities, workflow.CanonicalCapability{
@@ -572,12 +569,6 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 			MaxEffectClass: c.MaxEffectClass,
 			Actions:        c.Actions,
 		})
-	}
-	if wf.Spec.Blocker != nil {
-		spec.Blocker = &workflow.CanonicalBlocker{
-			Step:     wf.Spec.Blocker.Step,
-			Behavior: wf.Spec.Blocker.Behavior,
-		}
 	}
 	return spec
 }

@@ -25,6 +25,10 @@ describe("parseChildRpcFrame (fd 4)", () => {
     expect(f?.type).toBe("toolCall");
     expect(f && f.type === "toolCall" && f.idempotencyKey).toBe("tc1");
   });
+  it("parses a structured stepCompletion report", () => {
+    const f = parseChildRpcFrame({ type: "stepCompletion", requestId: "r3", outcome: "approved", summary: "done", outputJson: "{}", artifactRefs: [] });
+    expect(f?.type).toBe("stepCompletion");
+  });
   it("parses a cancel", () => {
     expect(parseChildRpcFrame({ type: "cancel", requestId: "r1" })).toEqual({ type: "cancel", requestId: "r1" });
   });
@@ -59,6 +63,7 @@ describe("parseSupervisorRpcFrame (fd 5)", () => {
     expect(parseSupervisorRpcFrame({ type: "modelEnd", requestId: "r", status: "ok" })?.type).toBe("modelEnd");
     expect(parseSupervisorRpcFrame({ type: "modelEnd", requestId: "r", status: "weird" })).toBeNull();
     expect(parseSupervisorRpcFrame({ type: "toolResult", requestId: "r", isError: false, resultJson: "{}" })?.type).toBe("toolResult");
+    expect(parseSupervisorRpcFrame({ type: "stepCompletionAck", requestId: "r" })?.type).toBe("stepCompletionAck");
     expect(parseSupervisorRpcFrame({ type: "cancel", requestId: "r" })?.type).toBe("cancel");
   });
 });

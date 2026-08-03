@@ -78,11 +78,7 @@ func TestStore_CreateRunSnapshotsPlan(t *testing.T) {
 		SessionID:       "sess-1",
 		SessionDir:      "/sessions/sess-1",
 		Trigger:         json.RawMessage(`{"type":"graph_email_webhook","inbox":"rfq"}`),
-		Steps: []runtime.StepInput{
-			{Seq: 1, Kind: runtime.StepKindAgentTask},
-			{Seq: 2, Kind: runtime.StepKindToolCall},
-			{Seq: 3, Kind: runtime.StepKindApprovalGate},
-		},
+		Steps:           []runtime.StepInput{{Seq: 1, Kind: runtime.StepKindAgentTask}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, runtime.KindWorkflow, run.Kind)
@@ -96,11 +92,9 @@ func TestStore_CreateRunSnapshotsPlan(t *testing.T) {
 
 	steps, err := store.ListSteps(ctx, run.ID)
 	require.NoError(t, err)
-	require.Len(t, steps, 3)
+	require.Len(t, steps, 1)
 	assert.Equal(t, runtime.StepPending, steps[0].State)
-	assert.Equal(t, []int{1, 2, 3}, []int{steps[0].Seq, steps[1].Seq, steps[2].Seq})
-	assert.Equal(t, []string{runtime.StepKindAgentTask, runtime.StepKindToolCall, runtime.StepKindApprovalGate},
-		[]string{steps[0].Kind, steps[1].Kind, steps[2].Kind})
+	assert.Equal(t, runtime.StepKindAgentTask, steps[0].Kind)
 }
 func TestStore_RunStateMachine(t *testing.T) {
 	store, pool := newTestStore(t)
@@ -237,65 +231,6 @@ func TestStore_TurnOneActivePerSession(t *testing.T) {
 	// Settling a non-running turn is invalid.
 	_, err = store.SettleTurn(ctx, turn.ID, "completed", 1)
 	assert.ErrorIs(t, err, runtime.ErrInvalidTransition)
-}
-
-func TestStore_ApprovalGate(t *testing.T) {
-	store, pool := newTestStore(t)
-	ctx := context.Background()
-	ident := insertIdentity(t, pool, "u/7")
-	run, err := store.CreateRun(ctx, runtime.CreateRunInput{
-		Kind: runtime.KindWorkflow, ScopeIdentityID: ident,
-		SessionID: "s8", SessionDir: "/s8",
-		Steps: []runtime.StepInput{{Seq: 1, Kind: runtime.StepKindApprovalGate}},
-	})
-	require.NoError(t, err)
-	steps, _ := store.ListSteps(ctx, run.ID)
-	gate := steps[0].ID
-
-	_, _ = store.StartRun(ctx, run.ID)
-
-	// RequestApproval: step pending -> pending_approval + run -> awaiting_approval.
-	st, err := store.RequestApproval(ctx, gate)
-	require.NoError(t, err)
-	assert.Equal(t, runtime.StepPendingApproval, st.State)
-	r, _ := store.GetRun(ctx, run.ID)
-	assert.Equal(t, runtime.RunAwaitingApproval, r.State)
-
-	// RequestApproval on a non-gate step is invalid (kind guard).
-	run2, _ := mustCreateChatRun(t, store, ident, "s9")
-	steps2, _ := store.ListSteps(ctx, run2.ID)
-	_, _ = store.StartRun(ctx, run2.ID)
-	_, err = store.RequestApproval(ctx, steps2[0].ID)
-	assert.ErrorIs(t, err, runtime.ErrInvalidTransition)
-
-	// Resolve approved -> step succeeded + run resumed.
-	approver := insertIdentity(t, pool, "u/admin")
-	st, err = store.ResolveApproval(ctx, gate, approver, runtime.DecisionApproved)
-	require.NoError(t, err)
-	assert.Equal(t, runtime.StepSucceeded, st.State)
-	r, _ = store.GetRun(ctx, run.ID)
-	assert.Equal(t, runtime.RunRunning, r.State)
-
-	// Rejected path: a second gate fails the run.
-	run3, err := store.CreateRun(ctx, runtime.CreateRunInput{
-		Kind: runtime.KindWorkflow, ScopeIdentityID: ident,
-		SessionID: "s10", SessionDir: "/s10",
-		Steps: []runtime.StepInput{{Seq: 1, Kind: runtime.StepKindApprovalGate}},
-	})
-	require.NoError(t, err)
-	gate3, _ := store.ListSteps(ctx, run3.ID)
-	_, _ = store.StartRun(ctx, run3.ID)
-	_, _ = store.RequestApproval(ctx, gate3[0].ID)
-	_, err = store.ResolveApproval(ctx, gate3[0].ID, approver, runtime.DecisionRejected)
-	require.NoError(t, err)
-	r, _ = store.GetRun(ctx, run3.ID)
-	assert.Equal(t, runtime.RunFailed, r.State)
-	st3, _ := store.GetStep(ctx, gate3[0].ID)
-	assert.Equal(t, runtime.StepFailed, st3.State)
-
-	// Invalid decision.
-	_, err = store.ResolveApproval(ctx, gate, approver, "maybe")
-	require.Error(t, err)
 }
 
 func TestStore_EventsGaplessAndReplay(t *testing.T) {

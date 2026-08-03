@@ -6,9 +6,10 @@
 // of inherited fds:
 //   - fd 0  : supervisor → child  (control: assignment, abort)
 //   - fd 3  : child → supervisor (audit: event, tokenDelta, heartbeat, result)
-//   - fd 4  : child → supervisor (RPC: modelRequest, toolCall, cancel)   [HOR-395]
+//   - fd 4  : child → supervisor (RPC: modelRequest, toolCall,
+//                                  stepCompletion, cancel)
 //   - fd 5  : supervisor → child  (RPC: modelChunk, modelEnd, toolResult,
-//                                  gatewayTools, cancel)                 [HOR-395]
+//                                  stepCompletionAck, gatewayTools, cancel)
 // stdout and stderr are NOT a protocol channel — they are piped separately and
 // drained as tagged logs (child-process.ts). A stray/spoofed byte sequence
 // cannot masquerade as a frame: the 4-byte length prefix must describe a full,
@@ -84,11 +85,19 @@ export interface ToolCallFrame {
   argumentsJson: string;
   idempotencyKey?: string;
 }
+export interface StepCompletionRpcFrame {
+  type: "stepCompletion";
+  requestId: string;
+  outcome: string;
+  summary: string;
+  outputJson: string;
+  artifactRefs: Array<{ artifactId: string; role: string; metadataJson: string }>;
+}
 export interface CancelRpcFrame {
   type: "cancel";
   requestId: string;
 }
-export type ChildRpcFrame = ModelRequestFrame | ToolCallFrame | CancelRpcFrame;
+export type ChildRpcFrame = ModelRequestFrame | ToolCallFrame | StepCompletionRpcFrame | CancelRpcFrame;
 
 // ---- Supervisor → Child RPC (fd 5) — HOR-395 ----
 //
@@ -135,6 +144,10 @@ export interface ToolResultFrame {
   isError: boolean;
   errorMessage?: string;
 }
+export interface StepCompletionAckFrame {
+  type: "stepCompletionAck";
+  requestId: string;
+}
 export interface SupervisorCancelFrame {
   type: "cancel";
   requestId: string;
@@ -144,6 +157,7 @@ export type SupervisorRpcFrame =
   | ModelChunkFrame
   | ModelEndFrame
   | ToolResultFrame
+  | StepCompletionAckFrame
   | SupervisorCancelFrame;
 
 /**
@@ -241,6 +255,17 @@ export function parseChildRpcFrame(raw: unknown): ChildRpcFrame | null {
       if (typeof r.idempotencyKey === "string") f.idempotencyKey = r.idempotencyKey;
       return f;
     }
+    case "stepCompletion": {
+      if (typeof r.outcome !== "string" || typeof r.summary !== "string" || typeof r.outputJson !== "string" || !Array.isArray(r.artifactRefs)) return null;
+      const artifactRefs: StepCompletionRpcFrame["artifactRefs"] = [];
+      for (const rawRef of r.artifactRefs) {
+        if (!rawRef || typeof rawRef !== "object") return null;
+        const ref = rawRef as Record<string, unknown>;
+        if (typeof ref.artifactId !== "string" || typeof ref.role !== "string" || typeof ref.metadataJson !== "string") return null;
+        artifactRefs.push({ artifactId: ref.artifactId, role: ref.role, metadataJson: ref.metadataJson });
+      }
+      return { type: "stepCompletion", requestId: r.requestId, outcome: r.outcome, summary: r.summary, outputJson: r.outputJson, artifactRefs };
+    }
     case "cancel":
       return { type: "cancel", requestId: r.requestId };
     default:
@@ -301,6 +326,9 @@ export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null
       if (typeof r.errorMessage === "string") f.errorMessage = r.errorMessage;
       return f;
     }
+    case "stepCompletionAck":
+      if (typeof r.requestId !== "string") return null;
+      return { type: "stepCompletionAck", requestId: r.requestId };
     case "cancel":
       if (typeof r.requestId !== "string") return null;
       return { type: "cancel", requestId: r.requestId };

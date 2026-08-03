@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFrame, parseSupervisorFrame, type ChildFrame } from "./ipc.js";
-import { parseAssignment, captureShutdownErrors, createSession, type ExtensionErrorEmitter } from "./child.js";
+import { parseAssignment, captureShutdownErrors, createSession, StepCompletionState, type ExtensionErrorEmitter } from "./child.js";
 import { ChildRpc } from "./child-rpc.js";
 
 const HARNESS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -89,6 +89,30 @@ function parseChild(raw: unknown): ChildFrame | null {
   if (r.type === "result" && typeof r.outcome === "number") return { type: "result", outcome: r.outcome, ...(typeof r.message === "string" ? { message: r.message } : {}) };
   return null;
 }
+
+describe("HOR-254 complete_step control function", () => {
+  it("is required for graph assignments and accepts exactly one declared outcome", async () => {
+    const assignment = parseAssignment(assignmentJson({
+      workItemId: "work-1",
+      nodeExecutionId: "node-exec-1",
+      nodeKey: "review",
+      contextJson: "{}",
+      completionOutcomes: ["approved", "changes"],
+      completionOutputSchemaJson: '{"type":"object"}',
+    }));
+    expect(assignment).toBeDefined();
+    const state = new StepCompletionState(assignment!, { reportStepCompletion: async () => {} });
+    expect(state.required).toBe(true);
+    const execute = state.tool().execute as unknown as (id: string, params: unknown, signal: AbortSignal) => Promise<unknown>;
+    await execute("complete-1", { outcome: "approved", summary: "Review passed", output: { findings: 0 } }, new AbortController().signal);
+    expect(state.reported).toBe(true);
+    await expect(execute("complete-2", { outcome: "approved", summary: "again", output: {} }, new AbortController().signal)).rejects.toThrow(/exactly once/);
+  });
+
+  it("rejects graph assignments without the completion contract", () => {
+    expect(parseAssignment(assignmentJson({ nodeExecutionId: "node-1", nodeKey: "review" }))).toBeUndefined();
+  });
+});
 
 describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () => {
   beforeAll(() => {

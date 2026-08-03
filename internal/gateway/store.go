@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -523,9 +524,13 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID,
 	// different same-pool worker, or an old-generation caller is denied.
 	var assignedWorker string
 	var assignedGen uint64
+	var nodeExecutionID *string
+	var capabilityRequest []byte
 	err = s.pool.QueryRow(ctx, `
-		SELECT worker_id, fencing_generation FROM runtime.turn_assignments
-		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker, &assignedGen)
+		SELECT worker_id, fencing_generation, node_execution_id, capability_request
+		FROM runtime.turn_assignments
+		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).
+		Scan(&assignedWorker, &assignedGen, &nodeExecutionID, &capabilityRequest)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CallerResolution{}, ErrScopeDenied
@@ -539,11 +544,19 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID,
 	if err != nil {
 		return CallerResolution{}, ErrScopeDenied
 	}
-	// Turn path has no workflow-requested narrowing: all pool-granted (and
-	// attempt-pinned) tools are in scope. nil = no narrowing. The caller scope
-	// is identity-derived (turn) + the validated turn id; callers use these for
-	// the ledger key rather than caller-supplied values.
-	return CallerResolution{Pool: pool, PermittedCapabilities: nil, AttemptID: runID, CallerScope: CallerScopeTurn, CallerScopeID: turnID}, nil
+	// Graph turns carry an exact node capability subset in the durable active
+	// assignment. Empty is explicit deny-all. Legacy chat turns have no graph
+	// node and retain nil=no workflow narrowing.
+	var permitted []Capability
+	if nodeExecutionID != nil {
+		permitted = []Capability{}
+		if len(capabilityRequest) > 0 {
+			if err := json.Unmarshal(capabilityRequest, &permitted); err != nil {
+				return CallerResolution{}, ErrScopeDenied
+			}
+		}
+	}
+	return CallerResolution{Pool: pool, PermittedCapabilities: permitted, AttemptID: runID, CallerScope: CallerScopeTurn, CallerScopeID: turnID}, nil
 }
 
 // ResolveWorkflowStepScope resolves a control-plane workflow-step caller against
@@ -628,52 +641,80 @@ func (s *Store) UpsertRunPoolAssignment(ctx context.Context, runID, poolID strin
 // SnapshotAttemptTools resolves the attempt's immutable tool-version snapshot:
 // available_tool_versions (healthy at snapshot time) ∩ pool_grants ∩ permitted,
 // and pins each (attempt, tool) to its exact digest. Idempotent (ON CONFLICT
-// DO NOTHING — a re-snapshot never mutates an existing pin). The production
-// caller is attempt creation (HOR-254 / workflow runtime); tests call directly.
+// DO NOTHING — a re-snapshot never mutates an existing pin). HOR-254 applies
+// the same selection inside its larger atomic attempt-creation transaction;
+// this method remains the gateway-owned helper used by chat/admin paths/tests.
+//
+//nolint:gocyclo // Snapshotting intentionally keeps resolution, eligibility, and atomic pinning in one fail-closed operation.
 func (s *Store) SnapshotAttemptTools(ctx context.Context, attemptID, poolID string, permittedTools []string) error {
+	if permittedTools != nil && len(permittedTools) == 0 {
+		return nil // explicit workflow deny-all: pin nothing
+	}
+	unique := map[string]struct{}{}
 	if permittedTools == nil {
-		permittedTools = []string{}
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT tv.name, tv.digest
-		FROM toolgateway.available_tool_versions tv
-		JOIN toolgateway.pool_grants pg
-		  ON pg.tool_name = tv.name AND pg.deleted_at IS NULL AND pg.pool_id = $1
-		WHERE CASE tv.effect_class
-		        WHEN 'read_only' THEN 1
-		        WHEN 'idempotent_write' THEN 2
-		        WHEN 'non_idempotent_write' THEN 3
-		      END <= CASE pg.max_effect_class
-		        WHEN 'read_only' THEN 1
-		        WHEN 'idempotent_write' THEN 2
-		        WHEN 'non_idempotent_write' THEN 3
-		      END
-		  AND ($2::text[] IS NULL OR $2::text[] = '{}' OR tv.name = ANY($2::text[]))`,
-		poolID, permittedTools)
-	if err != nil {
-		return fmt.Errorf("snapshot attempt tools: %w", err)
-	}
-	defer rows.Close()
-	type pin struct{ name, digest string }
-	var pins []pin
-	for rows.Next() {
-		var p pin
-		if err := rows.Scan(&p.name, &p.digest); err != nil {
+		// Legacy chat has no workflow capability list: snapshot every currently
+		// eligible pool tool, still choosing exactly one deterministic version.
+		rows, err := s.pool.Query(ctx, `
+			SELECT DISTINCT tv.name FROM toolgateway.available_tool_versions tv
+			JOIN toolgateway.pool_grants pg ON pg.tool_name=tv.name AND pg.pool_id=$1 AND pg.deleted_at IS NULL
+			WHERE CASE tv.effect_class WHEN 'read_only' THEN 1 WHEN 'idempotent_write' THEN 2 ELSE 3 END
+			   <= CASE pg.max_effect_class WHEN 'read_only' THEN 1 WHEN 'idempotent_write' THEN 2 ELSE 3 END`, poolID)
+		if err != nil {
+			return fmt.Errorf("snapshot attempt tools: list eligible: %w", err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			unique[name] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
 			return err
 		}
-		pins = append(pins, p)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, p := range pins {
-		if _, err := s.pool.Exec(ctx, `
-			INSERT INTO toolgateway.attempt_tool_pins (attempt_id, tool_name, tool_version_digest)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (attempt_id, tool_name) DO NOTHING`,
-			attemptID, p.name, p.digest); err != nil {
-			return fmt.Errorf("pin attempt tool %s: %w", p.name, err)
+		rows.Close()
+	} else {
+		for _, name := range permittedTools {
+			unique[name] = struct{}{}
 		}
+	}
+	names := make([]string, 0, len(unique))
+	for name := range unique {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("snapshot attempt tools: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, name := range names {
+		var digest string
+		err := tx.QueryRow(ctx, `
+			SELECT tv.digest
+			FROM toolgateway.available_tool_versions tv
+			JOIN toolgateway.pool_grants pg
+			  ON pg.tool_name=tv.name AND pg.deleted_at IS NULL AND pg.pool_id=$1
+			WHERE tv.name=$2
+			  AND CASE tv.effect_class WHEN 'read_only' THEN 1 WHEN 'idempotent_write' THEN 2 ELSE 3 END
+			      <= CASE pg.max_effect_class WHEN 'read_only' THEN 1 WHEN 'idempotent_write' THEN 2 ELSE 3 END
+			ORDER BY tv.created_at DESC, tv.id DESC LIMIT 1`, poolID, name).Scan(&digest)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("snapshot attempt tools: requested tool %q has no eligible healthy version", name)
+		}
+		if err != nil {
+			return fmt.Errorf("snapshot attempt tools: resolve %q: %w", name, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.attempt_tool_pins (attempt_id, tool_name, tool_version_digest)
+			VALUES ($1,$2,$3) ON CONFLICT (attempt_id,tool_name) DO NOTHING`, attemptID, name, digest); err != nil {
+			return fmt.Errorf("pin attempt tool %s: %w", name, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("snapshot attempt tools: commit: %w", err)
 	}
 	return nil
 }
@@ -705,6 +746,9 @@ func (s *Store) GetAttemptToolPin(ctx context.Context, attemptID, toolName strin
 func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID string, permitted []Capability) ([]ToolVersion, error) {
 	// Names for the SQL name filter (nil = turn path: no workflow narrowing).
 	var names []string
+	if permitted != nil {
+		names = []string{} // preserve explicit deny-all distinctly from nil
+	}
 	capByTool := make(map[string]Capability, len(permitted))
 	for _, c := range permitted {
 		names = append(names, c.Tool)

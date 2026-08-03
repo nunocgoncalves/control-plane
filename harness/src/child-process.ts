@@ -300,6 +300,13 @@ function assignmentToJson(at: AssignTurn): unknown {
     workspaceTools: at.workspaceTools,
     scopeIdentityId: at.scopeIdentityId,
     runId: at.runId,
+    workItemId: at.workItemId,
+    nodeExecutionId: at.nodeExecutionId,
+    nodeKey: at.nodeKey,
+    contextJson: at.contextJson,
+    completionOutcomes: at.completionOutcomes,
+    completionOutputSchemaJson: at.completionOutputSchemaJson,
+    skills: at.skills.map((skill) => ({ name: skill.name, version: skill.version, digest: skill.digest })),
     message: at.message,
     images: at.images.map((img) => ({ data: Buffer.from(img.data).toString("base64"), mimeType: img.mimeType })),
   };

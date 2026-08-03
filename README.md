@@ -29,6 +29,10 @@ lands in its own ticket. HOR-249 adds the durable-dispatch Work server
 dispatch, durable TurnEvent ACK/dedup, cancellation/worker-loss, the
 active-assignment context (`runtime.turn_assignments`) that binds a running turn
 to the verified worker + fencing generation, and the dispatch reconciler.
+HOR-254 evolves that foundation into a single-active-node graph runtime and adds
+the durable `work` domain: stable work items, first-class attempts, append-only
+node visits/transitions, blockers, feedback, artifact references, business
+SSE events, and an estimated-value ledger.
 
 ## Binaries
 
@@ -62,8 +66,9 @@ internal/gateway/   tool gateway: registry, authorization, credential resolution
 internal/dispatch/  durable dispatch Work server: warm-worker bidi stream, one-credit dispatch, worker fencing, active-assignment context, TurnEvent ACK/dedup, cancellation/worker-loss (HOR-249)
 internal/spiffe/    shared SPIFFE/mTLS identity verifier (HOR-392; reused by HOR-249)
 internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permissionpolicy, modelbackend, model
-internal/runtime/   durable turn runtime store (run/step/turn SM + event log) — HOR-246
-internal/server/    chi HTTP routes (health, jwks, token, admin CRUD)
+internal/runtime/   durable turn + graph runtime state and technical event log — HOR-246/254
+internal/work/      work items, graph orchestration, blockers, feedback, value, business events — HOR-254
+internal/server/    chi HTTP routes (health, identity/admin, work REST + SSE)
 internal/logging/   shared slog logger + logr bridge
 internal/version/   build-time version metadata
 internal/testutil/  shared Postgres test helper (testcontainers)
@@ -298,10 +303,11 @@ fail-closed to deny a still-valid supervisor cert from a different same-pool
 worker or a fenced/old-generation caller for a running turn — closing the
 HOR-398 / DEC-041 interim residual.
 
-Trigger sources are NOT in scope: email (HOR-356), UI (HOR-396), operator-artifact
-(HOR-393), workflow definitions (HOR-252), and the work-item/attempt model
-(HOR-254) write the runtime rows the dispatch consumes; `cmd/dispatch` is the
-pure dispatch/Work-server/assignment/fencing engine beneath them.
+Trigger adapters remain separate slices: email (HOR-356) and operator-artifact
+(HOR-393) call the idempotent work-start API. HOR-254's graph service prepares
+the active node; `cmd/dispatch` assigns only `agent_task` nodes to workers while
+`human_gate` and consequence-confirmation nodes remain durable control-plane
+state. Worker fencing/ACK semantics remain the HOR-249 boundary.
 
 ## CRD landscape
 
@@ -315,10 +321,9 @@ operator: `AgentPool` (HOR-245), `ModelBackend` (HOR-306), `Model`
 
 A `Workflow` is an operator-defined, versioned customer operational workflow
 (REQ-001). The operator deploys one from product/client overlay artifacts:
-its source adapter/trigger, exact immutable skill references, deterministic
-steps + agent tasks, requested gateway capabilities, customer-facing
-workflow/persona labels, completion rule, blocker behavior, and value-model
-reference.
+its source adapter/trigger, exact immutable skill references, default/per-node
+model selection, requested gateway capabilities, customer-facing presentation,
+value-model reference, and a single-active-node directed graph.
 
 - Definitions are **immutable per version** (ARCH-007): `(key, version)` is the
   unique version identity. A content change must be published under a new
@@ -327,15 +332,23 @@ reference.
   is idempotent; distinct versions may share a content digest. Every version of
   one logical `key` retains the same durable workflow scope identity, so latest-
   version resolution cannot cross workflow/customer ownership boundaries.
-- **Validation runs before execution**: unknown source type / step kind /
-  capability / completion rule / binding fails with an inspectable
-  `validationStatus: invalid`. v1 source types are `graph_email` (Walter) and
+- **Validation runs before execution**: unknown source/model/node kind,
+  capability/skill narrowing, malformed JSON Schema, missing/duplicate outcome
+  route, unreachable node, non-terminating component, or binding fails with an
+  inspectable `validationStatus: invalid`. v1 source types are `graph_email` (Walter) and
   `operator_artifact` (XBS) — no customer-specific schema — and a recognized
   type becomes Ready only when its adapter is installed in the deployment.
+- `spec.graph` declares one entry node, `agent_task`/`human_gate` nodes,
+  outcome-routed edges, explicit terminal outcomes, and a bounded transition
+  count. Cycles are supported; parallel branches/joins are not. Every visit is
+  append-only. Gateway tools are agent-callable capabilities, never graph nodes.
+- Every agent node finishes through the reserved `complete_step` control
+  function. Its declared outcome and JSON output are validated before the
+  engine atomically follows an edge. A clean worker outcome is also required.
 - A workflow **cannot request capabilities beyond its `poolRef` AgentPool**:
   each requested tool must be granted and its effect/action narrowing must not
-  exceed the pool grant; the gateway enforces the complete workflow narrowing
-  at discovery and invocation (ARCH-016/018; REQ-010).
+  exceed the pool grant; every node exposes an explicit subset, enforced from
+  the durable turn assignment through gateway discovery/invocation.
 - **Trigger bindings are source-specific typed, non-secret routes** (`graphEmail.mailboxAddress`
   or `operatorArtifact.sourceID`). There is no opaque trigger config/secret
   persistence path; credentials resolve through AgentPool `credentialBindings`
@@ -349,13 +362,45 @@ reference.
 - `ResolveForAttempt(key, version)` returns the exact versioned canonical
   workflow/config, immutable skill identities, typed trigger bindings, scope
   identity, and complete capability narrowing for attempt creation (HOR-254
-  composes it with the gateway's `SnapshotAttemptTools`).
+  atomically composes it with deterministic latest-healthy tool pinning).
 - Customer-facing metadata (workflow title, persona name/avatar, locale)
   supports the single-workflow Dashboard **without a separate Persona CRD**
   (REQ-021; HOR-363 canceled).
 
 See `config/samples/platform_v1alpha1_workflow.yaml` for Walter `graph_email`
 and XBS `operator_artifact` examples.
+
+## Durable customer work (HOR-254)
+
+One customer work item owns one or more attempts; each attempt shares its UUID
+with exactly one `runtime.workflow_run`. Current To do / In progress / Blocked /
+Done / Failed presentation is projected from the current attempt plus its open
+actionable blocker, avoiding a duplicate mutable state machine. Failed remains
+outside the four normal columns.
+
+Work APIs require a `work`-scope bearer key and operation capability
+(`work:read`, `work:start`, `work:respond`, `work:feedback`, or `work:retry`):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/work-items` | Idempotent workflow start (`Idempotency-Key` required) |
+| `GET` | `/v1/work-items` / `/v1/work-items/{id}` | Search/list and customer-safe detail |
+| `GET` | `/v1/work-items/{id}/attempts` | Preserved attempt history |
+| `GET` | `/v1/work-attempts/{id}/nodes` | Append-only graph-node visits and structured outputs |
+| `GET` | `/v1/work-items/{id}/timeline` | Customer-safe business timeline |
+| `GET` | `/v1/work-items/{id}/consequences` | Customer-safe external-action tokens required by a revision |
+| `GET` | `/v1/work-items/{id}/blocker` | Current actionable request |
+| `POST` | `/v1/work-blockers/{id}/responses` | Resolve human/consequence gate |
+| `POST` | `/v1/work-items/{id}/feedback` | Save feedback without starting work |
+| `POST` | `/v1/work-items/{id}/revisions` | Explicit revised attempt with exact consequence confirmation |
+| `GET` | `/v1/work-dashboard` | State counts plus explainable estimated value/trend |
+| `GET` | `/v1/work-events` | Resumable SSE (`Last-Event-ID`) of business-safe events |
+| `POST` | `/v1/value-models` | Admin-only immutable value-model version creation |
+
+`runtime.events` and gateway ledgers remain technical/operator records and are
+never returned by customer work APIs. `work.timeline_events` is append-only and
+contains only semantic business codes/parameters. HOR-399 owns artifact bytes
+and metadata; HOR-254 stores immutable references and trace relationships.
 
 ## Git workflow
 

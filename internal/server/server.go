@@ -16,6 +16,7 @@ import (
 
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
+	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
 // Services are the dependencies injected into the HTTP API.
@@ -25,6 +26,7 @@ type Services struct {
 	Permissions *permissions.Store
 	Issuer      *identity.Issuer
 	Mode        string // enrolled | open
+	Work        *workstore.Store
 }
 
 type contextKey string
@@ -40,6 +42,7 @@ type Handler struct {
 	perms    *permissions.Store
 	issuer   *identity.Issuer
 	resolver *identity.Resolver
+	work     *workstore.Store
 }
 
 // New builds the HTTP API router.
@@ -59,7 +62,18 @@ func New(svc Services) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(func(next http.Handler) http.Handler {
+		// SSE is a long-lived resumable stream; normal API requests retain the
+		// bounded request timeout.
+		timed := middleware.Timeout(30 * time.Second)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/v1/work-events" {
+				next.ServeHTTP(w, req)
+				return
+			}
+			timed.ServeHTTP(w, req)
+		})
+	})
 
 	r.Get("/healthz", healthz)
 	r.Get("/readyz", readyz(svc.Pool))
@@ -69,6 +83,7 @@ func New(svc Services) http.Handler {
 		perms:    svc.Permissions,
 		issuer:   svc.Issuer,
 		resolver: identity.NewResolver(svc.Store, svc.Mode),
+		work:     svc.Work,
 	}
 
 	r.Get("/.well-known/jwks.json", h.jwks)
@@ -76,6 +91,22 @@ func New(svc Services) http.Handler {
 	// Delegated token endpoint: service accounts (scope=token) authenticate and
 	// mint a JWT for a resolved surface user.
 	r.With(h.auth(identity.ScopeToken)).Post("/v1/token", h.token)
+
+	// Customer work APIs use their own authenticated scope and operation-level
+	// permission checks. Actor identity is always the authenticated key owner.
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items", h.listWorkItems)
+	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-items", h.startWorkItem)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}", h.getWorkItem)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/attempts", h.listWorkAttempts)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-attempts/{id}/nodes", h.listWorkNodes)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/timeline", h.listWorkTimeline)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/consequences", h.getWorkConsequences)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/blocker", h.getWorkBlocker)
+	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-items/{id}/feedback", h.saveWorkFeedback)
+	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-items/{id}/revisions", h.createWorkRevision)
+	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-blockers/{id}/responses", h.respondWorkBlocker)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-dashboard", h.getWorkDashboard)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-events", h.streamWorkEvents)
 
 	// Admin endpoints (scope=admin).
 	r.Route("/v1", func(r chi.Router) {
@@ -87,6 +118,7 @@ func New(svc Services) http.Handler {
 		r.Post("/api-keys", h.createAPIKey)
 		r.Delete("/api-keys/{id}", h.deleteAPIKey)
 		r.Get("/permissions/identities/{id}", h.getCapabilities)
+		r.Post("/value-models", h.createValueModel)
 	})
 
 	return r

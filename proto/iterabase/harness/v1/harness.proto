@@ -114,6 +114,7 @@ message TurnEvent {
     CompactionFinished compaction_finished = 19;
     HarnessError harness_error = 20;
     WorkerOutcome worker_outcome = 21;
+    StepCompletion step_completion = 22; // HOR-254 reserved complete_step report
   }
 }
 
@@ -228,6 +229,22 @@ enum Retryability {
 // successful assistant message followed by failed cleanup is FAILED. The CP may
 // independently terminalize (cancellation/worker-loss/lease); the worker's late
 // outcome is after_terminal audit and cannot overwrite CP terminal state.
+// StepCompletion is emitted exactly once by the reserved complete_step control
+// function. It is a completion candidate; the CP advances the graph only after
+// a clean WorkerOutcome=COMPLETED for the same turn (ARCH-020).
+message StepCompletion {
+  string outcome = 1;
+  string summary = 2;
+  string output_json = 3;
+  repeated StepArtifactRef artifact_refs = 4;
+}
+
+message StepArtifactRef {
+  string artifact_id = 1;
+  string role = 2;
+  string metadata_json = 3;
+}
+
 message WorkerOutcome {
   Outcome outcome = 1;
   string message = 2;  // human/audit detail
@@ -299,7 +316,20 @@ message AssignTurn {
   string scope_identity_id = 7;       // validation/audit
   string message = 8;                 // the user/task message
   repeated Image images = 9;          // optional; the email demo is text-only
-  string run_id = 10;                 // workflow run id; v1 attempt_id (HOR-392 SD-1) + X-Iterabase-Run-Id (HOR-398)
+  string run_id = 10;                 // workflow run id == attempt_id (HOR-254)
+  string node_execution_id = 11;      // exact append-only graph-node visit; empty for chat
+  string node_key = 12;               // immutable graph node key
+  string context_json = 13;           // bounded durable source/previous/latest-output context
+  repeated string completion_outcomes = 14; // allowed complete_step outcomes
+  string completion_output_schema_json = 15; // JSON Schema for complete_step.output
+  repeated SkillRef skills = 16;      // exact immutable node skill subset
+  string work_item_id = 17;           // stable customer-facing work item identity
+}
+
+message SkillRef {
+  string name = 1;
+  string version = 2;
+  string digest = 3;
 }
 
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.

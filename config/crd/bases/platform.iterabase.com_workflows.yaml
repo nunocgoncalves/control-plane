@@ -19,11 +19,8 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          Workflow is an operator-defined, versioned customer operational workflow
-          (REQ-001). The control-plane operator materializes it into the Postgres
-          workflow store with an immutable version identity and validates it against
-          the referenced AgentPool before execution.
+        description: Workflow is an immutable, versioned operator-authored workflow
+          graph.
         properties:
           apiVersion:
             description: |-
@@ -44,106 +41,204 @@ spec:
             type: object
           spec:
             description: |-
-              WorkflowSpec defines the desired state of a Workflow: one versioned
-              customer operational workflow deployed from product/client overlay artifacts
-              (REQ-001). It carries its source adapter/trigger, deterministic steps and
-              agent tasks, requested gateway capabilities, customer-facing workflow/persona
-              labels, completion rule, blocker behavior, and value-model reference. The
-              reconciler materializes it into the Postgres workflow schema (Git -> DB
-              bridge) with an immutable version identity, validates it before execution,
-              and binds it to the referenced AgentPool's maximum gateway grants
-              (ARCH-018). Customer secret VALUES are never embedded here; authenticated
-              source access resolves credentials through the AgentPool's credentialBindings
-              via the gateway (ARCH-008).
+              WorkflowSpec defines one immutable, operator-authored customer workflow.
+              Workflow execution is a single-active-node directed graph (ARCH-019): agent
+              tasks use gateway tools as capabilities, while human gates pause the same
+              attempt for a customer response. There is deliberately no top-level
+              tool_call node.
             properties:
-              blocker:
+              defaultModelRef:
                 description: |-
-                  blocker defines the approval-gate behavior that produces a customer-
-                  actionable Blocked state (REQ-020). Optional; absent means the workflow
-                  has no human blocker step.
+                  defaultModelRef is the Model natural key used by agent nodes that do not
+                  declare a narrower override. It is required when the graph has agent nodes.
+                type: string
+              graph:
+                description: graph is the immutable executable workflow graph.
                 properties:
-                  behavior:
-                    description: behavior is what the blocker asks the customer for.
-                    enum:
-                    - information
-                    - decision
-                    - approval
-                    - artifact
-                    type: string
-                  step:
-                    description: |-
-                      step is the name of the approval_gate step that produces a blocker. It
-                      must reference an existing step of kind=approval_gate.
+                  edges:
+                    description: edges deterministically map a reported outcome to
+                      the next node.
+                    items:
+                      description: WorkflowEdge maps exactly one node outcome to a
+                        target node.
+                      properties:
+                        from:
+                          type: string
+                        outcome:
+                          type: string
+                        to:
+                          type: string
+                      required:
+                      - from
+                      - outcome
+                      - to
+                      type: object
+                    type: array
+                  entryNode:
+                    description: entryNode is the first node for every initial or
+                      revised attempt.
                     minLength: 1
                     type: string
+                  maxTransitions:
+                    default: 100
+                    description: maxTransitions bounds edge traversals in one attempt.
+                    format: int32
+                    maximum: 10000
+                    minimum: 1
+                    type: integer
+                  nodes:
+                    description: nodes are immutable node definitions keyed within
+                      this graph.
+                    items:
+                      description: WorkflowNode is either an agent task or a customer-actionable
+                        human gate.
+                      properties:
+                        capabilities:
+                          description: |-
+                            capabilities narrows spec.requestedCapabilities by tool name for this
+                            agent node. Empty means expose none, not inherit all.
+                          items:
+                            type: string
+                          type: array
+                        humanGate:
+                          description: humanGate is required for human_gate and forbidden
+                            for agent_task.
+                          properties:
+                            description:
+                              description: LocalizedText carries approved English/Portuguese
+                                customer copy.
+                              properties:
+                                en:
+                                  type: string
+                                pt:
+                                  type: string
+                              type: object
+                            responseSchema:
+                              description: responseSchema validates the response payload.
+                              x-kubernetes-preserve-unknown-fields: true
+                            title:
+                              description: title and description are localized customer-facing
+                                copy.
+                              properties:
+                                en:
+                                  type: string
+                                pt:
+                                  type: string
+                              type: object
+                            type:
+                              description: type is the customer action required.
+                              enum:
+                              - information
+                              - decision
+                              - approval
+                              - artifact
+                              type: string
+                          required:
+                          - description
+                          - title
+                          - type
+                          type: object
+                        key:
+                          description: key is unique within the graph and stable across
+                            repeated visits.
+                          minLength: 1
+                          type: string
+                        kind:
+                          description: kind selects agent execution or a durable customer
+                            blocker.
+                          enum:
+                          - agent_task
+                          - human_gate
+                          type: string
+                        modelRef:
+                          description: modelRef optionally overrides spec.defaultModelRef
+                            for this agent node.
+                          type: string
+                        outcomes:
+                          description: outcomes are the only values complete_step
+                            (or a human response) may emit.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                        outputSchema:
+                          description: |-
+                            outputSchema validates complete_step.output for agent_task nodes. It is a
+                            JSON Schema document and defaults to an unconstrained object when absent.
+                          x-kubernetes-preserve-unknown-fields: true
+                        prompt:
+                          description: prompt is required for agent_task and forbidden
+                            for human_gate.
+                          type: string
+                        skills:
+                          description: skills narrows spec.skills by logical name
+                            for this agent node.
+                          items:
+                            type: string
+                          type: array
+                        timeout:
+                          description: timeout bounds one node execution. Zero uses
+                            the runtime default.
+                          type: string
+                        workspaceTools:
+                          description: |-
+                            workspaceTools requests the fixed read/write/edit/bash set. The referenced
+                            AgentPool must enable it; a workflow/node can never widen the pool.
+                          type: boolean
+                      required:
+                      - key
+                      - kind
+                      - outcomes
+                      type: object
+                    minItems: 1
+                    type: array
+                  terminalOutcomes:
+                    description: terminalOutcomes complete the attempt as Done without
+                      claiming correctness.
+                    items:
+                      description: WorkflowTerminalOutcome marks one node outcome
+                        as attempt completion.
+                      properties:
+                        node:
+                          type: string
+                        outcome:
+                          type: string
+                      required:
+                      - node
+                      - outcome
+                      type: object
+                    minItems: 1
+                    type: array
                 required:
-                - behavior
-                - step
-                type: object
-              completionRule:
-                description: |-
-                  completionRule defines when a run is considered complete (REQ-006/030).
-                  Completion is not correctness.
-                properties:
-                  ref:
-                    description: |-
-                      ref is the step name referenced when type=step_succeeded. Required for
-                      step_succeeded; ignored otherwise.
-                    type: string
-                  type:
-                    description: |-
-                      type is the completion rule type. all_steps = the run completes when all
-                      non-skipped steps succeed; step_succeeded = the run completes when the
-                      named step (ref) succeeds.
-                    enum:
-                    - all_steps
-                    - step_succeeded
-                    type: string
-                required:
-                - type
+                - entryNode
+                - nodes
+                - terminalOutcomes
                 type: object
               key:
                 description: |-
-                  key is the stable natural key of the workflow (e.g. "walter/quotation").
-                  It identifies the workflow across versions; a new version publishes a new
-                  immutable definition row under the same key. It MUST NOT contain ":" — the
-                  definition_key wire format is "<key>:<version>", so ":" would make the
-                  concatenated key ambiguous (REQ-010 scope isolation).
+                  key is the stable logical workflow key. It excludes ':' because the
+                  cross-schema definition identity is "<key>:<version>".
                 minLength: 1
                 pattern: ^[^:]+$
                 type: string
               poolRef:
-                description: |-
-                  poolRef names the AgentPool (in the Workflow's namespace) that is the
-                  deployable security/integration boundary for this workflow (ARCH-018).
-                  Requested capabilities are validated against this pool's gatewayGrants,
-                  and the workflow's permitted tools are bound to this pool.
+                description: poolRef names the AgentPool security/integration boundary.
                 type: string
               presentation:
-                description: |-
-                  presentation carries the customer-facing workflow/persona labels for the
-                  single-workflow Dashboard (REQ-021). No separate Persona CRD exists in v1.
+                description: presentation carries customer-facing workflow/persona
+                  labels.
                 properties:
                   locale:
-                    description: locale is the presentation locale (REQ-022).
                     enum:
                     - en
                     - pt
                     type: string
                   personaAvatar:
-                    description: |-
-                      personaAvatar is the customer-facing persona avatar (a URL or reference).
-                      Optional.
                     type: string
                   personaName:
-                    description: |-
-                      personaName is the customer-facing persona name. Worker/model/service
-                      identities never replace the persona in normal UI (REQ-021).
                     minLength: 1
                     type: string
                   workflowTitle:
-                    description: workflowTitle is the customer-facing workflow title
-                      shown on the Dashboard.
                     minLength: 1
                     type: string
                 required:
@@ -152,38 +247,23 @@ spec:
                 type: object
               requestedCapabilities:
                 description: |-
-                  requestedCapabilities are the gateway tools the workflow requests
-                  (REQ-010). Each is validated against the referenced AgentPool's
-                  gatewayGrants: a workflow cannot request a tool, effect class, or action
-                  beyond its pool. The complete narrowing is bound via
-                  toolgateway.workflow_pool_bindings.
+                  requestedCapabilities are the workflow-level maximum gateway capabilities.
+                  Agent nodes may expose a subset by tool name and can never widen this set.
                 items:
-                  description: |-
-                    RequestedCapability is one gateway tool the workflow requests (REQ-010).
-                    Validated against the AgentPool's gatewayGrants: the tool must be granted and
-                    the requested effect class/action set must not exceed the pool's maximum.
+                  description: RequestedCapability is one workflow-level gateway capability
+                    ceiling.
                   properties:
                     actions:
-                      description: |-
-                        actions is an optional action narrowing. The gateway intersects it with
-                        pool/customer policy at discovery and invocation. Under the approved v1
-                        descriptor contract an undecomposed tool's effective action is its tool
-                        name; an empty list applies only the effect-class ceiling.
                       items:
                         type: string
                       type: array
                     maxEffectClass:
-                      description: |-
-                        maxEffectClass is the maximum effect class the workflow requests for this
-                        tool. It must not exceed the pool grant's maxEffectClass.
                       enum:
                       - read_only
                       - idempotent_write
                       - non_idempotent_write
                       type: string
                     tool:
-                      description: tool is the logical gateway tool/capability name
-                        (e.g. "graph.read").
                       minLength: 1
                       type: string
                   required:
@@ -193,30 +273,18 @@ spec:
                 type: array
               skills:
                 description: |-
-                  skills are the exact immutable skill artifacts this workflow may load.
-                  Each reference carries a logical name plus version and content digest so
-                  attempt creation can snapshot skill identity alongside the immutable
-                  workflow/config and gateway-tool pins (REQ-003/REQ-011; HOR-252).
+                  skills are exact immutable overlay skill identities available to the
+                  workflow. Agent nodes may expose a subset by logical name.
                 items:
-                  description: |-
-                    SkillReference identifies one immutable overlay-delivered skill. Name is the
-                    logical skill identity; version and digest together make updates explicit and
-                    attributable instead of silently changing an existing attempt (REQ-003/011).
-                    Skill-specific non-secret configuration belongs in the immutable workflow
-                    step config and is therefore included in the workflow definition digest.
+                  description: SkillReference identifies one immutable overlay skill.
                   properties:
                     digest:
-                      description: digest is the immutable skill artifact content
-                        digest.
                       minLength: 1
                       type: string
                     name:
-                      description: name is the logical skill name/path in the product/client
-                        overlay.
                       minLength: 1
                       type: string
                     version:
-                      description: version is the operator-published skill version.
                       minLength: 1
                       type: string
                   required:
@@ -226,53 +294,32 @@ spec:
                   type: object
                 type: array
               source:
-                description: |-
-                  source defines the source adapter/trigger that starts a run of this
-                  workflow (REQ-002). v1 supports Microsoft Graph email (Walter) and an
-                  operator-supplied exported artifact (XBS) without inventing customer-
-                  specific schema.
+                description: source defines the installed source adapter and non-secret
+                  trigger routes.
                 properties:
                   triggerBindings:
-                    description: |-
-                      triggerBindings register non-secret trigger routes for this source. A
-                      binding carries only non-secret routing identifiers (mailbox address,
-                      artifact source id); customer secret VALUES are never embedded —
-                      authenticated source access resolves credentials through the AgentPool's
-                      credentialBindings via the gateway (ARCH-008).
                     items:
-                      description: |-
-                        TriggerBinding is one source-specific, non-secret trigger route registration.
-                        Exactly one source payload must be set and it must match WorkflowSource.type.
-                        There is deliberately no opaque config field: raw credential values cannot
-                        enter the Workflow CR or Postgres through trigger registration (ARCH-008).
+                      description: TriggerBinding is one typed, non-secret source
+                        route.
                       properties:
                         graphEmail:
-                          description: |-
-                            graphEmail identifies a Microsoft Graph mailbox route. It is required when
-                            source.type=graph_email and forbidden for other source types.
+                          description: GraphEmailTriggerBinding is a non-secret Graph
+                            mailbox route.
                           properties:
                             mailboxAddress:
-                              description: mailboxAddress is the mailbox whose validated
-                                notifications start work.
                               minLength: 3
                               type: string
                           required:
                           - mailboxAddress
                           type: object
                         name:
-                          description: name is the logical binding name, unique within
-                            the workflow.
                           minLength: 1
                           type: string
                         operatorArtifact:
-                          description: |-
-                            operatorArtifact identifies a generic operator-supplied artifact source.
-                            It is required when source.type=operator_artifact and forbidden for other
-                            source types; it does not encode customer-specific artifact schema.
+                          description: OperatorArtifactTriggerBinding is a non-secret
+                            exported-artifact route.
                           properties:
                             sourceID:
-                              description: sourceID identifies the configured artifact
-                                intake route.
                               minLength: 1
                               type: string
                           required:
@@ -283,11 +330,6 @@ spec:
                       type: object
                     type: array
                   type:
-                    description: |-
-                      type is the source adapter type. v1 supports graph_email (Microsoft Graph
-                      email, Walter) and operator_artifact (operator-supplied exported artifact,
-                      XBS). Public ingress validates/persists/acknowledges/starts in the control
-                      plane; authenticated outbound reads/actions use the gateway (ARCH-012).
                     enum:
                     - graph_email
                     - operator_artifact
@@ -295,113 +337,45 @@ spec:
                 required:
                 - type
                 type: object
-              steps:
-                description: |-
-                  steps is the ordered deterministic plan (agent tasks / tool calls /
-                  approval gates) the workflow executes. Mirrors runtime.run_steps kinds.
-                  At least one step is required.
-                items:
-                  description: |-
-                    WorkflowStep is one step of the workflow's deterministic plan. Kinds mirror
-                    runtime.run_steps (HOR-246).
-                  properties:
-                    config:
-                      description: |-
-                        config is opaque step configuration (prompt, arguments, branch condition,
-                        approver scope). The runtime stores but does not interpret it at definition
-                        time; HOR-249 evaluates it.
-                      x-kubernetes-preserve-unknown-fields: true
-                    kind:
-                      description: kind is the step kind.
-                      enum:
-                      - agent_task
-                      - tool_call
-                      - approval_gate
-                      type: string
-                    name:
-                      description: |-
-                        name is the step name, unique within the workflow. Referenced by
-                        completionRule.ref and blocker.step.
-                      minLength: 1
-                      type: string
-                    tool:
-                      description: |-
-                        tool is the logical gateway tool/capability a tool_call step invokes. It
-                        is required for kind=tool_call and MUST be declared in
-                        requestedCapabilities, so a workflow cannot register a tool_call step for
-                        an unauthorized or unknown tool (REQ-010; acceptance: unknown tool fails
-                        before execution). Ignored for agent_task and approval_gate steps.
-                      type: string
-                  required:
-                  - kind
-                  - name
-                  type: object
-                minItems: 1
-                type: array
               valueModelRef:
-                description: |-
-                  valueModelRef references the transparent value model for this workflow
-                  (REQ-028). v1 stores the reference; the model definition/evaluation is a
-                  downstream concern.
+                description: valueModelRef references an operator-configured transparent
+                  value model.
                 type: string
               version:
                 description: |-
-                  version is the immutable version identity component (e.g. "1", "2"). A
-                  content change MUST be published under a new version; the reconciler
-                  rejects a content change under an already-registered (key, version)
-                  (ARCH-007 immutability). It MUST NOT contain ":" — the definition_key wire
-                  format is "<key>:<version>", so ":" would make the concatenated key
-                  ambiguous (REQ-010 scope isolation).
+                  version is the immutable version component. Content changes require a new
+                  version and never mutate an existing definition.
                 minLength: 1
                 pattern: ^[^:]+$
                 type: string
             required:
-            - completionRule
+            - graph
             - key
             - poolRef
             - presentation
             - source
-            - steps
             - version
             type: object
           status:
-            description: WorkflowStatus is the observed state reported by the reconciler.
+            description: WorkflowStatus is the reconciler-observed materialization
+              state.
             properties:
               definitionID:
-                description: definitionID is the UUID of the materialized workflow
-                  definition row.
                 type: string
               message:
-                description: message surfaces the last reconciliation error. Empty
-                  on success.
                 type: string
               observedGeneration:
-                description: observedGeneration is the generation most recently reconciled.
                 format: int64
                 type: integer
               ready:
-                description: ready is true once the workflow definition is materialized
-                  and valid.
                 type: boolean
               scopeIdentityID:
-                description: |-
-                  scopeIdentityID is the UUID of the kind=workflow identity runs of this
-                  workflow execute under.
                 type: string
               validationMessage:
-                description: |-
-                  validationMessage surfaces the validation error when invalid. Empty on
-                  valid.
                 type: string
               validationStatus:
-                description: 'validationStatus is the inspectable validation state:
-                  valid | invalid.'
                 type: string
               versionDigest:
-                description: |-
-                  versionDigest is the immutable version identity (content digest) of the
-                  materialized definition. Re-registering the same digest is idempotent; a
-                  content change under the same version is rejected (ARCH-007).
                 type: string
             type: object
         type: object

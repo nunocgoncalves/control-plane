@@ -27,6 +27,8 @@ import {
   PiPhase,
   ReadySchema,
   Retryability,
+  StepArtifactRefSchema,
+  StepCompletionSchema,
   TokenDeltaSchema,
   DeltaType,
   TurnEventSchema,
@@ -65,6 +67,7 @@ export interface ChildResult {
 export type ChildRpcRequest =
   | { type: "modelRequest"; requestId: string; body: unknown }
   | { type: "toolCall"; requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string }
+  | { type: "stepCompletion"; requestId: string; outcome: string; summary: string; outputJson: string; artifactRefs: Array<{artifactId:string;role:string;metadataJson:string}> }
   | { type: "cancel"; requestId: string };
 export interface Child {
   abort(): void;
@@ -89,6 +92,7 @@ const DISCOVERY_DEADLINE_MS = 10_000;
 interface TurnCtx {
   turnId: string;
   aborted: boolean;
+  completionReported: boolean;
   acked: Promise<void>;
   resolveAck: () => void;
   /** Bounded/cancellable discovery (HOR-395): aborted on AbortTurn or deadline. */
@@ -286,7 +290,7 @@ export class Supervisor {
     }
     let resolveAck!: () => void;
     const acked = new Promise<void>((r) => (resolveAck = r));
-    this.turn = { turnId: at.turnId, aborted: false, acked, resolveAck, discoveryAc: null };
+    this.turn = { turnId: at.turnId, aborted: false, completionReported: false, acked, resolveAck, discoveryAc: null };
     this.outbox = new EventOutbox(this.d.cfg.walDir, at.turnId, this.d.cfg.outbox.bound);
     this.startHeartbeat(at.turnId);
     try {
@@ -394,6 +398,24 @@ export class Supervisor {
         if (ac) ac.abort();
         continue;
       }
+      if (req.type === "stepCompletion") {
+        if (!at.nodeExecutionId || !at.completionOutcomes.includes(req.outcome) || !this.turn || this.turn.completionReported) {
+          this.failTurn(new ProtocolError("invalid or duplicate complete_step report"));
+          break;
+        }
+        this.turn.completionReported = true;
+        this.sendChildEvent({
+          case: "stepCompletion",
+          value: create(StepCompletionSchema, {
+            outcome: req.outcome,
+            summary: req.summary,
+            outputJson: req.outputJson,
+            artifactRefs: req.artifactRefs.map((ref) => create(StepArtifactRefSchema, ref)),
+          }),
+        });
+        child.rpcSend({ type: "stepCompletionAck", requestId: req.requestId });
+        continue;
+      }
       // Duplicate active requestId = protocol violation (the child reused an id
       // that is still in flight). Reject fail-closed without launching, so the
       // in-flight cap counts real work and cancellation stays unambiguous.
@@ -421,6 +443,11 @@ export class Supervisor {
         continue;
       }
       if (req.type === "toolCall") {
+        if (this.turn?.completionReported) {
+          done();
+          child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "customer-system tools are disabled after complete_step" });
+          continue;
+        }
         void this.handleToolCall(child, req, scope, discovered, controllers, done);
         continue;
       }

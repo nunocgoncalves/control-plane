@@ -199,7 +199,7 @@ func seedWorkflowStepAttempt(t *testing.T, env *testEnv, permitted []string) (ru
 	require.NoError(t, env.store.UpsertRunPoolAssignment(ctx, runID, env.poolID))
 	require.NoError(t, env.pgpool.QueryRow(ctx, `
 		INSERT INTO runtime.run_steps (run_id, seq, kind, state, started_at)
-		VALUES ($1::uuid, 1, 'tool_call', 'running', now()) RETURNING id::text`,
+		VALUES ($1::uuid, 1, 'agent_task', 'running', now()) RETURNING id::text`,
 		runID).Scan(&stepID))
 	require.NoError(t, env.store.SnapshotAttemptTools(ctx, runID, env.poolID, permitted))
 	return runID, stepID
@@ -798,7 +798,7 @@ func TestGateway_WorkflowStepCallerDiscovery(t *testing.T) {
 	t.Cleanup(rr.close)
 
 	// The control-plane workflow-step caller discovers tools for workflow wf-quote.
-	runID, stepID := seedWorkflowStepAttempt(t, env, []string{"echo", "send_email"})
+	runID, stepID := seedWorkflowStepAttempt(t, env, []string{"echo"})
 	gc := gatewayClient(env, env.wfStep)
 	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
 		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: stepID,

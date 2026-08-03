@@ -71,6 +71,7 @@ export class ChildRpc {
   private readonly gatewayTools: Promise<GatewayToolDescriptor[]>;
   private readonly pendingModels = new Map<string, PendingModel>();
   private readonly pendingTools = new Map<string, PendingTool>();
+  private readonly pendingCompletions = new Map<string, () => void>();
   private closed = false;
 
   constructor(private readonly deps: ChildRpcDeps) {
@@ -173,6 +174,16 @@ export class ChildRpc {
     });
   }
 
+  /** Report complete_step through the trusted supervisor. Requests on fd 4 are
+   * ordered, so the supervisor disables subsequent gateway calls before ACK. */
+  reportStepCompletion(report: { outcome: string; summary: string; outputJson: string; artifactRefs: Array<{artifactId:string;role:string;metadataJson:string}> }): Promise<void> {
+    const requestId = nextRequestId();
+    return new Promise<void>((resolve) => {
+      this.pendingCompletions.set(requestId, resolve);
+      this.send({ type: "stepCompletion", requestId, ...report });
+    });
+  }
+
   /** Release the reader and reject pending callers (child exit / fatal). */
   close(): void {
     if (this.closed) return;
@@ -182,6 +193,8 @@ export class ChildRpc {
     this.pendingModels.clear();
     for (const p of this.pendingTools.values()) p.resolve({ isError: true, errorMessage: "child rpc closed" });
     this.pendingTools.clear();
+    for (const resolve of this.pendingCompletions.values()) resolve();
+    this.pendingCompletions.clear();
   }
 
   private send(frame: unknown): void {
@@ -225,6 +238,13 @@ export class ChildRpc {
         if (!p) return;
         this.pendingTools.delete(frame.requestId);
         p.resolve(toolResultFrom(frame));
+        return;
+      }
+      case "stepCompletionAck": {
+        const resolve = this.pendingCompletions.get(frame.requestId);
+        if (!resolve) return;
+        this.pendingCompletions.delete(frame.requestId);
+        resolve();
         return;
       }
       case "cancel": {

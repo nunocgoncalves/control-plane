@@ -1,0 +1,223 @@
+package work_test
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/nunocgoncalves/control-plane/internal/testutil"
+	workstore "github.com/nunocgoncalves/control-plane/internal/work"
+	"github.com/nunocgoncalves/control-plane/internal/workflow"
+)
+
+func TestGraphValidation_CycleAndCoverage(t *testing.T) {
+	spec := workflow.CanonicalSpec{Key: "dev/review", ScopeIdentityKey: "workflow:default/dev", DefaultModelRef: "model-one",
+		Graph: workflow.CanonicalGraph{EntryNode: "review", MaxTransitions: 20,
+			Nodes: []workflow.CanonicalNode{
+				{Key: "review", Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}},
+				{Key: "address", Kind: workflow.NodeAgentTask, Prompt: "address", Outcomes: []string{"addressed"}},
+			},
+			Edges:            []workflow.CanonicalEdge{{From: "review", Outcome: "changes", To: "address"}, {From: "address", Outcome: "addressed", To: "review"}},
+			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "review", Outcome: "approved"}},
+		}}
+	require.NoError(t, workflow.ValidateGraph(spec))
+	bad := spec
+	bad.Graph.TerminalOutcomes = nil
+	require.Error(t, workflow.ValidateGraph(bad))
+	bad = spec
+	bad.Graph.Edges = bad.Graph.Edges[:1]
+	assert.ErrorContains(t, workflow.ValidateGraph(bad), "no edge or terminal")
+	bad = spec
+	bad.Graph.Nodes = append([]workflow.CanonicalNode(nil), spec.Graph.Nodes...)
+	bad.Graph.Nodes[0].Timeout = "-1s"
+	assert.ErrorContains(t, workflow.ValidateGraph(bad), "positive duration")
+	bad = spec
+	bad.RequestedCapabilities = []workflow.CanonicalCapability{{Tool: "complete_step", MaxEffectClass: "read_only"}}
+	assert.ErrorContains(t, workflow.ValidateGraph(bad), "reserved")
+}
+
+func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
+	pool := testutil.NewPostgresPool(t)
+	ctx := context.Background()
+	store := workstore.NewStore(pool)
+	actorID, scopeID, poolID := seedFoundation(t, ctx, pool)
+	_ = poolID
+	valueInput := workstore.ValueModelInput{Ref: "quotation-value", Version: "1", Currency: "EUR", BaselineSeconds: 1200, LoadedHourlyCost: "30.00", Assumptions: json.RawMessage(`{"source":"customer"}`), Explanation: json.RawMessage(`{"en":"20 minutes at EUR 30/hour"}`)}
+	_, err := store.CreateValueModel(ctx, valueInput)
+	require.NoError(t, err)
+	_, err = store.CreateValueModel(ctx, valueInput)
+	assert.ErrorIs(t, err, workstore.ErrConflict)
+
+	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`)})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, workstore.StateTodo, item.State)
+	assert.True(t, item.ValueConfigured)
+	var valueModel map[string]any
+	require.NoError(t, json.Unmarshal(item.ValueModel, &valueModel))
+	assert.Equal(t, "labor_time_saved", valueModel["formula"])
+	attemptID := item.CurrentAttemptID
+
+	// Publish a newer eligible version after creation. An unversioned replay is
+	// still the same caller payload and must return the original item rather
+	// than re-resolve latest and conflict. Canonical JSON key ordering is also
+	// ignored by the payload hash.
+	var specJSON, presentation, caps []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT spec_json,presentation FROM workflow.definitions WHERE key='walter/quotation' AND version='1'`).Scan(&specJSON, &presentation))
+	v2, err := workflow.NewStore(pool).RegisterDefinition(ctx, workflow.Definition{Key: "walter/quotation", Version: "2", Digest: "sha256:wf-v2", SpecJSON: specJSON, ValidationStatus: workflow.ValidationValid, ScopeIdentityID: scopeID, SourceType: "graph_email", PoolKey: "default/pool", Presentation: presentation})
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT permitted_tools FROM toolgateway.workflow_pool_bindings WHERE workflow_definition_key='walter/quotation:1'`).Scan(&caps))
+	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.workflow_pool_bindings(workflow_definition_key,pool_id,permitted_tools)VALUES($1,$2,$3)`, workflow.DefinitionKey(v2.Key, v2.Version), poolID, caps)
+	require.NoError(t, err)
+
+	same, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"tenant":"acme","messageId":"m-1"}`)})
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, item.ID, same.ID)
+	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Different", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`)})
+	assert.ErrorIs(t, err, workstore.ErrConflict)
+
+	first, turn, dispatch, err := store.PrepareNode(ctx, attemptID)
+	require.NoError(t, err)
+	assert.True(t, dispatch)
+	assert.Equal(t, "process", first.NodeKey)
+	// A succeeded external write makes cyclic re-entry consequential.
+	var invocationID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO toolgateway.invocations
+		(attempt_id,caller_scope,caller_scope_id,tool_call_id,tool_name,tool_version_digest,idempotency_key,effect_class,pool_id,state,result_json,finished_at)
+		VALUES($1,'turn',$2,'call-write','graph.excel.write','sha256:excel-v1','call-write','idempotent_write',$3,'succeeded','{"row":184}',now()) RETURNING id::text`, attemptID, turn.ID, poolID).Scan(&invocationID))
+	require.NoError(t, store.RecordCompletionReport(ctx, turn.ID, workstore.CompletionReport{Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{"missing":"destination"}`)}))
+	state, err := store.CompleteTurn(ctx, turn.ID, "completed", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "running", state)
+
+	// The graph reaches a human node and remains Blocked across store restart.
+	_, _, dispatch, err = store.PrepareNode(ctx, attemptID)
+	require.NoError(t, err)
+	assert.False(t, dispatch)
+	restarted := workstore.NewStore(pool)
+	blocked, err := restarted.GetWorkItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, workstore.StateBlocked, blocked.State)
+	human, err := restarted.OpenBlockerForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "information", human.Kind)
+	_, err = restarted.RespondBlocker(ctx, workstore.BlockerResponseInput{BlockerID: human.ID, ActorIdentityID: actorID, Outcome: "information_provided", Response: json.RawMessage(`{"information":"Lisbon"}`)})
+	require.NoError(t, err)
+
+	// Re-entering process is intercepted before dispatch because it previously
+	// performed a write. Exact confirmation resumes the same node visit.
+	reentered, _, dispatch, err := restarted.PrepareNode(ctx, attemptID)
+	require.NoError(t, err)
+	assert.False(t, dispatch)
+	assert.Equal(t, workstore.NodeBlocked, reentered.State)
+	consequence, err := restarted.OpenBlockerForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "consequence_confirmation", consequence.Kind)
+	assert.NotContains(t, string(consequence.RequiredConsequences), "result")
+	assert.NotContains(t, string(consequence.RequiredConsequences), "error")
+	assert.NotContains(t, string(consequence.RequiredConsequences), "toolName")
+	_, err = restarted.RespondBlocker(ctx, workstore.BlockerResponseInput{BlockerID: consequence.ID, ActorIdentityID: actorID, Outcome: "confirmed", Response: json.RawMessage(`{}`), ConfirmedInvocationIDs: []string{invocationID}})
+	require.NoError(t, err)
+	second, turn2, dispatch, err := restarted.PrepareNode(ctx, attemptID)
+	require.NoError(t, err)
+	assert.True(t, dispatch)
+	assert.Equal(t, 2, second.Visit)
+	var handoff map[string]any
+	require.NoError(t, json.Unmarshal(second.Context, &handoff))
+	assert.NotEmpty(t, handoff["executionHistoryRef"])
+	assert.Contains(t, handoff["previous"], "executionId")
+	require.NoError(t, restarted.RecordCompletionReport(ctx, turn2.ID, workstore.CompletionReport{Outcome: "completed", Summary: "Quotation processed", Output: json.RawMessage(`{"classification":"pricing"}`)}))
+	state, err = restarted.CompleteTurn(ctx, turn2.ID, "completed", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", state)
+	done, err := restarted.GetWorkItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, workstore.StateDone, done.State)
+	require.NotNil(t, done.EstimatedValue)
+	assert.Equal(t, "10.000000", *done.EstimatedValue)
+
+	feedback, err := restarted.SaveFeedback(ctx, workstore.FeedbackInput{WorkItemID: item.ID, AttemptID: attemptID, ActorIdentityID: actorID, Category: "incorrect_classification", Explanation: "Should be engineering", CorrectedResult: json.RawMessage(`{"classification":"engineering"}`)})
+	require.NoError(t, err)
+	attempts, err := restarted.ListAttempts(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Len(t, attempts, 1, "feedback must not start work")
+	customerAttempt, err := json.Marshal(attempts[0])
+	require.NoError(t, err)
+	assert.NotContains(t, string(customerAttempt), "graphSnapshot")
+	assert.NotContains(t, string(customerAttempt), "modelsSnapshot")
+	assert.NotContains(t, string(customerAttempt), "Process quotation")
+	disputed, err := restarted.GetWorkItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.True(t, disputed.ValueDisputed)
+	assert.Equal(t, "0.000000", *disputed.EstimatedValue)
+	_, err = pool.Exec(ctx, `UPDATE work.value_ledger SET amount=1 WHERE work_item_id=$1`, item.ID)
+	assert.Error(t, err, "value history must be append-only")
+	_, err = pool.Exec(ctx, `DELETE FROM work.timeline_events WHERE work_item_id=$1`, item.ID)
+	assert.Error(t, err, "business timeline must be append-only")
+	consequences, err := restarted.ConsequencesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, consequences, 1)
+	assert.Equal(t, invocationID, consequences[0].InvocationID)
+
+	revised, err := restarted.CreateRevision(ctx, workstore.RevisionInput{WorkItemID: item.ID, ActorIdentityID: actorID, FeedbackID: feedback.ID, ActionableGuidance: "Classify using the corrected destination rule", ConfirmedInvocationIDs: []string{invocationID}})
+	require.NoError(t, err)
+	assert.Equal(t, workstore.StateTodo, revised.State)
+	assert.NotEqual(t, attemptID, revised.CurrentAttemptID)
+	attempts, err = restarted.ListAttempts(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, attempts, 2)
+	assert.Equal(t, attemptID, *attempts[1].RevisedFromAttemptID)
+
+	// Scope identity remains the workflow identity, never the initiating user.
+	assert.Equal(t, scopeID, revised.ScopeIdentityID)
+}
+
+func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string) {
+	t.Helper()
+	var actorID, scopeID, poolID string
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO identity.identities(key,kind,source,display_name)VALUES('user/operator','user','local','Operator')RETURNING id`).Scan(&actorID))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO identity.identities(key,kind,source,display_name)VALUES('workflow:default/walter','workflow','local','Walter')RETURNING id`).Scan(&scopeID))
+	_, err := pool.Exec(ctx, `INSERT INTO catalog.backends(key,name,namespace,kind,model,service_url,image,deployed,healthy)VALUES('default/backend','backend','default','vLLM','model/base','http://model','image',true,true)`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO catalog.models(key,namespace,model_id,display_name,context_length,backend_ref,default_params,reasoning_config,available)VALUES('default/model-one','default','model-one','Model One',32768,'backend','{"max_tokens":2048}','{"enable_thinking":false}',true)`)
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO toolgateway.pools(key,name,spiffe_id_prefix)VALUES('default/pool','pool','spiffe://iterabase.local/pools/pool/')RETURNING id`).Scan(&poolID))
+	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.pool_grants(pool_id,tool_name,max_effect_class)VALUES($1,'graph.read','read_only'),($1,'graph.excel.write','idempotent_write')`, poolID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO toolgateway.tool_versions(name,version,digest,effect_class,timeout_ms)VALUES
+		('graph.read','1','sha256:read-v1','read_only',1000),('graph.excel.write','1','sha256:excel-v1','idempotent_write',1000)`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO toolgateway.runner_registrations(runner_id,spiffe_id,namespace,tool_name,tool_version,tool_digest,fencing_generation)VALUES
+		('runner','spiffe://runner','product','graph.read','1','sha256:read-v1',1),
+		('runner','spiffe://runner','product','graph.excel.write','1','sha256:excel-v1',1)`)
+	require.NoError(t, err)
+
+	spec := workflow.CanonicalSpec{Key: "walter/quotation", ScopeIdentityKey: "workflow:default/walter", PoolRef: "pool", DefaultModelRef: "model-one", ValueModelRef: "quotation-value",
+		Source:                workflow.CanonicalSource{Type: "graph_email"},
+		RequestedCapabilities: []workflow.CanonicalCapability{{Tool: "graph.read", MaxEffectClass: "read_only"}, {Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}},
+		Graph: workflow.CanonicalGraph{EntryNode: "process", MaxTransitions: 20,
+			Nodes: []workflow.CanonicalNode{
+				{Key: "process", Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_information"}, OutputSchema: json.RawMessage(`{"type":"object"}`)},
+				{Key: "information", Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "information", Title: workflow.CanonicalLocalizedText{EN: "Information required"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"]}`)}},
+			},
+			Edges:            []workflow.CanonicalEdge{{From: "process", Outcome: "needs_information", To: "information"}, {From: "information", Outcome: "information_provided", To: "process"}},
+			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}}},
+		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Marco", Locale: "en"}}
+	specJSON, _ := json.Marshal(spec)
+	presentation, _ := json.Marshal(spec.Presentation)
+	wfStore := workflow.NewStore(pool)
+	def, err := wfStore.RegisterDefinition(ctx, workflow.Definition{Key: "walter/quotation", Version: "1", Digest: "sha256:wf-v1", SpecJSON: specJSON, ValidationStatus: workflow.ValidationValid, ScopeIdentityID: scopeID, SourceType: "graph_email", PoolKey: "default/pool", Presentation: presentation})
+	require.NoError(t, err)
+	caps, _ := json.Marshal(spec.RequestedCapabilities)
+	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.workflow_pool_bindings(workflow_definition_key,pool_id,permitted_tools)VALUES($1,$2,$3)`, workflow.DefinitionKey(def.Key, def.Version), poolID, caps)
+	require.NoError(t, err)
+	return actorID, scopeID, poolID
+}

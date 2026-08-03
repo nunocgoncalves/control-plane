@@ -23,6 +23,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/server"
 	"github.com/nunocgoncalves/control-plane/internal/testutil"
+	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
 func TestHealthz(t *testing.T) {
@@ -84,7 +85,7 @@ func TestAPI(t *testing.T) {
 	issuer := testIssuer(t)
 	ctx := context.Background()
 
-	router := server.New(server.Services{Pool: pool, Store: store, Permissions: permissions.NewStore(pool), Issuer: issuer, Mode: identity.ModeEnrolled})
+	router := server.New(server.Services{Pool: pool, Store: store, Permissions: permissions.NewStore(pool), Issuer: issuer, Mode: identity.ModeEnrolled, Work: workstore.NewStore(pool)})
 
 	// Seed: an admin local user + admin key, an agent-fleet SA + token key, and
 	// a CR-style linked identity (alice) with a teams binding.
@@ -103,6 +104,8 @@ func TestAPI(t *testing.T) {
 	require.NoError(t, store.ReplaceExternalMappings(ctx, alice.ID, []identity.Binding{
 		{Provider: "teams", Type: "user", ExternalID: "aad:alice"},
 	}))
+	aliceWorkKey, _, err := store.CreateAPIKey(ctx, alice.ID, "work", identity.ScopeWork, nil)
+	require.NoError(t, err)
 
 	authHeader := func(key string) string { return "Bearer " + key }
 
@@ -216,6 +219,21 @@ func TestAPI(t *testing.T) {
 	t.Run("permissions debug: wrong scope rejected", func(t *testing.T) {
 		rr := do(router, http.MethodGet, "/v1/permissions/identities/"+alice.ID, authHeader(saKey), nil)
 		assert.Equal(t, http.StatusForbidden, rr.Code)
+	})
+
+	t.Run("work API requires work scope and returns customer projection", func(t *testing.T) {
+		rr := do(router, http.MethodGet, "/v1/work-items", authHeader(adminKey), nil)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		rr = do(router, http.MethodGet, "/v1/work-items", authHeader(aliceWorkKey), nil)
+		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+		assert.JSONEq(t, `[]`, rr.Body.String())
+	})
+
+	t.Run("admin creates immutable transparent value model", func(t *testing.T) {
+		body := `{"ref":"quotation","version":"1","currency":"EUR","baselineSeconds":1200,"loadedHourlyCost":"30.00"}`
+		rr := do(router, http.MethodPost, "/v1/value-models", authHeader(adminKey), strings.NewReader(body))
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+		assert.Contains(t, rr.Body.String(), `"formula":"labor_time_saved"`)
 	})
 }
 

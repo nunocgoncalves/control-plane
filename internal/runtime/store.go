@@ -2,9 +2,9 @@
 // (HOR-246): the Postgres-backed turn/workflow state machine + append-only
 // event/audit log + orchestration state.
 //
-// One runtime (Platform Direction §4/§6): a workflow_run composes agent tasks
-// (a deterministic plan -> steps = agent_task | tool_call | approval_gate);
-// chat is a degenerate run (kind=chat, one freeform agent_task step). One run =
+// `workflow_runs` and `turns` remain the shared execution/fencing foundation.
+// HOR-254 graph workflows use runtime.node_executions; run_steps is retained
+// only for chat's degenerate single agent_task. One run =
 // one pi session (session_id/session_dir); all of a run's turns share it. The
 // control-plane owns the run -> session.id mapping; HOR-249 generates the id
 // and passes it here, HOR-351's harness resumes-or-creates that session.
@@ -49,9 +49,7 @@ const (
 	KindChat     = "chat"
 	KindWorkflow = "workflow"
 
-	StepKindAgentTask    = "agent_task"
-	StepKindToolCall     = "tool_call"
-	StepKindApprovalGate = "approval_gate"
+	StepKindAgentTask = "agent_task"
 
 	RunPending          = "pending"
 	RunRunning          = "running"
@@ -60,12 +58,11 @@ const (
 	RunFailed           = "failed"
 	RunAborted          = "aborted"
 
-	StepPending         = "pending"
-	StepRunning         = "running"
-	StepPendingApproval = "pending_approval"
-	StepSucceeded       = "succeeded"
-	StepFailed          = "failed"
-	StepSkipped         = "skipped"
+	StepPending   = "pending"
+	StepRunning   = "running"
+	StepSucceeded = "succeeded"
+	StepFailed    = "failed"
+	StepSkipped   = "skipped"
 
 	TurnPending   = "pending"
 	TurnRunning   = "running"
@@ -76,25 +73,24 @@ const (
 	// Turn-level events (mirror harness Event). The durable harness
 	// TurnEvent variants (HOR-381) are all mapped to attributable runtime
 	// events so required audit history / ambiguity evidence is retained.
-	EvTurnStarted         = "turn_started"
-	EvModelCallStarted    = "model_call_started"
-	EvAssistantMessage    = "assistant_message"
-	EvModelCallFailed     = "model_call_failed"
-	EvModelRetryScheduled = "model_retry_scheduled"
-	EvModelRetryFinished  = "model_retry_finished"
-	EvToolCallStarted     = "tool_call_started"
-	EvToolResult          = "tool_result"
-	EvCompactionStarted   = "compaction_started"
-	EvCompactionFinished  = "compaction_finished"
-	EvError               = "error"
-	EvSettled             = "settled"
+	EvTurnStarted            = "turn_started"
+	EvModelCallStarted       = "model_call_started"
+	EvAssistantMessage       = "assistant_message"
+	EvModelCallFailed        = "model_call_failed"
+	EvModelRetryScheduled    = "model_retry_scheduled"
+	EvModelRetryFinished     = "model_retry_finished"
+	EvToolCallStarted        = "tool_call_started"
+	EvToolResult             = "tool_result"
+	EvStepCompletionReported = "step_completion_reported"
+	EvCompactionStarted      = "compaction_started"
+	EvCompactionFinished     = "compaction_finished"
+	EvError                  = "error"
+	EvSettled                = "settled"
 	// Step-level events.
-	EvStepStarted       = "step_started"
-	EvStepSucceeded     = "step_succeeded"
-	EvStepFailed        = "step_failed"
-	EvStepSkipped       = "step_skipped"
-	EvApprovalRequested = "approval_requested"
-	EvApprovalResolved  = "approval_resolved"
+	EvStepStarted   = "step_started"
+	EvStepSucceeded = "step_succeeded"
+	EvStepFailed    = "step_failed"
+	EvStepSkipped   = "step_skipped"
 	// Run-level events.
 	EvRunStarted          = "run_started"
 	EvRunSucceeded        = "run_succeeded"
@@ -102,12 +98,6 @@ const (
 	EvRunAborted          = "run_aborted"
 	EvRunAwaitingApproval = "run_awaiting_approval"
 	EvRunResumed          = "run_resumed"
-)
-
-// Approval decision (approval_resolved event payload; ResolveApproval input).
-const (
-	DecisionApproved = "approved"
-	DecisionRejected = "rejected"
 )
 
 // Run is a row from runtime.workflow_runs: an execution instance.
@@ -126,12 +116,12 @@ type Run struct {
 	FinishedAt      *time.Time
 }
 
-// Step is a row from runtime.run_steps: one step of a run's snapshotted plan.
+// Step is a row from runtime.run_steps: chat's legacy single agent task.
 type Step struct {
 	ID         string
 	RunID      string
 	Seq        int
-	Kind       string          // agent_task | tool_call | approval_gate
+	Kind       string          // agent_task
 	Config     json.RawMessage // opaque
 	State      string
 	StartedAt  *time.Time
@@ -142,16 +132,17 @@ type Step struct {
 
 // Turn is a row from runtime.turns: one agent invocation (Prompt->Settled).
 type Turn struct {
-	ID        string
-	RunID     string
-	StepID    *string
-	SessionID string
-	Model     *string
-	State     string
-	StartedAt *time.Time
-	SettledAt *time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              string
+	RunID           string
+	StepID          *string
+	NodeExecutionID *string // HOR-254 graph-node visit; nil for legacy chat turns
+	SessionID       string
+	Model           *string
+	State           string
+	StartedAt       *time.Time
+	SettledAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Event is a row from runtime.events: one append-only audit/replay entry.
@@ -169,7 +160,7 @@ type Event struct {
 // StepInput is a step to snapshot at run creation (CreateRun).
 type StepInput struct {
 	Seq    int
-	Kind   string          // agent_task | tool_call | approval_gate
+	Kind   string          // agent_task
 	Config json.RawMessage // opaque; {} when empty
 }
 
@@ -346,16 +337,15 @@ func (s *Store) AbortRun(ctx context.Context, id string) (Run, error) {
 	return s.transitionRun(ctx, id, []string{RunRunning, RunAwaitingApproval}, RunAborted, EvRunAborted, nil)
 }
 
-// AwaitApproval moves a run running -> awaiting_approval and appends
-// run_awaiting_approval. (Called internally by RequestApproval; exposed for
-// admin/override paths.)
+// AwaitApproval moves a run running -> awaiting_approval and appends a
+// technical run event. HOR-254 graph/human transitions normally perform their
+// cross-domain updates atomically; this remains an explicit override primitive.
 func (s *Store) AwaitApproval(ctx context.Context, id string) (Run, error) {
 	return s.transitionRun(ctx, id, []string{RunRunning}, RunAwaitingApproval, EvRunAwaitingApproval, nil)
 }
 
-// ResumeFromApproval moves a run awaiting_approval -> running and appends
-// run_resumed. (Called internally by ResolveApproval on approval; exposed for
-// admin/override paths.)
+// ResumeFromApproval moves a run awaiting_approval -> running and appends a
+// technical run event. Normal graph blocker responses use the work service.
 func (s *Store) ResumeFromApproval(ctx context.Context, id string) (Run, error) {
 	return s.transitionRun(ctx, id, []string{RunAwaitingApproval}, RunRunning, EvRunResumed, nil)
 }
@@ -485,135 +475,6 @@ func (s *Store) FailStep(ctx context.Context, id string) (Step, error) {
 // step_skipped.
 func (s *Store) SkipStep(ctx context.Context, id string) (Step, error) {
 	return s.transitionStep(ctx, id, []string{StepPending}, StepSkipped, EvStepSkipped, nil)
-}
-
-// RequestApproval moves an approval_gate step pending -> pending_approval AND
-// the run running -> awaiting_approval atomically, appending approval_requested
-// (step) + run_awaiting_approval (run). The two are inseparable: a step awaiting
-// a human <=> the run is blocked.
-func (s *Store) RequestApproval(ctx context.Context, stepID string) (Step, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Step{}, fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	row := tx.QueryRow(ctx, `
-		UPDATE runtime.run_steps
-		   SET state = $2, started_at = COALESCE(started_at, now())
-		 WHERE id = $1 AND state = $3 AND kind = $4
-		RETURNING id, run_id, seq, kind, config, state, started_at, finished_at, created_at, updated_at`,
-		stepID, StepPendingApproval, StepPending, StepKindApprovalGate)
-	st, err := scanStep(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Step{}, s.stepTransitionErr(ctx, tx, stepID)
-	}
-	if err != nil {
-		return Step{}, fmt.Errorf("update step: %w", err)
-	}
-
-	// Run running -> awaiting_approval (CAS; if it is not running, the step
-	// transition is rolled back via the deferred rollback).
-	var runState string
-	if err := tx.QueryRow(ctx, `
-		UPDATE runtime.workflow_runs SET state = $2
-		 WHERE id = $1 AND state = $3
-		RETURNING state`, st.RunID, RunAwaitingApproval, RunRunning).Scan(&runState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Step{}, fmt.Errorf("%w: run is not running (cannot await approval)", ErrInvalidTransition)
-		}
-		return Step{}, fmt.Errorf("update run to awaiting_approval: %w", err)
-	}
-
-	if _, err := appendEventTx(ctx, tx, st.RunID, "", st.ID, EvApprovalRequested, nil); err != nil {
-		return Step{}, fmt.Errorf("append %s: %w", EvApprovalRequested, err)
-	}
-	if _, err := appendEventTx(ctx, tx, st.RunID, "", "", EvRunAwaitingApproval, nil); err != nil {
-		return Step{}, fmt.Errorf("append %s: %w", EvRunAwaitingApproval, err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Step{}, fmt.Errorf("commit: %w", err)
-	}
-	return st, nil
-}
-
-// ResolveApproval resolves an approval gate: approved -> step succeeded + run
-// resumed; rejected -> step failed + run failed. Appends approval_resolved
-// (payload: approver_identity_id + decision) plus the run-level event. Atomic.
-func (s *Store) ResolveApproval(ctx context.Context, stepID, approverIdentityID, decision string) (Step, error) {
-	switch decision {
-	case DecisionApproved, DecisionRejected:
-	default:
-		return Step{}, fmt.Errorf("invalid decision %q", decision)
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Step{}, fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	stepTo := StepSucceeded
-	runTo := RunRunning
-	runEvent := EvRunResumed
-	if decision == DecisionRejected {
-		stepTo = StepFailed
-		runTo = RunFailed
-		runEvent = EvRunFailed
-	}
-
-	finishedExpr := "NULL"
-	if stepTo == StepFailed {
-		finishedExpr = "now()"
-	}
-	row := tx.QueryRow(ctx, fmt.Sprintf(`
-		UPDATE runtime.run_steps
-		   SET state = $2, finished_at = %s
-		 WHERE id = $1 AND state = $3
-		RETURNING id, run_id, seq, kind, config, state, started_at, finished_at, created_at, updated_at`,
-		finishedExpr),
-		stepID, stepTo, StepPendingApproval)
-	st, err := scanStep(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Step{}, s.stepTransitionErr(ctx, tx, stepID)
-	}
-	if err != nil {
-		return Step{}, fmt.Errorf("update step: %w", err)
-	}
-
-	runFinishedExpr := "NULL"
-	if isTerminal(runTo) {
-		runFinishedExpr = "now()"
-	}
-	var runState string
-	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-		UPDATE runtime.workflow_runs
-		   SET state = $2, finished_at = %s
-		 WHERE id = $1 AND state = $3
-		RETURNING state`, runFinishedExpr),
-		st.RunID, runTo, RunAwaitingApproval).Scan(&runState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Step{}, fmt.Errorf("%w: run is not awaiting approval", ErrInvalidTransition)
-		}
-		return Step{}, fmt.Errorf("update run on approval: %w", err)
-	}
-
-	payload, _ := json.Marshal(map[string]string{
-		"approver_identity_id": approverIdentityID,
-		"decision":             decision,
-	})
-	if _, err := appendEventTx(ctx, tx, st.RunID, "", st.ID, EvApprovalResolved, payload); err != nil {
-		return Step{}, fmt.Errorf("append %s: %w", EvApprovalResolved, err)
-	}
-	if _, err := appendEventTx(ctx, tx, st.RunID, "", "", runEvent, nil); err != nil {
-		return Step{}, fmt.Errorf("append %s: %w", runEvent, err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Step{}, fmt.Errorf("commit: %w", err)
-	}
-	return st, nil
 }
 
 // --- turns ---

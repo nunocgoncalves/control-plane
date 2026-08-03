@@ -502,7 +502,7 @@ describe("Supervisor crash recovery", () => {
   });
 });
 
-function assignTurn(sandboxId: string): ControlMessageLike {
+function assignTurn(sandboxId: string, graph = false): ControlMessageLike {
   return create(ControlMessageSchema, {
     kind: {
       case: "assignTurn",
@@ -515,6 +515,7 @@ function assignTurn(sandboxId: string): ControlMessageLike {
         workspaceTools: true,
         runId: "run-1",
         message: "classify this email",
+        ...(graph ? { workItemId: "work-1", nodeExecutionId: "node-1", nodeKey: "classify", completionOutcomes: ["completed"] } : {}),
       }) as AssignTurn,
     },
   }) as ControlMessageLike;
@@ -599,6 +600,55 @@ describe("Supervisor RPC dispatch (HOR-395)", () => {
     expect(toolResult).toBeDefined();
     expect(toolResult?.isError).toBe(true);
     expect(toolResult?.errorMessage).toContain("not permitted");
+    expect(invoked).toBe(false);
+  }, 5_000);
+
+  it("rejects customer-system tool calls ordered after complete_step", async () => {
+    let assignTurnSent = false;
+    const transport = createRouterTransport((router) => {
+      router.service(Harness, {
+        async *work(req) {
+          yield create(ControlMessageSchema, { kind: { case: "welcome", value: create(WelcomeSchema, { fencingGeneration: 1n }) } as never });
+          for await (const m of req) {
+            if (m.kind.case === "ready" && !assignTurnSent) {
+              assignTurnSent = true;
+              yield assignTurn("sess-a", true);
+            }
+          }
+        },
+      });
+    });
+    const events = new Q<ChildEvent>();
+    events.close();
+    const requests = new Q<import("./supervisor.js").ChildRpcRequest>();
+    requests.push({ type: "stepCompletion", requestId: "complete", outcome: "completed", summary: "done", outputJson: "{}", artifactRefs: [] });
+    requests.push({ type: "toolCall", requestId: "after", toolCallId: "tc-after", toolName: "graph.write", toolVersionDigest: "sha256:xyz", argumentsJson: "{}" });
+    requests.close();
+    const sent: unknown[] = [];
+    const child: Child = { abort: () => {}, events, rpcRequests: requests, rpcSend: (frame) => sent.push(frame), result: new Promise<ChildResult>(() => {}) };
+    let invoked = false;
+    const sup = new Supervisor({
+      cfg: makeCfg(sandboxParent, walDir),
+      hello: create(WorkerMessageSchema, { kind: { case: "hello", value: create(HelloSchema, { workerId: "pod-1", poolId: "pool-1" }) } }),
+      childFactory: () => child,
+      probes,
+      transport: () => transport,
+      gatewayClient: {
+        discover: async () => [{ name: "graph.write", version: "1", digest: "sha256:xyz", description: "write", inputSchema: {}, effectClass: "idempotent_write" as const }],
+        invokeTool: async () => { invoked = true; return { invocationId: "", state: 0, resultJson: new Uint8Array(), artifactOutputRefs: [], error: undefined, existingInvocationId: "" }; },
+        cancelInvocation: async () => ({ state: 0 }),
+        resetTransport: () => {},
+      },
+      modelStream: fakeModelStream(),
+    });
+    const runP = sup.run();
+    await new Promise((r) => setTimeout(r, 200));
+    await sup.drain();
+    await runP.catch(() => {});
+    expect(sent.some((f) => (f as { type?: string }).type === "stepCompletionAck")).toBe(true);
+    const blocked = sent.find((f) => (f as { requestId?: string }).requestId === "after") as { isError?: boolean; errorMessage?: string } | undefined;
+    expect(blocked?.isError).toBe(true);
+    expect(blocked?.errorMessage).toContain("disabled after complete_step");
     expect(invoked).toBe(false);
   }, 5_000);
 

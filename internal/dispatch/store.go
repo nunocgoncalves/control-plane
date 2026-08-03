@@ -95,6 +95,8 @@ type AssignmentInput struct {
 	ModelPermission     json.RawMessage
 	CapabilityRequest   json.RawMessage
 	ToolVersionSnapshot json.RawMessage
+	WorkItemID          string // HOR-254 stable customer work item; empty for chat
+	NodeExecutionID     string // HOR-254 append-only graph-node visit; empty for chat
 }
 
 // Store reads/writes the dispatch assignment state via a pgx pool. It composes
@@ -139,14 +141,14 @@ func (s *Store) CreateAssignment(ctx context.Context, in AssignmentInput) (Assig
 		INSERT INTO runtime.turn_assignments
 			(turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
 			 scope_identity_id, agent_pool_key, model_permission, capability_request,
-			 tool_version_snapshot, state)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
+			 tool_version_snapshot, work_item_id, node_execution_id, state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active')
 		RETURNING turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
 		          scope_identity_id, agent_pool_key, model_permission, capability_request,
 		          tool_version_snapshot, state, highest_applied_sequence, assigned_at, terminalized_at`,
 		in.TurnID, in.RunID, in.PoolID, in.WorkerID, in.FencingGeneration, in.AttemptID,
 		in.ScopeIdentityID, in.AgentPoolKey, jsonB(in.ModelPermission), jsonB(in.CapabilityRequest),
-		jsonB(in.ToolVersionSnapshot))
+		jsonB(in.ToolVersionSnapshot), nullable(in.WorkItemID), nullable(in.NodeExecutionID))
 	a, err := scanAssignment(row)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -708,6 +710,13 @@ func scanAssignment(row pgx.Row) (Assignment, error) {
 		&a.State, &a.HighestAppliedSequence, &a.AssignedAt, &termAt)
 	a.TerminalizedAt = termAt
 	return a, err
+}
+
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // jsonB normalizes a RawMessage to '{}' so NOT NULL jsonb columns get the

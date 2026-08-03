@@ -30,6 +30,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/server"
 	"github.com/nunocgoncalves/control-plane/internal/version"
+	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
 func main() {
@@ -114,6 +115,7 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 			Permissions: permissions.NewStore(pool),
 			Issuer:      issuer,
 			Mode:        cfg.Identity.Mode,
+			Work:        workstore.NewStore(pool),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

@@ -47,8 +47,11 @@ func sampleDefinition(key, version, scopeID string) workflow.Definition {
 		Digest:  "digest-" + key + "-" + version,
 		SpecJSON: []byte(`{"key":"` + key + `","scopeIdentityKey":"workflow:default/walter-quotation",` +
 			`"skills":[{"name":"walter-quotation","version":"1.0.0","digest":"sha256:skill-v1"}],` +
-			`"steps":[{"name":"write","kind":"tool_call","tool":"graph.excel.write"}],` +
-			`"completionRule":{"type":"all_steps"},"presentation":{"workflowTitle":"Quotation","personaName":"Walter Ops"},` +
+			`"requestedCapabilities":[{"tool":"graph.excel.write","maxEffectClass":"idempotent_write"}],` +
+			`"defaultModelRef":"model-one","graph":{"entryNode":"write","maxTransitions":10,` +
+			`"nodes":[{"key":"write","kind":"agent_task","prompt":"write","skills":["walter-quotation"],"capabilities":["graph.excel.write"],"outcomes":["completed"]}],` +
+			`"terminalOutcomes":[{"node":"write","outcome":"completed"}]},` +
+			`"presentation":{"workflowTitle":"Quotation","personaName":"Walter Ops"},` +
 			`"poolRef":"walter-pool","source":{"type":"graph_email"}}`),
 		ValidationStatus: workflow.ValidationValid,
 		ScopeIdentityID:  scopeID,
@@ -331,7 +334,8 @@ func TestResolveForAttempt(t *testing.T) {
 	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, resolved.PermittedTools)
 	require.Len(t, resolved.Skills, 1)
 	assert.Equal(t, "sha256:skill-v1", resolved.Skills[0].Digest)
-	assert.Equal(t, "graph.excel.write", resolved.Spec.Steps[0].Tool)
+	assert.Equal(t, "write", resolved.Spec.Graph.EntryNode)
+	assert.Equal(t, []string{"graph.excel.write"}, resolved.Spec.Graph.Nodes[0].Capabilities)
 	assert.Equal(t, "workflow:default/walter-quotation", resolved.Spec.ScopeIdentityKey)
 
 	// Resolve latest when version empty.
@@ -402,13 +406,13 @@ func TestDefinitionKey_WireFormat(t *testing.T) {
 // Ensure the CanonicalSpec marshals deterministically (digest stability).
 func TestCanonicalSpec_DeterministicMarshal(t *testing.T) {
 	s := workflow.CanonicalSpec{
-		Key:              "walter/quotation",
-		ScopeIdentityKey: "workflow:default/walter-quotation",
-		PoolRef:          "walter-pool",
-		Skills:           []workflow.CanonicalSkill{{Name: "walter", Version: "1", Digest: "sha256:skill"}},
-		Steps:            []workflow.CanonicalStep{{Name: "write", Kind: "tool_call", Tool: "graph.excel.write"}},
-		CompletionRule:   workflow.CanonicalCompletion{Type: "all_steps"},
-		Presentation:     workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Walter Ops"},
+		Key: "walter/quotation", ScopeIdentityKey: "workflow:default/walter-quotation", PoolRef: "walter-pool", DefaultModelRef: "model-one",
+		Skills:                []workflow.CanonicalSkill{{Name: "walter", Version: "1", Digest: "sha256:skill"}},
+		RequestedCapabilities: []workflow.CanonicalCapability{{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}},
+		Graph: workflow.CanonicalGraph{EntryNode: "write", MaxTransitions: 10,
+			Nodes:            []workflow.CanonicalNode{{Key: "write", Kind: workflow.NodeAgentTask, Prompt: "write", Skills: []string{"walter"}, Capabilities: []string{"graph.excel.write"}, Outcomes: []string{"completed"}}},
+			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "write", Outcome: "completed"}}},
+		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Walter Ops"},
 	}
 	b1, err := json.Marshal(s)
 	require.NoError(t, err)

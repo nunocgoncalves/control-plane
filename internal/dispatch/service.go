@@ -14,6 +14,7 @@ import (
 	v1 "github.com/nunocgoncalves/control-plane/internal/harnessrpc/iterabase/harness/v1"
 	"github.com/nunocgoncalves/control-plane/internal/runtime"
 	"github.com/nunocgoncalves/control-plane/internal/spiffe"
+	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
 // errConnClosed is returned by workerConn.send after the conn has been marked
@@ -77,6 +78,7 @@ func (c Config) defaults() Config {
 // cancellation and worker-loss semantics, and the dispatch reconciler.
 type Service struct {
 	store       *Store
+	work        *workstore.Store
 	cfg         Config
 	pool        *workerPool
 	gen         atomic.Uint64 // global monotonic fencing-generation counter
@@ -89,7 +91,7 @@ func NewService(store *Store, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{store: store, cfg: cfg.defaults(), pool: newWorkerPool(), log: log, reconcileCh: make(chan struct{}, 1)}
+	return &Service{store: store, work: workstore.NewStore(store.pool), cfg: cfg.defaults(), pool: newWorkerPool(), log: log, reconcileCh: make(chan struct{}, 1)}
 }
 
 // SeedGeneration initializes the in-memory fencing-generation counter from the
@@ -434,8 +436,8 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 	}
 
 	// Map the proto event kind to a runtime event kind + payload.
-	kind, payload, isOutcome := turnEventToRuntime(te)
-	if kind == "" && !isOutcome {
+	kind, payload, isOutcome, isCompletion := turnEventToRuntime(te)
+	if kind == "" && !isOutcome && !isCompletion {
 		// Unknown/ignored event kind (e.g. an event type with no durable
 		// representation). ACK through the current watermark so the worker
 		// progresses.
@@ -457,7 +459,28 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 		}
 		return err
 	}
-	if !applied {
+	if isCompletion {
+		report := te.GetStepCompletion()
+		refs := make([]workstore.ArtifactRef, 0, len(report.GetArtifactRefs()))
+		for _, ref := range report.GetArtifactRefs() {
+			refs = append(refs, workstore.ArtifactRef{ArtifactID: ref.GetArtifactId(), Role: ref.GetRole(), Metadata: json.RawMessage(ref.GetMetadataJson())})
+		}
+		err := s.work.RecordCompletionReport(ctx, turnID, workstore.CompletionReport{
+			Outcome: report.GetOutcome(), Summary: report.GetSummary(), Output: json.RawMessage(report.GetOutputJson()), ArtifactRefs: refs,
+		})
+		if err != nil && !errors.Is(err, workstore.ErrConflict) {
+			// Contract-invalid reports are permanent: ACK the durable technical
+			// observation and let the subsequent clean WorkerOutcome fail the node
+			// because no valid completion report exists. Only infrastructure errors
+			// remain unacked so replay retries the projection.
+			if !errors.Is(err, workstore.ErrInvalidInput) &&
+				!errors.Is(err, workstore.ErrInvalidTransition) &&
+				!errors.Is(err, workstore.ErrNotFound) {
+				return fmt.Errorf("record complete_step: %w", err)
+			}
+		}
+	}
+	if !applied && !isCompletion {
 		// Dedup: already applied (replayed tail). ACK through the watermark.
 		return s.ack(ctx, w, turnID, seq)
 	}
@@ -493,7 +516,7 @@ func (s *Service) ack(ctx context.Context, w *workerConn, turnID string, through
 // and the caller ACKs through the sequence so the worker clears its outbox.
 // Any other store error is returned so the caller does NOT ACK.
 func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1.TurnEvent, poolID, workerID string) error {
-	kind, payload, _ := turnEventToRuntime(te)
+	kind, payload, _, _ := turnEventToRuntime(te)
 	if kind == "" {
 		return nil // unknown/ignored kind: nothing durable to record.
 	}
@@ -559,8 +582,20 @@ func (s *Service) terminalizeTurnLoss(ctx context.Context, a Assignment) error {
 // did not succeed — the reconnect path MUST NOT advertise the new generation
 // until it does (HOR-249).
 func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason string) (runState string, err error) {
-	rs, stErr := s.store.Runtime().SettleTurnAndAdvance(ctx, a.TurnID, reason)
-	if stErr != nil && !errors.Is(stErr, runtime.ErrInvalidTransition) {
+	isGraph, gErr := s.work.IsGraphAttempt(ctx, a.RunID)
+	if gErr != nil {
+		return "", fmt.Errorf("resolve graph attempt: %w", gErr)
+	}
+	var rs string
+	var stErr error
+	if isGraph {
+		customerFailure, _ := json.Marshal(map[string]string{"code": "execution_failed", "message": "This work could not be completed."})
+		operatorFailure, _ := json.Marshal(map[string]string{"reason": reason, "turnId": a.TurnID})
+		rs, stErr = s.work.CompleteTurn(ctx, a.TurnID, reason, customerFailure, operatorFailure)
+	} else {
+		rs, stErr = s.store.Runtime().SettleTurnAndAdvance(ctx, a.TurnID, reason)
+	}
+	if stErr != nil && !errors.Is(stErr, runtime.ErrInvalidTransition) && !errors.Is(stErr, workstore.ErrInvalidTransition) {
 		// A real settle/advance failure leaves the turn SM non-terminal; surface
 		// it so loss terminalization is not silently swallowed.
 		return "", fmt.Errorf("settle+advance turn %s (%s): %w", a.TurnID, reason, stErr)
@@ -740,6 +775,15 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 		return
 	}
 	for _, run := range pending {
+		isGraph, gErr := s.work.IsGraphAttempt(ctx, run.ID)
+		if gErr != nil {
+			s.log.Warn("resolve graph attempt", "run", run.ID, "error", gErr)
+			continue
+		}
+		if isGraph {
+			s.dispatchGraphRun(ctx, run)
+			continue
+		}
 		if _, err := s.store.Runtime().StartRun(ctx, run.ID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
 			s.log.Warn("start run", "run", run.ID, "error", err)
 			continue
@@ -756,7 +800,16 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 		return
 	}
 	for _, run := range running {
-		s.dispatchRun(ctx, run)
+		isGraph, gErr := s.work.IsGraphAttempt(ctx, run.ID)
+		if gErr != nil {
+			s.log.Warn("resolve graph attempt", "run", run.ID, "error", gErr)
+			continue
+		}
+		if isGraph {
+			s.dispatchGraphRun(ctx, run)
+		} else {
+			s.dispatchRun(ctx, run)
+		}
 	}
 }
 
@@ -775,6 +828,116 @@ func (s *Service) startNextStep(ctx context.Context, runID string) error {
 	}
 	if _, err := s.store.Runtime().StartStep(ctx, st.ID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
 		return err
+	}
+	return nil
+}
+
+// dispatchGraphRun prepares the attempt's one active graph node and, for an
+// agent node, assigns its exact immutable prompt/model/context/capabilities to
+// an eligible worker. Human and consequence gates remain control-plane state.
+func (s *Service) dispatchGraphRun(ctx context.Context, run runtime.Run) {
+	node, turn, needsWorker, err := s.work.PrepareNode(ctx, run.ID)
+	if err != nil {
+		if !errors.Is(err, workstore.ErrNotFound) {
+			s.log.Warn("prepare graph node", "run", run.ID, "error", err)
+		}
+		return
+	}
+	if !needsWorker {
+		return
+	}
+	if _, err := s.store.ResolveActiveAssignment(ctx, turn.ID); err == nil {
+		return
+	}
+	poolID, err := s.store.PoolForRun(ctx, run.ID)
+	if err != nil {
+		s.log.Warn("graph run has no pool assignment", "run", run.ID, "error", err)
+		return
+	}
+	w := s.pool.pickIdle(poolID, turn.ID)
+	if w == nil {
+		return
+	}
+	if err := s.assignGraph(ctx, turn, run, node, poolID, w); err != nil {
+		s.log.Warn("assign graph turn", "turn", turn.ID, "error", err)
+		w.releaseTurn()
+		s.kickReconciler()
+	}
+}
+
+//nolint:gocyclo // Assignment validates and stamps the complete immutable graph execution envelope.
+func (s *Service) assignGraph(ctx context.Context, turn runtime.Turn, run runtime.Run, node workstore.NodeExecution, poolID string, w *workerConn) error {
+	assignment, err := s.work.GetAssignmentContext(ctx, node.ID)
+	if err != nil {
+		return err
+	}
+	var model struct {
+		ID              string `json:"id"`
+		API             string `json:"api"`
+		ContextWindow   int32  `json:"contextWindow"`
+		MaxOutputTokens int32  `json:"maxOutputTokens"`
+		ThinkingLevel   string `json:"thinkingLevel"`
+	}
+	if err := json.Unmarshal(node.ModelSnapshot, &model); err != nil || model.ID == "" {
+		return fmt.Errorf("invalid graph model snapshot: %w", err)
+	}
+	uid, err := s.store.AllocateSessionUID(ctx, run.SessionID, s.cfg.SessionUIDBase, s.cfg.SessionUIDRange, s.cfg.SessionUIDGrace)
+	if err != nil {
+		return fmt.Errorf("allocate session uid: %w", err)
+	}
+	prompt := ""
+	if node.Prompt != nil {
+		prompt = *node.Prompt
+	}
+	skills := make([]*v1.SkillRef, 0, len(assignment.Skills))
+	for _, skill := range assignment.Skills {
+		skills = append(skills, &v1.SkillRef{Name: skill.Name, Version: skill.Version, Digest: skill.Digest})
+	}
+	msg := &v1.ControlMessage{Kind: &v1.ControlMessage_AssignTurn{AssignTurn: &v1.AssignTurn{
+		TurnId: turn.ID, SessionId: run.SessionID,
+		Sandbox:        &v1.SandboxRef{SandboxId: run.SessionID, Uid: uid, Gid: uid, WorkingDir: "workspace"},
+		Persona:        assignment.Persona,
+		Model:          &v1.ModelConfig{Id: model.ID, Api: model.API, ContextWindow: model.ContextWindow, MaxOutputTokens: model.MaxOutputTokens, ThinkingLevel: model.ThinkingLevel},
+		WorkspaceTools: node.WorkspaceTools, ScopeIdentityId: run.ScopeIdentityID,
+		Message: prompt, RunId: run.ID, WorkItemId: assignment.WorkItemID,
+		NodeExecutionId: node.ID, NodeKey: node.NodeKey, ContextJson: string(node.Context),
+		CompletionOutcomes: assignment.AllowedOutcomes, CompletionOutputSchemaJson: string(assignment.OutputSchema), Skills: skills,
+	}}}
+	in := AssignmentInput{
+		TurnID: turn.ID, RunID: run.ID, PoolID: poolID, WorkerID: w.workerID,
+		FencingGeneration: w.gen, AttemptID: run.ID, ScopeIdentityID: run.ScopeIdentityID,
+		AgentPoolKey: assignment.AgentPoolKey, ModelPermission: node.ModelSnapshot,
+		CapabilityRequest: node.CapabilitiesSnapshot, ToolVersionSnapshot: assignment.ToolPins,
+		WorkItemID: assignment.WorkItemID, NodeExecutionID: node.ID,
+	}
+	if _, err := s.store.CreateAssignment(ctx, in); err != nil {
+		return err
+	}
+	if err := w.send(msg); err != nil {
+		if a, ferr := s.store.FenceWorkerGenerationIf(ctx, poolID, w.workerID, w.gen); ferr == nil {
+			if tErr := s.terminalizeTurnLoss(ctx, a); tErr != nil {
+				s.log.Warn("graph assign send failed: terminalize turn", "turn", a.TurnID, "error", tErr)
+			}
+		}
+		return err
+	}
+	s.log.Info("assigned graph turn", "turn", turn.ID, "run", run.ID, "node", node.NodeKey, "visit", node.Visit, "worker", w.workerID)
+	if node.TimeoutMS != nil {
+		timeout := time.Duration(*node.TimeoutMS) * time.Millisecond
+		go func(serviceCtx context.Context) {
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				cancelCtx, cancel := context.WithTimeout(serviceCtx, 10*time.Second)
+				defer cancel()
+				if err := s.CancelTurn(cancelCtx, turn.ID, v1.AbortReason_ABORT_REASON_WORKFLOW_TIMEOUT, "workflow node timeout"); err != nil && !errors.Is(err, ErrAssignmentNotActive) {
+					s.log.Warn("graph node timeout cancellation", "turn", turn.ID, "error", err)
+				}
+			case <-serviceCtx.Done():
+				return
+			}
+		}(ctx)
 	}
 	return nil
 }
@@ -930,33 +1093,35 @@ func mustJSON(v any) []byte {
 // turnEventToRuntime maps a harness TurnEvent to a runtime event kind + payload.
 // Returns isOutcome=true for a terminal WorkerOutcome. An empty kind means the
 // event has no durable runtime representation (ignored).
-func turnEventToRuntime(te *v1.TurnEvent) (kind string, payload []byte, isOutcome bool) {
+func turnEventToRuntime(te *v1.TurnEvent) (kind string, payload []byte, isOutcome bool, isCompletion bool) {
 	switch k := te.Kind.(type) {
 	case *v1.TurnEvent_ExecutionStarted:
-		return runtime.EvTurnStarted, mustJSON(k.ExecutionStarted), false
+		return runtime.EvTurnStarted, mustJSON(k.ExecutionStarted), false, false
 	case *v1.TurnEvent_ModelCallStarted:
-		return runtime.EvModelCallStarted, mustJSON(k.ModelCallStarted), false
+		return runtime.EvModelCallStarted, mustJSON(k.ModelCallStarted), false, false
 	case *v1.TurnEvent_AssistantMessage:
-		return runtime.EvAssistantMessage, mustJSON(k.AssistantMessage), false
+		return runtime.EvAssistantMessage, mustJSON(k.AssistantMessage), false, false
 	case *v1.TurnEvent_ModelCallFailed:
-		return runtime.EvModelCallFailed, mustJSON(k.ModelCallFailed), false
+		return runtime.EvModelCallFailed, mustJSON(k.ModelCallFailed), false, false
 	case *v1.TurnEvent_ModelRetryScheduled:
-		return runtime.EvModelRetryScheduled, mustJSON(k.ModelRetryScheduled), false
+		return runtime.EvModelRetryScheduled, mustJSON(k.ModelRetryScheduled), false, false
 	case *v1.TurnEvent_ModelRetryFinished:
-		return runtime.EvModelRetryFinished, mustJSON(k.ModelRetryFinished), false
+		return runtime.EvModelRetryFinished, mustJSON(k.ModelRetryFinished), false, false
 	case *v1.TurnEvent_ToolCallStarted:
 		// The ambiguous side-effect boundary (HOR-381/ARCH-014): durable.
-		return runtime.EvToolCallStarted, mustJSON(k.ToolCallStarted), false
+		return runtime.EvToolCallStarted, mustJSON(k.ToolCallStarted), false, false
 	case *v1.TurnEvent_ToolResult:
-		return runtime.EvToolResult, mustJSON(k.ToolResult), false
+		return runtime.EvToolResult, mustJSON(k.ToolResult), false, false
 	case *v1.TurnEvent_CompactionStarted:
-		return runtime.EvCompactionStarted, mustJSON(k.CompactionStarted), false
+		return runtime.EvCompactionStarted, mustJSON(k.CompactionStarted), false, false
 	case *v1.TurnEvent_CompactionFinished:
-		return runtime.EvCompactionFinished, mustJSON(k.CompactionFinished), false
+		return runtime.EvCompactionFinished, mustJSON(k.CompactionFinished), false, false
 	case *v1.TurnEvent_HarnessError:
-		return runtime.EvError, mustJSON(k.HarnessError), false
+		return runtime.EvError, mustJSON(k.HarnessError), false, false
 	case *v1.TurnEvent_WorkerOutcome:
-		return runtime.EvSettled, mustJSON(k.WorkerOutcome), true
+		return runtime.EvSettled, mustJSON(k.WorkerOutcome), true, false
+	case *v1.TurnEvent_StepCompletion:
+		return runtime.EvStepCompletionReported, mustJSON(k.StepCompletion), false, true
 	}
-	return "", nil, false
+	return "", nil, false, false
 }

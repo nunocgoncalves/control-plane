@@ -101,7 +101,7 @@ type ResolvedDefinition struct {
 	Definition      Definition
 	TriggerBindings []TriggerBindingRow
 	// Spec is the exact canonical workflow/config snapshot input. It includes
-	// step tool semantics, scope identity key, versioned skill references,
+	// graph semantics, scope identity key, versioned skill references,
 	// source bindings, behavior, presentation, and capability narrowing. HOR-254
 	// persists this with Definition's immutable key/version/digest at attempt
 	// creation (REQ-003/REQ-011).
@@ -288,7 +288,7 @@ func (s *Store) GetLatestDefinition(ctx context.Context, key string) (Definition
 		       source_type, pool_key, presentation, created_at, updated_at
 		FROM workflow.definitions
 		WHERE key = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC LIMIT 1`, key)
+		ORDER BY created_at DESC, id DESC LIMIT 1`, key)
 	d, err := scanDefinition(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Definition{}, ErrNotFound
@@ -480,8 +480,8 @@ func (s *Store) SoftDeleteDefinitionsByOwner(ctx context.Context, scopeIdentityK
 // (HOR-252 scope): the definition, its trigger bindings, the scope identity,
 // and the permitted gateway tools bound to this definition (read cross-schema
 // from toolgateway.workflow_pool_bindings). HOR-254's attempt creation
-// composes this with the gateway's SnapshotAttemptTools (which pins exact
-// tool-version digests). The workflow store does NOT create attempts.
+// composes this atomically with exact latest-healthy tool-version pins. The
+// workflow store does NOT create attempts.
 //
 // When version is empty, the latest active definition for the key is resolved
 // (the default a new run binds to). PermittedTools is the explicit set from the
@@ -528,10 +528,10 @@ func (s *Store) ResolveForAttempt(ctx context.Context, key, version string) (Res
 	}, nil
 }
 
-// validateCanonicalSpecForAttempt checks the execution identity fields that
-// attempt creation must never infer or silently omit. Postgres guarantees valid
-// JSON syntax; this closes the semantic fail-open path for incomplete legacy or
-// corrupted spec_json.
+// validateCanonicalSpecForAttempt checks the immutable execution fields that
+// attempt creation must never infer or silently omit. Graph validation is
+// repeated here even though the reconciler validates before registration: a
+// corrupted or pre-graph spec_json must fail closed.
 func validateCanonicalSpecForAttempt(d Definition, spec CanonicalSpec) error {
 	if spec.Key == "" || spec.Key != d.Key {
 		return fmt.Errorf("key must match definition key %q", d.Key)
@@ -542,21 +542,13 @@ func validateCanonicalSpecForAttempt(d Definition, spec CanonicalSpec) error {
 	if spec.Source.Type == "" {
 		return errors.New("source.type is required")
 	}
-	if len(spec.Steps) == 0 {
-		return errors.New("steps must not be empty")
-	}
-	for i, step := range spec.Steps {
-		if step.Name == "" || step.Kind == "" {
-			return fmt.Errorf("steps[%d] name and kind are required", i)
-		}
-		if step.Kind == "tool_call" && step.Tool == "" {
-			return fmt.Errorf("steps[%d].tool is required for tool_call", i)
-		}
-	}
 	for i, skill := range spec.Skills {
 		if skill.Name == "" || skill.Version == "" || skill.Digest == "" {
 			return fmt.Errorf("skills[%d] requires name, version, and digest", i)
 		}
+	}
+	if err := ValidateGraph(spec); err != nil {
+		return err
 	}
 	return nil
 }
@@ -600,20 +592,16 @@ func scanDefinition(row pgx.Row) (Definition, error) {
 	return d, err
 }
 
-// CanonicalSpec is the deterministic shape marshaled to spec_json and hashed to
-// produce the immutable version digest. It captures the workflow definition
-// fields that define execution + presentation behavior (everything except the
-// version string itself, which is the version identity component). The
-// reconciler builds this from the CR spec.
+// CanonicalSpec is the deterministic immutable workflow snapshot. Version is
+// excluded because it is the external immutable identity component.
 type CanonicalSpec struct {
 	Key                   string                `json:"key"`
 	ScopeIdentityKey      string                `json:"scopeIdentityKey"`
 	Source                CanonicalSource       `json:"source"`
 	Skills                []CanonicalSkill      `json:"skills,omitempty"`
-	Steps                 []CanonicalStep       `json:"steps"`
 	RequestedCapabilities []CanonicalCapability `json:"requestedCapabilities,omitempty"`
-	CompletionRule        CanonicalCompletion   `json:"completionRule"`
-	Blocker               *CanonicalBlocker     `json:"blocker,omitempty"`
+	DefaultModelRef       string                `json:"defaultModelRef,omitempty"`
+	Graph                 CanonicalGraph        `json:"graph"`
 	ValueModelRef         string                `json:"valueModelRef,omitempty"`
 	Presentation          CanonicalPresentation `json:"presentation"`
 	PoolRef               string                `json:"poolRef"`
@@ -638,13 +626,55 @@ type CanonicalSkill struct {
 	Digest  string `json:"digest"`
 }
 
-// CanonicalStep is one workflow step. Tool is included in the immutable digest
-// because it defines tool_call execution semantics.
-type CanonicalStep struct {
-	Name   string          `json:"name"`
-	Kind   string          `json:"kind"`
-	Tool   string          `json:"tool,omitempty"`
-	Config json.RawMessage `json:"config,omitempty"`
+// CanonicalGraph is the single-active-node executable graph (ARCH-019).
+type CanonicalGraph struct {
+	EntryNode        string                     `json:"entryNode"`
+	MaxTransitions   int32                      `json:"maxTransitions"`
+	Nodes            []CanonicalNode            `json:"nodes"`
+	Edges            []CanonicalEdge            `json:"edges,omitempty"`
+	TerminalOutcomes []CanonicalTerminalOutcome `json:"terminalOutcomes"`
+}
+
+// CanonicalNode is an immutable agent task or human gate definition.
+type CanonicalNode struct {
+	Key            string              `json:"key"`
+	Kind           string              `json:"kind"`
+	Prompt         string              `json:"prompt,omitempty"`
+	ModelRef       string              `json:"modelRef,omitempty"`
+	Skills         []string            `json:"skills,omitempty"`
+	Capabilities   []string            `json:"capabilities,omitempty"`
+	WorkspaceTools bool                `json:"workspaceTools,omitempty"`
+	Timeout        string              `json:"timeout,omitempty"`
+	Outcomes       []string            `json:"outcomes"`
+	OutputSchema   json.RawMessage     `json:"outputSchema,omitempty"`
+	HumanGate      *CanonicalHumanGate `json:"humanGate,omitempty"`
+}
+
+// CanonicalHumanGate is the customer-actionable request contract.
+type CanonicalHumanGate struct {
+	Type           string                 `json:"type"`
+	Title          CanonicalLocalizedText `json:"title"`
+	Description    CanonicalLocalizedText `json:"description"`
+	ResponseSchema json.RawMessage        `json:"responseSchema,omitempty"`
+}
+
+// CanonicalLocalizedText is business copy in approved v1 locales.
+type CanonicalLocalizedText struct {
+	EN string `json:"en,omitempty"`
+	PT string `json:"pt,omitempty"`
+}
+
+// CanonicalEdge maps one declared outcome to one next node.
+type CanonicalEdge struct {
+	From    string `json:"from"`
+	Outcome string `json:"outcome"`
+	To      string `json:"to"`
+}
+
+// CanonicalTerminalOutcome completes an attempt as Done.
+type CanonicalTerminalOutcome struct {
+	Node    string `json:"node"`
+	Outcome string `json:"outcome"`
 }
 
 // CanonicalCapability is one requested gateway capability.
@@ -652,18 +682,6 @@ type CanonicalCapability struct {
 	Tool           string   `json:"tool"`
 	MaxEffectClass string   `json:"maxEffectClass"`
 	Actions        []string `json:"actions,omitempty"`
-}
-
-// CanonicalCompletion is the completion rule.
-type CanonicalCompletion struct {
-	Type string `json:"type"`
-	Ref  string `json:"ref,omitempty"`
-}
-
-// CanonicalBlocker is the blocker behavior.
-type CanonicalBlocker struct {
-	Step     string `json:"step"`
-	Behavior string `json:"behavior"`
 }
 
 // CanonicalPresentation is the customer-facing labels + persona.

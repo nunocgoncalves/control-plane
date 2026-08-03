@@ -14,10 +14,12 @@ import (
 //   - token   - service accounts calling POST /v1/token (agent-fleet, Path 2)
 //   - gateway - end users calling the gateway directly (Path 1); validated by
 //     the gateway from its control-plane-synced snapshot, not here.
+//   - work    - customer Dashboard/adapters calling durable work REST/SSE APIs.
 const (
 	ScopeAdmin   = "admin"
 	ScopeToken   = "token"
 	ScopeGateway = "gateway"
+	ScopeWork    = "work"
 )
 
 const (
@@ -69,7 +71,7 @@ func ParseBearer(authHeader string) (string, bool) {
 // ValidScope reports whether s is a recognized API key scope.
 func ValidScope(s string) bool {
 	switch s {
-	case ScopeAdmin, ScopeToken, ScopeGateway:
+	case ScopeAdmin, ScopeToken, ScopeGateway, ScopeWork:
 		return true
 	}
 	return false

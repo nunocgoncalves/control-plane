@@ -706,6 +706,7 @@ type TurnEvent struct {
 	//	*TurnEvent_CompactionFinished
 	//	*TurnEvent_HarnessError
 	//	*TurnEvent_WorkerOutcome
+	//	*TurnEvent_StepCompletion
 	Kind          isTurnEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -877,6 +878,15 @@ func (x *TurnEvent) GetWorkerOutcome() *WorkerOutcome {
 	return nil
 }
 
+func (x *TurnEvent) GetStepCompletion() *StepCompletion {
+	if x != nil {
+		if x, ok := x.Kind.(*TurnEvent_StepCompletion); ok {
+			return x.StepCompletion
+		}
+	}
+	return nil
+}
+
 type isTurnEvent_Kind interface {
 	isTurnEvent_Kind()
 }
@@ -929,6 +939,10 @@ type TurnEvent_WorkerOutcome struct {
 	WorkerOutcome *WorkerOutcome `protobuf:"bytes,21,opt,name=worker_outcome,json=workerOutcome,proto3,oneof"`
 }
 
+type TurnEvent_StepCompletion struct {
+	StepCompletion *StepCompletion `protobuf:"bytes,22,opt,name=step_completion,json=stepCompletion,proto3,oneof"` // HOR-254 reserved complete_step report
+}
+
 func (*TurnEvent_ExecutionStarted) isTurnEvent_Kind() {}
 
 func (*TurnEvent_ModelCallStarted) isTurnEvent_Kind() {}
@@ -952,6 +966,8 @@ func (*TurnEvent_CompactionFinished) isTurnEvent_Kind() {}
 func (*TurnEvent_HarnessError) isTurnEvent_Kind() {}
 
 func (*TurnEvent_WorkerOutcome) isTurnEvent_Kind() {}
+
+func (*TurnEvent_StepCompletion) isTurnEvent_Kind() {}
 
 type ExecutionStarted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1827,6 +1843,137 @@ func (x *ErrorDetail) GetDetailsJson() string {
 // successful assistant message followed by failed cleanup is FAILED. The CP may
 // independently terminalize (cancellation/worker-loss/lease); the worker's late
 // outcome is after_terminal audit and cannot overwrite CP terminal state.
+// StepCompletion is emitted exactly once by the reserved complete_step control
+// function. It is a completion candidate; the CP advances the graph only after
+// a clean WorkerOutcome=COMPLETED for the same turn (ARCH-020).
+type StepCompletion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Outcome       string                 `protobuf:"bytes,1,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	Summary       string                 `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
+	OutputJson    string                 `protobuf:"bytes,3,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
+	ArtifactRefs  []*StepArtifactRef     `protobuf:"bytes,4,rep,name=artifact_refs,json=artifactRefs,proto3" json:"artifact_refs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StepCompletion) Reset() {
+	*x = StepCompletion{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StepCompletion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StepCompletion) ProtoMessage() {}
+
+func (x *StepCompletion) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StepCompletion.ProtoReflect.Descriptor instead.
+func (*StepCompletion) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *StepCompletion) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *StepCompletion) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *StepCompletion) GetOutputJson() string {
+	if x != nil {
+		return x.OutputJson
+	}
+	return ""
+}
+
+func (x *StepCompletion) GetArtifactRefs() []*StepArtifactRef {
+	if x != nil {
+		return x.ArtifactRefs
+	}
+	return nil
+}
+
+type StepArtifactRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactId    string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
+	Role          string                 `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
+	MetadataJson  string                 `protobuf:"bytes,3,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StepArtifactRef) Reset() {
+	*x = StepArtifactRef{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StepArtifactRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StepArtifactRef) ProtoMessage() {}
+
+func (x *StepArtifactRef) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StepArtifactRef.ProtoReflect.Descriptor instead.
+func (*StepArtifactRef) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *StepArtifactRef) GetArtifactId() string {
+	if x != nil {
+		return x.ArtifactId
+	}
+	return ""
+}
+
+func (x *StepArtifactRef) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *StepArtifactRef) GetMetadataJson() string {
+	if x != nil {
+		return x.MetadataJson
+	}
+	return ""
+}
+
 type WorkerOutcome struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Outcome       Outcome                `protobuf:"varint,1,opt,name=outcome,proto3,enum=iterabase.harness.v1.Outcome" json:"outcome,omitempty"`
@@ -1837,7 +1984,7 @@ type WorkerOutcome struct {
 
 func (x *WorkerOutcome) Reset() {
 	*x = WorkerOutcome{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1849,7 +1996,7 @@ func (x *WorkerOutcome) String() string {
 func (*WorkerOutcome) ProtoMessage() {}
 
 func (x *WorkerOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[19]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1862,7 +2009,7 @@ func (x *WorkerOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerOutcome.ProtoReflect.Descriptor instead.
 func (*WorkerOutcome) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{19}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *WorkerOutcome) GetOutcome() Outcome {
@@ -1895,7 +2042,7 @@ type TokenDelta struct {
 
 func (x *TokenDelta) Reset() {
 	*x = TokenDelta{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1907,7 +2054,7 @@ func (x *TokenDelta) String() string {
 func (*TokenDelta) ProtoMessage() {}
 
 func (x *TokenDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[20]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1920,7 +2067,7 @@ func (x *TokenDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenDelta.ProtoReflect.Descriptor instead.
 func (*TokenDelta) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{20}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TokenDelta) GetTurnId() string {
@@ -1967,7 +2114,7 @@ type ControlMessage struct {
 
 func (x *ControlMessage) Reset() {
 	*x = ControlMessage{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1979,7 +2126,7 @@ func (x *ControlMessage) String() string {
 func (*ControlMessage) ProtoMessage() {}
 
 func (x *ControlMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[21]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1992,7 +2139,7 @@ func (x *ControlMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlMessage.ProtoReflect.Descriptor instead.
 func (*ControlMessage) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{21}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ControlMessage) GetKind() isControlMessage_Kind {
@@ -2096,7 +2243,7 @@ type Welcome struct {
 
 func (x *Welcome) Reset() {
 	*x = Welcome{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2108,7 +2255,7 @@ func (x *Welcome) String() string {
 func (*Welcome) ProtoMessage() {}
 
 func (x *Welcome) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[22]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2121,7 +2268,7 @@ func (x *Welcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Welcome.ProtoReflect.Descriptor instead.
 func (*Welcome) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{22}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Welcome) GetProtocolVersion() string {
@@ -2163,24 +2310,31 @@ func (x *Welcome) GetLeaseTimeoutMs() int32 {
 // relative paths/sandbox ownership before spawning the child; a structurally
 // invalid assignment yields typed failure events + a failed outcome.
 type AssignTurn struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	TurnId          string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
-	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Sandbox         *SandboxRef            `protobuf:"bytes,3,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
-	Persona         string                 `protobuf:"bytes,4,opt,name=persona,proto3" json:"persona,omitempty"` // pi systemPromptOverride
-	Model           *ModelConfig           `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	WorkspaceTools  bool                   `protobuf:"varint,6,opt,name=workspace_tools,json=workspaceTools,proto3" json:"workspace_tools,omitempty"`     // ARCH-016: expose exactly read/write/edit/bash under session UID/GID; never widened per turn
-	ScopeIdentityId string                 `protobuf:"bytes,7,opt,name=scope_identity_id,json=scopeIdentityId,proto3" json:"scope_identity_id,omitempty"` // validation/audit
-	Message         string                 `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`                                          // the user/task message
-	Images          []*Image               `protobuf:"bytes,9,rep,name=images,proto3" json:"images,omitempty"`                                            // optional; the email demo is text-only
-	RunId           string                 `protobuf:"bytes,10,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`                                // workflow run id; v1 attempt_id (HOR-392 SD-1) + X-Iterabase-Run-Id (HOR-398)
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	TurnId                     string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	SessionId                  string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Sandbox                    *SandboxRef            `protobuf:"bytes,3,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
+	Persona                    string                 `protobuf:"bytes,4,opt,name=persona,proto3" json:"persona,omitempty"` // pi systemPromptOverride
+	Model                      *ModelConfig           `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	WorkspaceTools             bool                   `protobuf:"varint,6,opt,name=workspace_tools,json=workspaceTools,proto3" json:"workspace_tools,omitempty"`                                         // ARCH-016: expose exactly read/write/edit/bash under session UID/GID; never widened per turn
+	ScopeIdentityId            string                 `protobuf:"bytes,7,opt,name=scope_identity_id,json=scopeIdentityId,proto3" json:"scope_identity_id,omitempty"`                                     // validation/audit
+	Message                    string                 `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`                                                                              // the user/task message
+	Images                     []*Image               `protobuf:"bytes,9,rep,name=images,proto3" json:"images,omitempty"`                                                                                // optional; the email demo is text-only
+	RunId                      string                 `protobuf:"bytes,10,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`                                                                    // workflow run id == attempt_id (HOR-254)
+	NodeExecutionId            string                 `protobuf:"bytes,11,opt,name=node_execution_id,json=nodeExecutionId,proto3" json:"node_execution_id,omitempty"`                                    // exact append-only graph-node visit; empty for chat
+	NodeKey                    string                 `protobuf:"bytes,12,opt,name=node_key,json=nodeKey,proto3" json:"node_key,omitempty"`                                                              // immutable graph node key
+	ContextJson                string                 `protobuf:"bytes,13,opt,name=context_json,json=contextJson,proto3" json:"context_json,omitempty"`                                                  // bounded durable source/previous/latest-output context
+	CompletionOutcomes         []string               `protobuf:"bytes,14,rep,name=completion_outcomes,json=completionOutcomes,proto3" json:"completion_outcomes,omitempty"`                             // allowed complete_step outcomes
+	CompletionOutputSchemaJson string                 `protobuf:"bytes,15,opt,name=completion_output_schema_json,json=completionOutputSchemaJson,proto3" json:"completion_output_schema_json,omitempty"` // JSON Schema for complete_step.output
+	Skills                     []*SkillRef            `protobuf:"bytes,16,rep,name=skills,proto3" json:"skills,omitempty"`                                                                               // exact immutable node skill subset
+	WorkItemId                 string                 `protobuf:"bytes,17,opt,name=work_item_id,json=workItemId,proto3" json:"work_item_id,omitempty"`                                                   // stable customer-facing work item identity
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *AssignTurn) Reset() {
 	*x = AssignTurn{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2192,7 +2346,7 @@ func (x *AssignTurn) String() string {
 func (*AssignTurn) ProtoMessage() {}
 
 func (x *AssignTurn) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[23]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2205,7 +2359,7 @@ func (x *AssignTurn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignTurn.ProtoReflect.Descriptor instead.
 func (*AssignTurn) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{23}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AssignTurn) GetTurnId() string {
@@ -2278,6 +2432,115 @@ func (x *AssignTurn) GetRunId() string {
 	return ""
 }
 
+func (x *AssignTurn) GetNodeExecutionId() string {
+	if x != nil {
+		return x.NodeExecutionId
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetNodeKey() string {
+	if x != nil {
+		return x.NodeKey
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetContextJson() string {
+	if x != nil {
+		return x.ContextJson
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetCompletionOutcomes() []string {
+	if x != nil {
+		return x.CompletionOutcomes
+	}
+	return nil
+}
+
+func (x *AssignTurn) GetCompletionOutputSchemaJson() string {
+	if x != nil {
+		return x.CompletionOutputSchemaJson
+	}
+	return ""
+}
+
+func (x *AssignTurn) GetSkills() []*SkillRef {
+	if x != nil {
+		return x.Skills
+	}
+	return nil
+}
+
+func (x *AssignTurn) GetWorkItemId() string {
+	if x != nil {
+		return x.WorkItemId
+	}
+	return ""
+}
+
+type SkillRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Digest        string                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SkillRef) Reset() {
+	*x = SkillRef{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SkillRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SkillRef) ProtoMessage() {}
+
+func (x *SkillRef) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SkillRef.ProtoReflect.Descriptor instead.
+func (*SkillRef) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *SkillRef) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SkillRef) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *SkillRef) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
 // Under the HOR-381 provisioning rescope (founder-approved 2026-08-02), the
 // supervisor itself provisions this sandbox at AssignTurn: provisionSandbox
@@ -2300,7 +2563,7 @@ type SandboxRef struct {
 
 func (x *SandboxRef) Reset() {
 	*x = SandboxRef{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2312,7 +2575,7 @@ func (x *SandboxRef) String() string {
 func (*SandboxRef) ProtoMessage() {}
 
 func (x *SandboxRef) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[24]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2325,7 +2588,7 @@ func (x *SandboxRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
 func (*SandboxRef) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{24}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SandboxRef) GetSandboxId() string {
@@ -2369,7 +2632,7 @@ type ModelConfig struct {
 
 func (x *ModelConfig) Reset() {
 	*x = ModelConfig{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2381,7 +2644,7 @@ func (x *ModelConfig) String() string {
 func (*ModelConfig) ProtoMessage() {}
 
 func (x *ModelConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[25]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2394,7 +2657,7 @@ func (x *ModelConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelConfig.ProtoReflect.Descriptor instead.
 func (*ModelConfig) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{25}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ModelConfig) GetId() string {
@@ -2442,7 +2705,7 @@ type Image struct {
 
 func (x *Image) Reset() {
 	*x = Image{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2454,7 +2717,7 @@ func (x *Image) String() string {
 func (*Image) ProtoMessage() {}
 
 func (x *Image) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[26]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2467,7 +2730,7 @@ func (x *Image) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Image.ProtoReflect.Descriptor instead.
 func (*Image) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{26}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *Image) GetData() []byte {
@@ -2498,7 +2761,7 @@ type AbortTurn struct {
 
 func (x *AbortTurn) Reset() {
 	*x = AbortTurn{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2510,7 +2773,7 @@ func (x *AbortTurn) String() string {
 func (*AbortTurn) ProtoMessage() {}
 
 func (x *AbortTurn) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2523,7 +2786,7 @@ func (x *AbortTurn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortTurn.ProtoReflect.Descriptor instead.
 func (*AbortTurn) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AbortTurn) GetTurnId() string {
@@ -2561,7 +2824,7 @@ type EventAck struct {
 
 func (x *EventAck) Reset() {
 	*x = EventAck{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2573,7 +2836,7 @@ func (x *EventAck) String() string {
 func (*EventAck) ProtoMessage() {}
 
 func (x *EventAck) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2586,7 +2849,7 @@ func (x *EventAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventAck.ProtoReflect.Descriptor instead.
 func (*EventAck) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *EventAck) GetTurnId() string {
@@ -2647,7 +2910,7 @@ type SessionEnd struct {
 
 func (x *SessionEnd) Reset() {
 	*x = SessionEnd{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2659,7 +2922,7 @@ func (x *SessionEnd) String() string {
 func (*SessionEnd) ProtoMessage() {}
 
 func (x *SessionEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2672,7 +2935,7 @@ func (x *SessionEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEnd.ProtoReflect.Descriptor instead.
 func (*SessionEnd) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SessionEnd) GetSandboxId() string {
@@ -2723,7 +2986,7 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\bpi_phase\x18\x03 \x01(\x0e2\x1d.iterabase.harness.v1.PiPhaseR\apiPhase\x12 \n" +
 	"\ftool_call_id\x18\x04 \x01(\tR\n" +
 	"toolCallId\x12)\n" +
-	"\x10highest_sequence\x18\x05 \x01(\x04R\x0fhighestSequence\"\xef\b\n" +
+	"\x10highest_sequence\x18\x05 \x01(\x04R\x0fhighestSequence\"\xc0\t\n" +
 	"\tTurnEvent\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12!\n" +
@@ -2741,7 +3004,8 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x12compaction_started\x18\x12 \x01(\v2'.iterabase.harness.v1.CompactionStartedH\x00R\x11compactionStarted\x12[\n" +
 	"\x13compaction_finished\x18\x13 \x01(\v2(.iterabase.harness.v1.CompactionFinishedH\x00R\x12compactionFinished\x12I\n" +
 	"\rharness_error\x18\x14 \x01(\v2\".iterabase.harness.v1.HarnessErrorH\x00R\fharnessError\x12L\n" +
-	"\x0eworker_outcome\x18\x15 \x01(\v2#.iterabase.harness.v1.WorkerOutcomeH\x00R\rworkerOutcomeB\x06\n" +
+	"\x0eworker_outcome\x18\x15 \x01(\v2#.iterabase.harness.v1.WorkerOutcomeH\x00R\rworkerOutcome\x12O\n" +
+	"\x0fstep_completion\x18\x16 \x01(\v2$.iterabase.harness.v1.StepCompletionH\x00R\x0estepCompletionB\x06\n" +
 	"\x04kind\"m\n" +
 	"\x10ExecutionStarted\x12\x1d\n" +
 	"\n" +
@@ -2809,7 +3073,18 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12F\n" +
 	"\fretryability\x18\x03 \x01(\x0e2\".iterabase.harness.v1.RetryabilityR\fretryability\x12!\n" +
-	"\fdetails_json\x18\x04 \x01(\tR\vdetailsJson\"b\n" +
+	"\fdetails_json\x18\x04 \x01(\tR\vdetailsJson\"\xb1\x01\n" +
+	"\x0eStepCompletion\x12\x18\n" +
+	"\aoutcome\x18\x01 \x01(\tR\aoutcome\x12\x18\n" +
+	"\asummary\x18\x02 \x01(\tR\asummary\x12\x1f\n" +
+	"\voutput_json\x18\x03 \x01(\tR\n" +
+	"outputJson\x12J\n" +
+	"\rartifact_refs\x18\x04 \x03(\v2%.iterabase.harness.v1.StepArtifactRefR\fartifactRefs\"k\n" +
+	"\x0fStepArtifactRef\x12\x1f\n" +
+	"\vartifact_id\x18\x01 \x01(\tR\n" +
+	"artifactId\x12\x12\n" +
+	"\x04role\x18\x02 \x01(\tR\x04role\x12#\n" +
+	"\rmetadata_json\x18\x03 \x01(\tR\fmetadataJson\"b\n" +
 	"\rWorkerOutcome\x127\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2\x1d.iterabase.harness.v1.OutcomeR\aoutcome\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x95\x01\n" +
@@ -2833,7 +3108,7 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
 	"\x12fencing_generation\x18\x02 \x01(\x04R\x11fencingGeneration\x122\n" +
 	"\x15heartbeat_interval_ms\x18\x03 \x01(\x05R\x13heartbeatIntervalMs\x12(\n" +
-	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\x8e\x03\n" +
+	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\xc6\x05\n" +
 	"\n" +
 	"AssignTurn\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1d\n" +
@@ -2847,7 +3122,19 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\amessage\x18\b \x01(\tR\amessage\x123\n" +
 	"\x06images\x18\t \x03(\v2\x1b.iterabase.harness.v1.ImageR\x06images\x12\x15\n" +
 	"\x06run_id\x18\n" +
-	" \x01(\tR\x05runId\"p\n" +
+	" \x01(\tR\x05runId\x12*\n" +
+	"\x11node_execution_id\x18\v \x01(\tR\x0fnodeExecutionId\x12\x19\n" +
+	"\bnode_key\x18\f \x01(\tR\anodeKey\x12!\n" +
+	"\fcontext_json\x18\r \x01(\tR\vcontextJson\x12/\n" +
+	"\x13completion_outcomes\x18\x0e \x03(\tR\x12completionOutcomes\x12A\n" +
+	"\x1dcompletion_output_schema_json\x18\x0f \x01(\tR\x1acompletionOutputSchemaJson\x126\n" +
+	"\x06skills\x18\x10 \x03(\v2\x1e.iterabase.harness.v1.SkillRefR\x06skills\x12 \n" +
+	"\fwork_item_id\x18\x11 \x01(\tR\n" +
+	"workItemId\"P\n" +
+	"\bSkillRef\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\"p\n" +
 	"\n" +
 	"SandboxRef\x12\x1d\n" +
 	"\n" +
@@ -2931,7 +3218,7 @@ func file_iterabase_harness_v1_harness_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(WorkerState)(0),            // 0: iterabase.harness.v1.WorkerState
 	(PiPhase)(0),                // 1: iterabase.harness.v1.PiPhase
@@ -2958,24 +3245,27 @@ var file_iterabase_harness_v1_harness_proto_goTypes = []any{
 	(*CompactionFinished)(nil),  // 22: iterabase.harness.v1.CompactionFinished
 	(*HarnessError)(nil),        // 23: iterabase.harness.v1.HarnessError
 	(*ErrorDetail)(nil),         // 24: iterabase.harness.v1.ErrorDetail
-	(*WorkerOutcome)(nil),       // 25: iterabase.harness.v1.WorkerOutcome
-	(*TokenDelta)(nil),          // 26: iterabase.harness.v1.TokenDelta
-	(*ControlMessage)(nil),      // 27: iterabase.harness.v1.ControlMessage
-	(*Welcome)(nil),             // 28: iterabase.harness.v1.Welcome
-	(*AssignTurn)(nil),          // 29: iterabase.harness.v1.AssignTurn
-	(*SandboxRef)(nil),          // 30: iterabase.harness.v1.SandboxRef
-	(*ModelConfig)(nil),         // 31: iterabase.harness.v1.ModelConfig
-	(*Image)(nil),               // 32: iterabase.harness.v1.Image
-	(*AbortTurn)(nil),           // 33: iterabase.harness.v1.AbortTurn
-	(*EventAck)(nil),            // 34: iterabase.harness.v1.EventAck
-	(*SessionEnd)(nil),          // 35: iterabase.harness.v1.SessionEnd
+	(*StepCompletion)(nil),      // 25: iterabase.harness.v1.StepCompletion
+	(*StepArtifactRef)(nil),     // 26: iterabase.harness.v1.StepArtifactRef
+	(*WorkerOutcome)(nil),       // 27: iterabase.harness.v1.WorkerOutcome
+	(*TokenDelta)(nil),          // 28: iterabase.harness.v1.TokenDelta
+	(*ControlMessage)(nil),      // 29: iterabase.harness.v1.ControlMessage
+	(*Welcome)(nil),             // 30: iterabase.harness.v1.Welcome
+	(*AssignTurn)(nil),          // 31: iterabase.harness.v1.AssignTurn
+	(*SkillRef)(nil),            // 32: iterabase.harness.v1.SkillRef
+	(*SandboxRef)(nil),          // 33: iterabase.harness.v1.SandboxRef
+	(*ModelConfig)(nil),         // 34: iterabase.harness.v1.ModelConfig
+	(*Image)(nil),               // 35: iterabase.harness.v1.Image
+	(*AbortTurn)(nil),           // 36: iterabase.harness.v1.AbortTurn
+	(*EventAck)(nil),            // 37: iterabase.harness.v1.EventAck
+	(*SessionEnd)(nil),          // 38: iterabase.harness.v1.SessionEnd
 }
 var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	7,  // 0: iterabase.harness.v1.WorkerMessage.hello:type_name -> iterabase.harness.v1.Hello
 	8,  // 1: iterabase.harness.v1.WorkerMessage.ready:type_name -> iterabase.harness.v1.Ready
 	9,  // 2: iterabase.harness.v1.WorkerMessage.heartbeat:type_name -> iterabase.harness.v1.Heartbeat
 	10, // 3: iterabase.harness.v1.WorkerMessage.turn_event:type_name -> iterabase.harness.v1.TurnEvent
-	26, // 4: iterabase.harness.v1.WorkerMessage.token_delta:type_name -> iterabase.harness.v1.TokenDelta
+	28, // 4: iterabase.harness.v1.WorkerMessage.token_delta:type_name -> iterabase.harness.v1.TokenDelta
 	0,  // 5: iterabase.harness.v1.Heartbeat.state:type_name -> iterabase.harness.v1.WorkerState
 	1,  // 6: iterabase.harness.v1.Heartbeat.pi_phase:type_name -> iterabase.harness.v1.PiPhase
 	11, // 7: iterabase.harness.v1.TurnEvent.execution_started:type_name -> iterabase.harness.v1.ExecutionStarted
@@ -2989,31 +3279,34 @@ var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	21, // 15: iterabase.harness.v1.TurnEvent.compaction_started:type_name -> iterabase.harness.v1.CompactionStarted
 	22, // 16: iterabase.harness.v1.TurnEvent.compaction_finished:type_name -> iterabase.harness.v1.CompactionFinished
 	23, // 17: iterabase.harness.v1.TurnEvent.harness_error:type_name -> iterabase.harness.v1.HarnessError
-	25, // 18: iterabase.harness.v1.TurnEvent.worker_outcome:type_name -> iterabase.harness.v1.WorkerOutcome
-	30, // 19: iterabase.harness.v1.ExecutionStarted.sandbox:type_name -> iterabase.harness.v1.SandboxRef
-	14, // 20: iterabase.harness.v1.AssistantMessage.tool_calls:type_name -> iterabase.harness.v1.ToolCall
-	17, // 21: iterabase.harness.v1.AssistantMessage.usage:type_name -> iterabase.harness.v1.Usage
-	24, // 22: iterabase.harness.v1.ModelCallFailed.error:type_name -> iterabase.harness.v1.ErrorDetail
-	24, // 23: iterabase.harness.v1.HarnessError.error:type_name -> iterabase.harness.v1.ErrorDetail
-	2,  // 24: iterabase.harness.v1.ErrorDetail.retryability:type_name -> iterabase.harness.v1.Retryability
-	3,  // 25: iterabase.harness.v1.WorkerOutcome.outcome:type_name -> iterabase.harness.v1.Outcome
-	4,  // 26: iterabase.harness.v1.TokenDelta.type:type_name -> iterabase.harness.v1.DeltaType
-	28, // 27: iterabase.harness.v1.ControlMessage.welcome:type_name -> iterabase.harness.v1.Welcome
-	29, // 28: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
-	33, // 29: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
-	34, // 30: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
-	35, // 31: iterabase.harness.v1.ControlMessage.session_end:type_name -> iterabase.harness.v1.SessionEnd
-	30, // 32: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
-	31, // 33: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
-	32, // 34: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
-	5,  // 35: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
-	6,  // 36: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
-	27, // 37: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
-	37, // [37:38] is the sub-list for method output_type
-	36, // [36:37] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	27, // 18: iterabase.harness.v1.TurnEvent.worker_outcome:type_name -> iterabase.harness.v1.WorkerOutcome
+	25, // 19: iterabase.harness.v1.TurnEvent.step_completion:type_name -> iterabase.harness.v1.StepCompletion
+	33, // 20: iterabase.harness.v1.ExecutionStarted.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	14, // 21: iterabase.harness.v1.AssistantMessage.tool_calls:type_name -> iterabase.harness.v1.ToolCall
+	17, // 22: iterabase.harness.v1.AssistantMessage.usage:type_name -> iterabase.harness.v1.Usage
+	24, // 23: iterabase.harness.v1.ModelCallFailed.error:type_name -> iterabase.harness.v1.ErrorDetail
+	24, // 24: iterabase.harness.v1.HarnessError.error:type_name -> iterabase.harness.v1.ErrorDetail
+	2,  // 25: iterabase.harness.v1.ErrorDetail.retryability:type_name -> iterabase.harness.v1.Retryability
+	26, // 26: iterabase.harness.v1.StepCompletion.artifact_refs:type_name -> iterabase.harness.v1.StepArtifactRef
+	3,  // 27: iterabase.harness.v1.WorkerOutcome.outcome:type_name -> iterabase.harness.v1.Outcome
+	4,  // 28: iterabase.harness.v1.TokenDelta.type:type_name -> iterabase.harness.v1.DeltaType
+	30, // 29: iterabase.harness.v1.ControlMessage.welcome:type_name -> iterabase.harness.v1.Welcome
+	31, // 30: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
+	36, // 31: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
+	37, // 32: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
+	38, // 33: iterabase.harness.v1.ControlMessage.session_end:type_name -> iterabase.harness.v1.SessionEnd
+	33, // 34: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	34, // 35: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
+	35, // 36: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
+	32, // 37: iterabase.harness.v1.AssignTurn.skills:type_name -> iterabase.harness.v1.SkillRef
+	5,  // 38: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
+	6,  // 39: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
+	29, // 40: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
+	40, // [40:41] is the sub-list for method output_type
+	39, // [39:40] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_harness_v1_harness_proto_init() }
@@ -3041,8 +3334,9 @@ func file_iterabase_harness_v1_harness_proto_init() {
 		(*TurnEvent_CompactionFinished)(nil),
 		(*TurnEvent_HarnessError)(nil),
 		(*TurnEvent_WorkerOutcome)(nil),
+		(*TurnEvent_StepCompletion)(nil),
 	}
-	file_iterabase_harness_v1_harness_proto_msgTypes[21].OneofWrappers = []any{
+	file_iterabase_harness_v1_harness_proto_msgTypes[23].OneofWrappers = []any{
 		(*ControlMessage_Welcome)(nil),
 		(*ControlMessage_AssignTurn)(nil),
 		(*ControlMessage_AbortTurn)(nil),
@@ -3055,7 +3349,7 @@ func file_iterabase_harness_v1_harness_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_harness_v1_harness_proto_rawDesc), len(file_iterabase_harness_v1_harness_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   30,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

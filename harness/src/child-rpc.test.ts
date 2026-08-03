@@ -75,6 +75,16 @@ describe("ChildRpc", () => {
     expect(res.resultJson).toBe('{"ok":true}');
   });
 
+  it("reports complete_step through the ordered supervisor RPC channel", async () => {
+    const { rpc, sent } = makeRpc();
+    const pending = rpc.reportStepCompletion({ outcome: "approved", summary: "Review passed", outputJson: '{"findings":0}', artifactRefs: [] });
+    const req = decodeSent(sent[0] as Buffer) as { type: string; requestId: string; outcome: string };
+    expect(req.type).toBe("stepCompletion");
+    expect(req.outcome).toBe("approved");
+    feed(rpc, { type: "stepCompletionAck", requestId: req.requestId });
+    await pending;
+  });
+
   it("sends a cancel frame when the abort signal fires", async () => {
     const { rpc, sent } = makeRpc();
     const ac = new AbortController();

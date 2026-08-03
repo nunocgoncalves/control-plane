@@ -19,7 +19,7 @@
 
 import { writeSync } from "node:fs";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createReadStream } from "node:fs";
 import { toJson, create } from "@bufbuild/protobuf";
@@ -79,11 +79,99 @@ interface Assignment {
   turnId: string;
   sessionId: string;
   runId?: string;
+  workItemId?: string;
+  nodeExecutionId?: string;
+  nodeKey?: string;
+  contextJson?: string;
+  completionOutcomes?: string[];
+  completionOutputSchemaJson?: string;
+  skills?: { name: string; version: string; digest: string }[];
   persona: string;
   model: { id: string; api: string; contextWindow: number; maxOutputTokens?: number; thinkingLevel?: string };
   workspaceTools: boolean;
   message: string;
   images?: AssignmentImage[];
+}
+
+/** Per-turn state for the reserved complete_step platform control function. */
+export class StepCompletionState {
+  readonly required: boolean;
+  reported = false;
+  private reporting = false;
+
+  constructor(private readonly assignment: Assignment, private readonly rpc: Pick<ChildRpc, "reportStepCompletion">) {
+    this.required = Boolean(assignment.nodeExecutionId);
+  }
+
+  tool(): ToolDefinition {
+    const outcomes = this.assignment.completionOutcomes ?? [];
+    let outputSchema: unknown = {};
+    try {
+      outputSchema = JSON.parse(this.assignment.completionOutputSchemaJson || "{}");
+    } catch {
+      throw new Error("invalid completion output schema JSON");
+    }
+    const parameters = {
+      type: "object",
+      additionalProperties: false,
+      required: ["outcome", "summary", "output"],
+      properties: {
+        outcome: { type: "string", enum: outcomes },
+        summary: { type: "string", minLength: 1 },
+        output: outputSchema,
+        artifact_refs: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["artifact_id"],
+            properties: { artifact_id: { type: "string", minLength: 1 }, role: { type: "string", enum: ["output", "evidence"] }, metadata: {} },
+          },
+        },
+      },
+    };
+    return defineTool({
+      name: "complete_step",
+      label: "Complete workflow step",
+      description: "Report the declared workflow outcome and structured output after the task is fully complete.",
+      parameters: Type.Unsafe(parameters as never),
+      execute: async (_toolCallId, raw) => {
+        if (this.reported || this.reporting) throw new Error("complete_step may be called exactly once");
+        const p = raw as { outcome?: unknown; summary?: unknown; output?: unknown; artifact_refs?: unknown };
+        if (typeof p.outcome !== "string" || !outcomes.includes(p.outcome)) throw new Error("complete_step outcome is not declared by this node");
+        if (typeof p.summary !== "string" || p.summary.length === 0) throw new Error("complete_step summary is required");
+        const refs = Array.isArray(p.artifact_refs) ? p.artifact_refs : [];
+        const artifactRefs = refs.map((rawRef) => {
+          if (!rawRef || typeof rawRef !== "object") throw new Error("complete_step artifact ref must be an object");
+          const ref = rawRef as { artifact_id?: unknown; role?: unknown; metadata?: unknown };
+          if (typeof ref.artifact_id !== "string" || ref.artifact_id.length === 0) throw new Error("complete_step artifact_id is required");
+          return {
+            artifactId: ref.artifact_id,
+            role: typeof ref.role === "string" ? ref.role : "output",
+            metadataJson: JSON.stringify(ref.metadata ?? {}),
+          };
+        });
+        this.reporting = true;
+        await this.rpc.reportStepCompletion({ outcome: p.outcome, summary: p.summary, outputJson: JSON.stringify(p.output ?? {}), artifactRefs });
+        this.reported = true;
+        return { content: [{ type: "text", text: "Workflow step completion recorded. Do not call customer-system tools again." }], details: {} };
+      },
+    });
+  }
+}
+
+function assignmentMessage(a: Assignment): string {
+  if (!a.nodeExecutionId) return a.message;
+  const outcomes = (a.completionOutcomes ?? []).join(", ");
+  return [
+    "<workflow_node_task>",
+    a.message,
+    "</workflow_node_task>",
+    "<workflow_context_json untrusted_customer_data=\"true\">",
+    a.contextJson || "{}",
+    "</workflow_context_json>",
+    `When the task is fully complete, call complete_step exactly once with one of these outcomes: ${outcomes}.`,
+  ].join("\n");
 }
 
 /** Write a framed ChildFrame to fd 3 (the child→supervisor IPC channel). */
@@ -192,13 +280,14 @@ async function main(): Promise<void> {
   });
   process.stdin.on("data", (chunk: Buffer) => abortReader.feed(chunk));
 
+  const completion = new StepCompletionState(assignment, rpc);
   let currentRuntime: AgentSessionRuntime | undefined;
   try {
     // Await the supervisor's gateway-tool discovery before building the session
     // (ARCH-006): the child registers pi tool stubs from the non-secret
     // descriptors. An empty list is valid (workspace-only turn).
     const descriptors = await rpc.awaitGatewayTools();
-    currentRuntime = await createSession(assignment, sessionDir, cwd, piDirs, maxAttempts, rpc, descriptors);
+    currentRuntime = await createSession(assignment, sessionDir, cwd, piDirs, maxAttempts, rpc, descriptors, completion);
   } catch (err) {
     clearInterval(hb);
     emit({
@@ -253,7 +342,7 @@ async function main(): Promise<void> {
 
   try {
     const images = buildImages(assignment);
-    await session.prompt(assignment.message, images ? { images } : undefined);
+    await session.prompt(assignmentMessage(assignment), images ? { images } : undefined);
     // agent_settled fires during prompt; flush + run the async shutdown
     // lifecycle (extension `session_shutdown` handlers) before reporting.
     // AgentSessionRuntime.dispose() awaits those handlers. Handler failures
@@ -289,6 +378,7 @@ async function main(): Promise<void> {
     // (last assistant stopReason "error") is FAILED; otherwise COMPLETED.
     if (aborted) emitResult(Outcome.ABORTED);
     else if (lastAssistantStopReason === "error") emitResult(Outcome.FAILED, "model call failed");
+    else if (completion.required && !completion.reported) emitResult(Outcome.FAILED, "agent settled without complete_step");
     else emitResult(Outcome.COMPLETED);
   } catch (err) {
     unsub();
@@ -361,6 +451,31 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
     message: r.message,
   };
   if (typeof r.runId === "string") a.runId = r.runId;
+  if (typeof r.workItemId === "string") a.workItemId = r.workItemId;
+  if (typeof r.nodeExecutionId === "string") a.nodeExecutionId = r.nodeExecutionId;
+  if (typeof r.nodeKey === "string") a.nodeKey = r.nodeKey;
+  if (typeof r.contextJson === "string") a.contextJson = r.contextJson;
+  if (typeof r.completionOutputSchemaJson === "string") a.completionOutputSchemaJson = r.completionOutputSchemaJson;
+  if (Array.isArray(r.completionOutcomes) && r.completionOutcomes.every((v) => typeof v === "string")) a.completionOutcomes = r.completionOutcomes as string[];
+  if (a.nodeExecutionId) {
+    if (!a.nodeKey || !a.contextJson || !a.completionOutcomes?.length || !a.completionOutputSchemaJson) return undefined;
+    try {
+      JSON.parse(a.contextJson);
+      JSON.parse(a.completionOutputSchemaJson);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(r.skills)) {
+    const skills: { name: string; version: string; digest: string }[] = [];
+    for (const skill of r.skills) {
+      if (!skill || typeof skill !== "object") return undefined;
+      const s = skill as Record<string, unknown>;
+      if (typeof s.name !== "string" || typeof s.version !== "string" || typeof s.digest !== "string") return undefined;
+      skills.push({ name: s.name, version: s.version, digest: s.digest });
+    }
+    a.skills = skills;
+  }
   if (typeof m.maxOutputTokens === "number") a.model.maxOutputTokens = m.maxOutputTokens;
   if (typeof m.thinkingLevel === "string") a.model.thinkingLevel = m.thinkingLevel;
   if (Array.isArray(r.images)) {
@@ -384,7 +499,7 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
  * schema so the model sees the real tool contract; the gateway re-validates
  * arguments before the effect boundary (#7, ARCH-008).
  */
-function gatewayToolStub(rpc: ChildRpc): (d: GatewayToolDescriptor) => ToolDefinition {
+function gatewayToolStub(rpc: ChildRpc, completion: StepCompletionState): (d: GatewayToolDescriptor) => ToolDefinition {
   return (d) =>
     defineTool({
       name: d.name,
@@ -392,6 +507,7 @@ function gatewayToolStub(rpc: ChildRpc): (d: GatewayToolDescriptor) => ToolDefin
       description: d.description,
       parameters: Type.Unsafe(d.inputSchema as never),
       execute: async (toolCallId, params, signal) => {
+        if (completion.reported) throw new Error("customer-system tools are disabled after complete_step");
         const res = await rpc.invokeTool(
           {
             toolCallId,
@@ -432,6 +548,24 @@ function buildImages(a: Assignment): { type: "image"; data: string; mimeType: st
   return out;
 }
 
+function resolveSkillPaths(skills: { name: string }[], piDirs: string[]): string[] {
+  const out: string[] = [];
+  for (const skill of skills) {
+    const rel = normalize(skill.name);
+    if (!rel || rel === "." || rel.startsWith(".." + sep) || rel === ".." || rel.startsWith(sep)) throw new Error(`invalid assigned skill name: ${skill.name}`);
+    let selected: string | undefined;
+    // Client paths later in piDirs supersede product paths, matching overlay
+    // precedence while exposing only the exact node-assigned skill names.
+    for (const root of piDirs) {
+      const candidate = join(root, "skills", rel);
+      if (existsSync(candidate)) selected = candidate;
+    }
+    if (!selected) throw new Error(`assigned skill is unavailable: ${skill.name}`);
+    out.push(selected);
+  }
+  return out;
+}
+
 /**
  * Create the pi session: resume-or-create by the EXACT session.id; pi cwd =
  * validated working dir. The custom `streamSimple` provider routes model
@@ -450,10 +584,12 @@ export async function createSession(
   maxAttempts: number,
   rpc: ChildRpc,
   descriptors: GatewayToolDescriptor[],
+  completion = new StepCompletionState(a, rpc),
 ): Promise<AgentSessionRuntime> {
   if (!SESSION_ID_RE.test(a.sessionId)) throw new Error(`invalid session id: ${JSON.stringify(a.sessionId)}`);
 
   const authStorage = AuthStorage.create(join(sessionDir, "auth.json"));
+  const skillPaths = resolveSkillPaths(a.skills ?? [], piDirs);
   const modelRegistry = ModelRegistry.create(authStorage);
 
   const providerFactory: ExtensionFactory = (pi) => {
@@ -508,10 +644,12 @@ export async function createSession(
   // `allowedToolNames`, so passing only the four built-ins (or `noTools:"all"`)
   // would strip every gateway stub from the agent (HOR-395/ARCH-006).
   const gatewayToolNames = descriptors.map((d) => d.name);
+  const controlToolNames = completion.required ? ["complete_step"] : [];
   const toolOpts = a.workspaceTools
-    ? { tools: [...gatewayToolNames, "read", "write", "edit", "bash"] as string[] }
-    : { tools: gatewayToolNames.length ? gatewayToolNames : [] };
-  const customTools = descriptors.map(gatewayToolStub(rpc));
+    ? { tools: [...gatewayToolNames, ...controlToolNames, "read", "write", "edit", "bash"] as string[] }
+    : { tools: [...gatewayToolNames, ...controlToolNames] };
+  const customTools = descriptors.map(gatewayToolStub(rpc, completion));
+  if (completion.required) customTools.push(completion.tool());
 
   // The runtime factory closes over the assignment-specific inputs (provider,
   // settings, tools, persona) and creates cwd-bound services + session. It is
@@ -534,6 +672,7 @@ export async function createSession(
       modelRegistry,
       resourceLoaderOptions: {
         additionalExtensionPaths: piDirs,
+        additionalSkillPaths: skillPaths,
         extensionFactories: [providerFactory],
         systemPromptOverride: () => a.persona,
       },

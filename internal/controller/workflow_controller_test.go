@@ -69,38 +69,36 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 	return &v1alpha1.Workflow{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.WorkflowSpec{
-			Key:     "walter/quotation",
-			Version: "1",
-			PoolRef: poolName,
+			Key: "walter/quotation", Version: "1", PoolRef: poolName, DefaultModelRef: "model-one",
 			Source: v1alpha1.WorkflowSource{
 				Type: v1alpha1.SourceGraphEmail,
 				TriggerBindings: []v1alpha1.TriggerBinding{
 					{Name: "inbox", GraphEmail: &v1alpha1.GraphEmailTriggerBinding{MailboxAddress: "inbox@walter.example"}},
 				},
 			},
-			Skills: []v1alpha1.SkillReference{
-				{Name: "walter-quotation", Version: "1.0.0", Digest: "sha256:walter-skill-v1"},
-			},
-			Steps: []v1alpha1.WorkflowStep{
-				{Name: "classify", Kind: v1alpha1.WorkflowStepAgentTask, Config: jsonConfig(`{"prompt":"classify"}`)},
-				{Name: "write", Kind: v1alpha1.WorkflowStepToolCall, Tool: "graph.excel.write"},
-				{Name: "review", Kind: v1alpha1.WorkflowStepApprovalGate},
-			},
+			Skills: []v1alpha1.SkillReference{{Name: "walter-quotation", Version: "1.0.0", Digest: "sha256:walter-skill-v1"}},
 			RequestedCapabilities: []v1alpha1.RequestedCapability{
 				{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"graph.read"}},
 				{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 			},
-			CompletionRule: v1alpha1.CompletionRule{Type: v1alpha1.CompletionAllSteps},
-			Blocker:        &v1alpha1.BlockerSpec{Step: "review", Behavior: v1alpha1.BlockerDecision},
-			Presentation:   v1alpha1.PresentationSpec{WorkflowTitle: "Quotation Processing", PersonaName: "Walter Ops", Locale: "en"},
+			Graph: v1alpha1.WorkflowGraph{
+				EntryNode: "process", MaxTransitions: 20,
+				Nodes: []v1alpha1.WorkflowNode{
+					{Key: "process", Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"}, Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"}, OutputSchema: jsonConfig(`{"type":"object"}`)},
+					{Key: "review", Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review"}, Description: v1alpha1.LocalizedText{EN: "Review the result"}}},
+				},
+				Edges:            []v1alpha1.WorkflowEdge{{From: "process", Outcome: "needs_review", To: "review"}, {From: "review", Outcome: "changes_requested", To: "process"}},
+				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "process", Outcome: "completed"}, {Node: "review", Outcome: "approved"}},
+			},
+			Presentation: v1alpha1.PresentationSpec{WorkflowTitle: "Quotation Processing", PersonaName: "Walter Ops", Locale: "en"},
 		},
 	}
 }
 
 // TestWorkflowValidation asserts structural + capability validation directly
 // against a fake client — no manager/envtest, so it runs in -short mode. Covers
-// the acceptance criteria: unknown source/step/capability/completion rule/
-// binding fails, and a workflow cannot request capabilities beyond its pool.
+// the acceptance criteria: unknown source/node/capability/route/binding fails,
+// and a workflow cannot request capabilities beyond its pool.
 func TestWorkflowValidation(t *testing.T) {
 	ns := "default"
 	pool := poolWithGrants("walter-pool", ns,
@@ -112,6 +110,7 @@ func TestWorkflowValidation(t *testing.T) {
 		scheme := runtime.NewScheme()
 		_ = clientgoscheme.AddToScheme(scheme)
 		_ = v1alpha1.AddToScheme(scheme)
+		objs = append(objs, &v1alpha1.Model{ObjectMeta: metav1.ObjectMeta{Name: "model-one", Namespace: ns}, Spec: v1alpha1.ModelSpec{ModelID: "model-one", BackendRef: "backend"}})
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 		return &WorkflowReconciler{
 			Client: c, Scheme: scheme,
@@ -137,30 +136,25 @@ func TestWorkflowValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no installed source adapter")
 
-	// Unknown step kind -> rejected.
-	badStep := validWalterWorkflow("w", ns, "walter-pool")
-	badStep.Spec.Steps[0].Kind = "magic"
-	require.Error(t, newReconciler(pool).validateSpec(ctx, badStep))
+	// Unknown node kind -> rejected.
+	badNode := validWalterWorkflow("w", ns, "walter-pool")
+	badNode.Spec.Graph.Nodes[0].Kind = "magic"
+	require.Error(t, newReconciler(pool).validateSpec(ctx, badNode))
 
-	// Duplicate step name -> rejected.
-	dupStep := validWalterWorkflow("w", ns, "walter-pool")
-	dupStep.Spec.Steps = append(dupStep.Spec.Steps, v1alpha1.WorkflowStep{Name: "classify", Kind: v1alpha1.WorkflowStepAgentTask})
-	require.Error(t, newReconciler(pool).validateSpec(ctx, dupStep))
+	// Duplicate node key -> rejected.
+	dupNode := validWalterWorkflow("w", ns, "walter-pool")
+	dupNode.Spec.Graph.Nodes = append(dupNode.Spec.Graph.Nodes, dupNode.Spec.Graph.Nodes[0])
+	require.Error(t, newReconciler(pool).validateSpec(ctx, dupNode))
 
-	// Unknown completion rule type -> rejected.
-	badCompletion := validWalterWorkflow("w", ns, "walter-pool")
-	badCompletion.Spec.CompletionRule = v1alpha1.CompletionRule{Type: "magic"}
-	require.Error(t, newReconciler(pool).validateSpec(ctx, badCompletion))
+	// Every declared outcome requires exactly one edge or terminal route.
+	uncovered := validWalterWorkflow("w", ns, "walter-pool")
+	uncovered.Spec.Graph.TerminalOutcomes = uncovered.Spec.Graph.TerminalOutcomes[1:]
+	require.Error(t, newReconciler(pool).validateSpec(ctx, uncovered))
 
-	// step_succeeded with unknown ref -> rejected.
-	badRef := validWalterWorkflow("w", ns, "walter-pool")
-	badRef.Spec.CompletionRule = v1alpha1.CompletionRule{Type: v1alpha1.CompletionStepSucceeded, Ref: "nope"}
-	require.Error(t, newReconciler(pool).validateSpec(ctx, badRef))
-
-	// Blocker referencing a non-approval_gate step -> rejected.
-	badBlocker := validWalterWorkflow("w", ns, "walter-pool")
-	badBlocker.Spec.Blocker = &v1alpha1.BlockerSpec{Step: "classify", Behavior: v1alpha1.BlockerApproval}
-	require.Error(t, newReconciler(pool).validateSpec(ctx, badBlocker))
+	// Human gates require business-readable request metadata.
+	badGate := validWalterWorkflow("w", ns, "walter-pool")
+	badGate.Spec.Graph.Nodes[1].HumanGate = nil
+	require.Error(t, newReconciler(pool).validateSpec(ctx, badGate))
 
 	// Duplicate trigger binding name -> rejected.
 	dupBinding := validWalterWorkflow("w", ns, "walter-pool")
@@ -209,19 +203,12 @@ func TestWorkflowValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 
-	// tool_call without a tool -> rejected (unknown tool must fail before execution).
-	noTool := validWalterWorkflow("w", ns, "walter-pool")
-	noTool.Spec.Steps[1].Tool = ""
-	err = newReconciler(pool).validateSpec(ctx, noTool)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tool is required for kind=tool_call")
-
-	// tool_call referencing a tool not in requestedCapabilities -> rejected (REQ-010).
+	// Agent-node capability narrowing cannot name an undeclared workflow tool.
 	unknownTool := validWalterWorkflow("w", ns, "walter-pool")
-	unknownTool.Spec.Steps[1].Tool = "graph.mail.send"
+	unknownTool.Spec.Graph.Nodes[0].Capabilities = append(unknownTool.Spec.Graph.Nodes[0].Capabilities, "graph.mail.send")
 	err = newReconciler(pool).validateSpec(ctx, unknownTool)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not a requested capability")
+	assert.Contains(t, err.Error(), "not requested by the workflow")
 
 	// Trigger binding must use the source-specific typed payload. There is no
 	// opaque config field through which a renamed/nested secret can be persisted.
@@ -258,16 +245,17 @@ func TestWorkflowValidation(t *testing.T) {
 	xbs := &v1alpha1.Workflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "xbs", Namespace: ns},
 		Spec: v1alpha1.WorkflowSpec{
-			Key: "xbs/shipment", Version: "1", PoolRef: "walter-pool",
+			Key: "xbs/shipment", Version: "1", PoolRef: "walter-pool", DefaultModelRef: "model-one",
 			Source: v1alpha1.WorkflowSource{
 				Type: v1alpha1.SourceOperatorArtifact,
 				TriggerBindings: []v1alpha1.TriggerBinding{
 					{Name: "exports", OperatorArtifact: &v1alpha1.OperatorArtifactTriggerBinding{SourceID: "xbs-exports"}},
 				},
 			},
-			Steps:          []v1alpha1.WorkflowStep{{Name: "map", Kind: v1alpha1.WorkflowStepAgentTask}},
-			CompletionRule: v1alpha1.CompletionRule{Type: v1alpha1.CompletionAllSteps},
-			Presentation:   v1alpha1.PresentationSpec{WorkflowTitle: "Shipment Map", PersonaName: "XBS Ops", Locale: "pt"},
+			Graph: v1alpha1.WorkflowGraph{EntryNode: "map", MaxTransitions: 10,
+				Nodes:            []v1alpha1.WorkflowNode{{Key: "map", Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"}}},
+				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "map", Outcome: "completed"}}},
+			Presentation: v1alpha1.PresentationSpec{WorkflowTitle: "Shipment Map", PersonaName: "XBS Ops", Locale: "pt"},
 		},
 	}
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, xbs), "XBS operator_artifact workflow should be representable")
@@ -278,11 +266,11 @@ func TestWorkflowCanonicalSpecIncludesAllExecutionIdentityInputs(t *testing.T) {
 	baseJSON, err := json.Marshal(buildCanonicalSpec(base))
 	require.NoError(t, err)
 
-	toolChanged := base.DeepCopy()
-	toolChanged.Spec.Steps[1].Tool = "graph.excel.write.v2"
-	toolJSON, err := json.Marshal(buildCanonicalSpec(toolChanged))
+	graphChanged := base.DeepCopy()
+	graphChanged.Spec.Graph.Edges[1].To = "review"
+	graphJSON, err := json.Marshal(buildCanonicalSpec(graphChanged))
 	require.NoError(t, err)
-	assert.NotEqual(t, string(baseJSON), string(toolJSON), "tool_call tool semantics must affect the immutable digest input")
+	assert.NotEqual(t, string(baseJSON), string(graphJSON), "graph routing semantics must affect the immutable digest input")
 
 	skillChanged := base.DeepCopy()
 	skillChanged.Spec.Skills[0].Digest = "sha256:walter-skill-v2"
@@ -370,6 +358,7 @@ func TestWorkflowReconcile(t *testing.T) {
 		v1alpha1.GatewayGrant{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
 	)
 	require.NoError(t, adminClient.Create(ctx, pool))
+	require.NoError(t, adminClient.Create(ctx, &v1alpha1.Model{ObjectMeta: metav1.ObjectMeta{Name: "model-one", Namespace: ns}, Spec: v1alpha1.ModelSpec{ModelID: "model-one", BackendRef: "backend"}}))
 	poolKey := "default/walter-pool"
 	_, err := gwStore.UpsertPool(ctx, poolKey, "walter-pool", "spiffe://iterabase.local/pools/test/")
 	require.NoError(t, err)
@@ -423,7 +412,8 @@ func TestWorkflowReconcile(t *testing.T) {
 	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, resolved.PermittedTools)
 	require.Len(t, resolved.Skills, 1)
 	assert.Equal(t, "sha256:walter-skill-v1", resolved.Skills[0].Digest)
-	assert.Equal(t, "graph.excel.write", resolved.Spec.Steps[1].Tool)
+	assert.Equal(t, "process", resolved.Spec.Graph.EntryNode)
+	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, resolved.Spec.Graph.Nodes[0].Capabilities)
 	assert.Equal(t, "workflow:default/walter-quotation", resolved.Spec.ScopeIdentityKey)
 
 	// An invalid overlay (capability beyond pool) is rejected with inspectable
@@ -454,8 +444,8 @@ func TestWorkflowReconcile(t *testing.T) {
 		if g.Status.ObservedGeneration != g.Generation {
 			return false
 		}
-		// Same version, different content (new step) -> immutability violation.
-		g.Spec.Steps = append(g.Spec.Steps, v1alpha1.WorkflowStep{Name: "extra", Kind: v1alpha1.WorkflowStepAgentTask})
+		// Same version, different graph content -> immutability violation.
+		g.Spec.Graph.Nodes[0].Prompt = "changed prompt"
 		return adminClient.Update(ctx, &g) == nil
 	}, 15*time.Second, 200*time.Millisecond, "should update the workflow under the same version")
 

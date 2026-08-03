@@ -84,10 +84,24 @@ func TestMigrations(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
 
+	// HOR-254 graph/work domain exists after migration.
+	for _, table := range []string{"work_items", "attempts", "blockers", "feedback", "timeline_events", "value_models", "value_ledger", "artifact_links"} {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'work' AND tablename = $1)", table,
+		).Scan(&exists)
+		require.NoError(t, err)
+		assert.True(t, exists, "work.%s should exist after MigrateUp", table)
+	}
+	var nodeExecutions bool
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='runtime' AND tablename='node_executions')").Scan(&nodeExecutions))
+	assert.True(t, nodeExecutions)
+
 	// Down: schemas should be gone.
 	require.NoError(t, database.MigrateDown(connStr, 0))
 
-	for _, schema := range []string{"identity", "permissions", "usage", "ai_data"} {
+	for _, schema := range []string{"identity", "permissions", "usage", "ai_data", "work"} {
 		var exists bool
 		err := pool.QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)", schema,

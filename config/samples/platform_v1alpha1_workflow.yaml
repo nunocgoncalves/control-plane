@@ -1,120 +1,136 @@
+# HOR-254 / ARCH-019: versioned single-active-node workflow graphs.
+# Tools are capabilities available inside agent_task nodes; there is no
+# top-level tool_call node. Every agent node finishes through complete_step.
 apiVersion: platform.iterabase.com/v1alpha1
 kind: Workflow
 metadata:
-  name: walter-quotation
-  namespace: platform
+  name: walter-quotation-processing
+  namespace: default
 spec:
-  # key is the stable workflow key across versions; version is the immutable
-  # version identity. A content change MUST be published under a new version.
-  key: walter/quotation
-  version: "1"
+  key: walter/quotation-processing
+  version: "2"
+  poolRef: walter-agents
+  defaultModelRef: qwen3.6-27b
 
-  # poolRef names the AgentPool (in this namespace) that is the deployable
-  # security/integration boundary. Requested capabilities are validated against
-  # its gatewayGrants; the workflow's permitted tools bind to this pool.
-  poolRef: walter-pool
-
-  # source: Microsoft Graph email (Walter). Public ingress validates/persists/
-  # acknowledges/starts in the control plane; authenticated reads/actions use
-  # the gateway. Trigger bindings use a source-specific typed route with no
-  # opaque config/secret field; credentials resolve through AgentPool bindings.
   source:
     type: graph_email
     triggerBindings:
-      - name: walter-inbox
+      - name: quotation-inbox
         graphEmail:
-          mailboxAddress: inbox@walter.example
+          mailboxAddress: quotations@walter.example
 
-  # Exact immutable overlay skill identity snapshot input (REQ-003/REQ-011).
   skills:
-    - name: walter-quotation
+    - name: walter/quotation-processing
       version: "1.0.0"
-      digest: sha256:replace-with-bundle-digest
+      digest: sha256:replace-with-real-skill-digest
 
-  # steps: the ordered deterministic plan. Kinds mirror runtime.run_steps.
-  steps:
-    - name: classify
-      kind: agent_task
-      config:
-        prompt: "Classify the quotation email as engineering or pricing."
-    - name: extract
-      kind: agent_task
-      config:
-        prompt: "Extract the agreed fields from the quotation."
-    - name: write-excel
-      kind: tool_call
-      tool: graph.excel.write   # must be declared in requestedCapabilities (REQ-010)
-      # config may carry non-secret tool arguments (prompt inputs, options).
-    - name: review
-      kind: approval_gate
-      config:
-        approverScope: walter-ops
-
-  # requestedCapabilities: validated against the AgentPool's gatewayGrants.
-  # Each tool must be granted and its effect class must not exceed the grant.
+  # Workflow-level maximum. Each agent node below exposes an explicit subset.
   requestedCapabilities:
-    - tool: graph.read
+    - tool: graph.email.read
       maxEffectClass: read_only
-      # V1 undecomposed descriptors use the tool name as the effective action.
-      actions: [graph.read]
+      actions: [graph.email.read]
     - tool: graph.excel.write
       maxEffectClass: idempotent_write
+      actions: [graph.excel.write]
 
-  # completionRule: the run completes when all non-skipped steps succeed.
-  # Completion is not correctness (REQ-006/007).
-  completionRule:
-    type: all_steps
+  graph:
+    entryNode: process-quotation
+    maxTransitions: 20
+    nodes:
+      - key: process-quotation
+        kind: agent_task
+        prompt: |
+          Inspect the quotation source and process it according to the assigned
+          quotation skill. If required information is missing, report the
+          needs_information outcome. Otherwise perform the authorized workbook
+          action and report completed.
+        modelRef: qwen3.6-27b
+        skills: [walter/quotation-processing]
+        capabilities: [graph.email.read, graph.excel.write]
+        timeout: 10m
+        outcomes: [completed, needs_information]
+        outputSchema:
+          type: object
+          required: [classification, summary]
+          properties:
+            classification:
+              type: string
+              enum: [engineering, pricing]
+            summary: {type: string}
+            workbookRecord: {type: object}
 
-  # blocker: the review approval_gate produces a customer-actionable Blocked
-  # state asking for a decision (REQ-020).
-  blocker:
-    step: review
-    behavior: decision
+      - key: request-information
+        kind: human_gate
+        outcomes: [information_provided]
+        humanGate:
+          type: information
+          title:
+            en: Additional information required
+            pt: Informação adicional necessária
+          description:
+            en: Provide the missing information needed to process this quotation.
+            pt: Forneça a informação em falta necessária para processar este pedido.
+          responseSchema:
+            type: object
+            required: [information]
+            properties:
+              information: {type: string, minLength: 1}
 
-  # valueModelRef: references the transparent value model (REQ-028).
-  valueModelRef: walter/manual-handling
+    edges:
+      - from: process-quotation
+        outcome: needs_information
+        to: request-information
+      - from: request-information
+        outcome: information_provided
+        to: process-quotation
 
-  # presentation: customer-facing workflow/persona labels for the single-
-  # workflow Dashboard (REQ-021). No separate Persona CRD.
+    terminalOutcomes:
+      - node: process-quotation
+        outcome: completed
+
+  valueModelRef: walter-quotation-handling
   presentation:
-    workflowTitle: Quotation Processing
-    personaName: Walter Ops
-    personaAvatar: ""
+    workflowTitle: Quotation processing
+    personaName: Marco
     locale: en
 ---
-# XBS-generic example: an operator-supplied exported-artifact workflow. The
-# customer-specific input/output mapping is defined from real artifacts rather
-# than a pre-invented schema (REQ-004/037). Source type operator_artifact.
+# Generic exported-artifact workflow for XBS discovery. Customer-specific schema
+# and mapping remain in the immutable skill/artifact, not platform-core fields.
 apiVersion: platform.iterabase.com/v1alpha1
 kind: Workflow
 metadata:
-  name: xbs-shipment-map
-  namespace: platform
+  name: xbs-exported-artifact
+  namespace: default
 spec:
-  key: xbs/shipment-map
-  version: "1"
-  poolRef: xbs-pool
+  key: xbs/exported-artifact
+  version: "2"
+  poolRef: xbs-agents
+  defaultModelRef: qwen3.6-27b
   source:
     type: operator_artifact
     triggerBindings:
-      - name: xbs-exports
+      - name: discovery-exports
         operatorArtifact:
-          sourceID: xbs-exports
+          sourceID: xbs-discovery-exports
   skills:
-    - name: xbs-shipment-map
+    - name: xbs/discovery-mapping
       version: "1.0.0"
-      digest: sha256:replace-with-bundle-digest
-  steps:
-    - name: map
-      kind: agent_task
-      config:
-        prompt: "Build the shipment map from the exported artifact."
-  requestedCapabilities:
-    - tool: graph.read
-      maxEffectClass: read_only
-  completionRule:
-    type: all_steps
+      digest: sha256:replace-after-discovery
+  graph:
+    entryNode: process-export
+    maxTransitions: 10
+    nodes:
+      - key: process-export
+        kind: agent_task
+        prompt: Process the supplied exported artifact using the assigned discovery mapping.
+        skills: [xbs/discovery-mapping]
+        outcomes: [completed]
+        outputSchema:
+          type: object
+    terminalOutcomes:
+      - node: process-export
+        outcome: completed
   presentation:
-    workflowTitle: Shipment Map
-    personaName: XBS Ops
+    workflowTitle: Exported data processing
+    personaName: XBS Operations
     locale: pt

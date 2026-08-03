@@ -69,18 +69,18 @@ spec:
   # ARCH-018: maximum gateway capability grants (a turn cannot widen these).
   # Mirrors toolgateway.pool_grants: tool + max effect class + allowed actions.
   gatewayGrants:
-    - tool: graph.read
+    - tool: graph.email.read
       maxEffectClass: read_only
       # V1 undecomposed descriptors use the tool name as effective action.
-      allowedActions: [graph.read]
-    - tool: graph.mail.send
+      allowedActions: [graph.email.read]
+    - tool: graph.excel.write
       maxEffectClass: idempotent_write
-      allowedActions: [graph.mail.send]
+      allowedActions: [graph.excel.write]
 
   # ARCH-008/018: logical credential slots -> scheme-specific K8s Secret refs.
   # VALUES never enter the CRD; the gateway resolves them at invocation.
   credentialBindings:
-    - toolName: graph.read
+    - toolName: graph.email.read
       slot: graphToken
       scheme: bearer
       bearer:
