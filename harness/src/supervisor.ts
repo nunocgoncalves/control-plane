@@ -45,7 +45,7 @@ import { WorkerState as WorkerStateMachine, ProtocolError } from "./worker-state
 import { resolveSandboxRoot, validateSandbox, provisionSandbox, reapSandbox, resolveWorkingDir, SandboxError, type SandboxPaths } from "./sandbox.js";
 import type { Probes } from "./probes.js";
 import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
-import { createGatewayClient, type GatewayClient } from "./gateway-client.js";
+import { createGatewayClient, type GatewayClient, type AssignmentScope } from "./gateway-client.js";
 import { streamModel } from "./model-bridge.js";
 import { InvokeState } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { GatewayToolDescriptor } from "./ipc.js";
@@ -299,7 +299,7 @@ export class Supervisor {
         value: create(ExecutionStartedSchema, { sessionId: at.sessionId, sandbox: at.sandbox ?? undefined }),
       });
       const cwd = resolveWorkingDir(sandbox.root, at.sandbox?.workingDir || "home");
-      const scope = { turnId: at.turnId, runId: at.runId };
+      const scope = { turnId: at.turnId, runId: at.runId, fencingGeneration: this.welcome?.fencingGeneration ?? 0n };
       // Discover the effective gateway tools BEFORE spawning the child and pass
       // the non-secret descriptors to the child (ARCH-006). Discovery is
       // bounded (deadline) and cancellable (aborted on AbortTurn): a hanging
@@ -367,7 +367,7 @@ export class Supervisor {
    * started; the gateway classifies per effect class on caller disconnect).
    */
   private async dispatchChildRpc(child: Child, at: AssignTurn, descriptors: GatewayToolDescriptor[]): Promise<void> {
-    const scope = { turnId: at.turnId, runId: at.runId };
+    const scope = { turnId: at.turnId, runId: at.runId, fencingGeneration: this.welcome?.fencingGeneration ?? 0n };
     const assignedModel = at.model?.id ?? "";
     // The effective gateway tools discovered for this turn (ARCH-006). The
     // supervisor rejects a toolCall whose name is not in this set BEFORE
@@ -467,7 +467,7 @@ export class Supervisor {
   private async handleToolCall(
     child: Child,
     req: { requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
-    scope: { turnId: string; runId: string },
+    scope: AssignmentScope,
     discovered: Map<string, GatewayToolDescriptor>,
     controllers: Map<string, AbortController>,
     onDone: () => void,

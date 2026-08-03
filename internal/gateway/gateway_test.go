@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -207,6 +208,7 @@ func seedWorkflowStepAttempt(t *testing.T, env *testEnv, permitted []string) (ru
 type refRunner struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
+	mu      sync.Mutex
 	welcome *v1.Welcome
 	stream  *connect.BidiStreamForClient[v1.RunnerMessage, v1.RunnerControl]
 }
@@ -228,7 +230,9 @@ func startRefRunner(t *testing.T, env *testEnv, desc *v1.ToolDescriptor,
 			return
 		}
 		if w := ctrl.GetWelcome(); w != nil {
+			rr.mu.Lock()
 			rr.welcome = w
+			rr.mu.Unlock()
 		}
 		for {
 			ctrl, err := stream.Receive()
@@ -249,7 +253,7 @@ func startRefRunner(t *testing.T, env *testEnv, desc *v1.ToolDescriptor,
 		}
 	}()
 	// Wait for welcome (registration complete -> tool available).
-	require.Eventually(t, func() bool { return rr.welcome != nil }, 2*time.Second, 10*time.Millisecond, "runner welcome not received")
+	require.Eventually(t, func() bool { rr.mu.Lock(); defer rr.mu.Unlock(); return rr.welcome != nil }, 2*time.Second, 10*time.Millisecond, "runner welcome not received")
 	return rr
 }
 
@@ -309,7 +313,7 @@ func TestGateway_RegistrationDiscoveryAndInvoke(t *testing.T) {
 
 	// Discovery: supervisor sees the registered+pinned echo tool.
 	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 	}))
 	require.NoError(t, err)
 	var names []string
@@ -320,13 +324,42 @@ func TestGateway_RegistrationDiscoveryAndInvoke(t *testing.T) {
 
 	// Invoke echo -> succeeded with the echoed args.
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{"msg":"hi"}`), IdempotencyKey: "k1",
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
 	assert.Equal(t, `{"msg":"hi"}`, string(iresp.Msg.ResultJson))
+}
+
+// TestGateway_FencingGenerationBinding (HOR-249 / DEC-041): the gateway binds
+// authorization to the verified worker AND the current fencing generation. A
+// request carrying a stale/wrong generation is denied even with a valid
+// same-pod supervisor cert; the correct generation is accepted.
+func TestGateway_FencingGenerationBinding(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, echoDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	runID, turnID := seedTurnAttempt(t, env) // assignment fencing_generation = 1
+	gc := gatewayClient(env, env.supervisor)
+
+	// Wrong (stale) generation -> denied.
+	_, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 2,
+	}))
+	assert.Error(t, err, "stale fencing generation must be denied (DEC-041)")
+
+	// Correct generation -> accepted.
+	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
+	}))
+	require.NoError(t, err)
+	assert.NotEmpty(t, dresp.Msg.Descriptors)
 }
 
 func TestGateway_DuplicateInvocationReturnsCommittedResult(t *testing.T) {
@@ -340,7 +373,7 @@ func TestGateway_DuplicateInvocationReturnsCommittedResult(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	req := &v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "dup-key",
 	}
@@ -373,7 +406,7 @@ func TestGateway_PermissionDenialFailsClosed(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	_, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "danger", ToolVersionDigest: "sha256:danger-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
@@ -396,7 +429,7 @@ func TestGateway_ActionDenialFailsClosed(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
@@ -417,7 +450,7 @@ func TestGateway_VersionPinningNoSubstitution(t *testing.T) {
 	gc := gatewayClient(env, env.supervisor)
 	// Invoke with a digest that differs from the pinned one.
 	_, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:does-not-exist",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
@@ -438,7 +471,7 @@ func TestGateway_CredentialBindingResolution(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-1",
 	}))
@@ -465,7 +498,7 @@ func TestGateway_CredentialSlotMismatchRejected(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-1",
 	}))
@@ -485,7 +518,7 @@ func TestGateway_AmbiguousOutcomeNotRepeated(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	req := &v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "send-once",
 	}
@@ -519,7 +552,7 @@ func TestGateway_ReadOnlyRetryOnStreamLoss(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
@@ -546,7 +579,7 @@ func TestGateway_ProvenIdempotentRetry(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "up-1",
 	}))
@@ -599,7 +632,7 @@ func TestGateway_SchemaValidation(t *testing.T) {
 	gc := gatewayClient(env, env.supervisor)
 	// Missing required field -> invalid_arguments (pre-effect, not dispatched).
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{"other":1}`), IdempotencyKey: "k",
 	}))
@@ -623,7 +656,7 @@ func TestGateway_PostDispatchContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_, err := gc.InvokeTool(ctx, connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "cancel-1",
 	}))
@@ -704,7 +737,7 @@ func TestGateway_CallerScopeValidation(t *testing.T) {
 	// A run id that does not match the turn's run -> scope denied.
 	_, turnID := seedTurnAttempt(t, env)
 	_, err = gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: "00000000-0000-0000-0000-000000000000", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: "00000000-0000-0000-0000-000000000000", CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "k",
 	}))
@@ -726,7 +759,7 @@ func TestGateway_CancelOwnership(t *testing.T) {
 	// Start an in-flight invocation owned by pool-1's supervisor.
 	go func() {
 		_, _ = gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-			AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+			AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 			ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 			ArgumentsJson: []byte(`{"to":"x@y"}`), IdempotencyKey: "cancel-own",
 		}))
@@ -748,7 +781,7 @@ func TestGateway_CancelOwnership(t *testing.T) {
 	require.Error(t, err)
 
 	// The owning supervisor can cancel (returns running state).
-	cresp, err := gc.CancelInvocation(context.Background(), connect.NewRequest(&v1.CancelRequest{InvocationId: inv.ID, Reason: "r"}))
+	cresp, err := gc.CancelInvocation(context.Background(), connect.NewRequest(&v1.CancelRequest{InvocationId: inv.ID, Reason: "r", FencingGeneration: 1}))
 	require.NoError(t, err)
 	assert.Equal(t, v1.InvokeState_INVOKE_STATE_RUNNING, cresp.Msg.State)
 }
@@ -843,7 +876,7 @@ func TestGateway_ResourceConstraintDenial(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
 		ArgumentsJson: []byte(`{"to":"x@y","mailbox":"other-inbox"}`), IdempotencyKey: "res-1",
 	}))
@@ -871,7 +904,7 @@ func TestGateway_LedgerScopeFromDurableResolution(t *testing.T) {
 	// supervisor. The gateway must resolve scope from the identity, so the
 	// invocation still succeeds and records 'turn'.
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "echo", ToolVersionDigest: "sha256:echo-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "scope-1",
 	}))
@@ -943,7 +976,7 @@ func TestGateway_RetryRenewsRunningLease(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "lease-1",
 	}))
@@ -1000,7 +1033,7 @@ func TestGateway_RetryAbortsWhenLeaseNotRenewed(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "abort-1",
 	}))
@@ -1039,7 +1072,7 @@ func TestGateway_IdempotentRetryStableUpstreamKey(t *testing.T) {
 	runID, turnID := seedTurnAttempt(t, env)
 	gc := gatewayClient(env, env.supervisor)
 	iresp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID,
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
 		ToolCallId: "call-1", ToolName: "upsert_row", ToolVersionDigest: "sha256:upsert-1",
 		ArgumentsJson: []byte(`{}`), IdempotencyKey: "stable-1",
 	}))

@@ -482,7 +482,7 @@ func (s *Store) GetWorkflowPoolBinding(ctx context.Context, workflowDefinitionKe
 // fenced/old-generation caller whose assignment is no longer active, is
 // denied (HOR-249 / HOR-398 DEC-041 residual). Fail closed otherwise
 // (ARCH-004/010).
-func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID, workerID string) (CallerResolution, error) {
+func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID, workerID string, fencingGeneration uint64) (CallerResolution, error) {
 	var runID string
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.run_id::text
@@ -497,20 +497,22 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID,
 		}
 		return CallerResolution{}, fmt.Errorf("resolve turn scope: %w", err)
 	}
-	// Active-assignment cross-check (HOR-249): the turn's active assignment must
-	// be bound to this verified worker. A fenced/terminal assignment (no active
-	// row) or a different same-pool worker is denied.
+	// Active-assignment cross-check (HOR-249 / DEC-041): the turn's active
+	// assignment must be bound to this verified worker AND the caller's current
+	// fencing generation. A fenced/terminal assignment (no active row), a
+	// different same-pool worker, or an old-generation caller is denied.
 	var assignedWorker string
+	var assignedGen uint64
 	err = s.pool.QueryRow(ctx, `
-		SELECT worker_id FROM runtime.turn_assignments
-		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker)
+		SELECT worker_id, fencing_generation FROM runtime.turn_assignments
+		WHERE turn_id = $1::uuid AND state = 'active'`, turnID).Scan(&assignedWorker, &assignedGen)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CallerResolution{}, ErrScopeDenied
 		}
 		return CallerResolution{}, fmt.Errorf("resolve turn assignment: %w", err)
 	}
-	if assignedWorker != workerID {
+	if assignedWorker != workerID || assignedGen != fencingGeneration {
 		return CallerResolution{}, ErrScopeDenied
 	}
 	pool, err := s.getPoolByID(ctx, poolID)

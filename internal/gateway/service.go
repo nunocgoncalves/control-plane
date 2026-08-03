@@ -206,6 +206,7 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 	//    attempt id, validated against runtime state. Fail closed.
 	res, err := s.resolveCallerScope(ctx, id, &v1.DiscoverRequest{
 		AttemptId: msg.AttemptId, CallerScope: msg.CallerScope, CallerScopeId: msg.CallerScopeId,
+		FencingGeneration: msg.FencingGeneration,
 	})
 	if err != nil {
 		return nil, mapErr(err)
@@ -497,7 +498,7 @@ func (s *Service) CancelInvocation(ctx context.Context, req *connect.Request[v1.
 	}
 	// Ownership: resolve the caller's scope and require the invocation's pool
 	// to match. Runner identities are already rejected above.
-	if err := s.assertCallerOwnsInvocation(ctx, id, inv); err != nil {
+	if err := s.assertCallerOwnsInvocation(ctx, id, inv, req.Msg.FencingGeneration); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 	// If terminal, return the committed state unchanged.
@@ -516,14 +517,15 @@ func (s *Service) CancelInvocation(ctx context.Context, req *connect.Request[v1.
 // turn/run_step must still be active and its run must be durably assigned to
 // the caller's pool. A supervisor whose pool matches but whose turn does not
 // own the invocation is rejected. Runner identities are rejected upstream.
-func (s *Service) assertCallerOwnsInvocation(ctx context.Context, id spiffe.Identity, inv Invocation) error {
+func (s *Service) assertCallerOwnsInvocation(ctx context.Context, id spiffe.Identity, inv Invocation, fencingGeneration uint64) error {
 	if inv.PoolID == nil {
 		return errors.New("invocation has no owning pool")
 	}
 	res, err := s.resolveCallerScope(ctx, id, &v1.DiscoverRequest{
-		AttemptId:     inv.AttemptID,
-		CallerScope:   callerScopeToProto(inv.CallerScope),
-		CallerScopeId: inv.CallerScopeID,
+		AttemptId:         inv.AttemptID,
+		CallerScope:       callerScopeToProto(inv.CallerScope),
+		CallerScopeId:     inv.CallerScopeID,
+		FencingGeneration: fencingGeneration,
 	})
 	if err != nil {
 		return errors.New("caller scope does not own this invocation")
@@ -598,7 +600,7 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 	if err := s.handleRegister(ctx, reg, approved, rc); err != nil {
 		return err
 	}
-	if err := st.Send(welcome(gen, s.cfg)); err != nil {
+	if err := rc.send(welcome(gen, s.cfg)); err != nil {
 		return err
 	}
 
@@ -613,10 +615,10 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 			if err := s.handleRegister(ctx, m.Register, approved, rc); err != nil {
 				return err
 			}
-			_ = st.Send(&v1.RunnerControl{Kind: &v1.RunnerControl_Ack{Ack: &v1.Ack{Kind: &v1.Ack_Registered{Registered: m.Register.Descriptor_.Name}}}})
+			_ = rc.send(&v1.RunnerControl{Kind: &v1.RunnerControl_Ack{Ack: &v1.Ack{Kind: &v1.Ack_Registered{Registered: m.Register.Descriptor_.Name}}}})
 		case *v1.RunnerMessage_Heartbeat:
 			_ = s.store.HeartbeatRunner(ctx, rc.runnerID, int64(gen)) //nolint:gosec // G115
-			_ = st.Send(&v1.RunnerControl{Kind: &v1.RunnerControl_Ack{Ack: &v1.Ack{Kind: &v1.Ack_Heartbeat{Heartbeat: true}}}})
+			_ = rc.send(&v1.RunnerControl{Kind: &v1.RunnerControl_Ack{Ack: &v1.Ack{Kind: &v1.Ack_Heartbeat{Heartbeat: true}}}})
 		case *v1.RunnerMessage_InvokeResult:
 			rc.deliver(m.InvokeResult.InvocationId, invokeResultToDispatch(m.InvokeResult))
 		case *v1.RunnerMessage_InvokeError:
@@ -674,12 +676,12 @@ func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, re
 	case spiffe.KindSupervisor:
 		// Pool is resolved from the verified SPIFFE id (prefix match), then
 		// cross-checked against the active turn + run assignment + the active
-		// turn-assignment worker binding (HOR-249).
+		// turn-assignment worker + generation binding (HOR-249 / DEC-041).
 		pool, err := s.store.ResolvePoolBySpiffePrefix(ctx, id.SPIFFEID)
 		if err != nil {
 			return CallerResolution{}, ErrScopeDenied
 		}
-		return s.store.ResolveTurnScope(ctx, pool.ID, req.AttemptId, req.CallerScopeId, id.WorkerID)
+		return s.store.ResolveTurnScope(ctx, pool.ID, req.AttemptId, req.CallerScopeId, id.WorkerID, req.FencingGeneration)
 	case spiffe.KindControlPlaneWorkflow:
 		// The run_step + run are validated; the workflow binding is derived
 		// from the run's definition_key (NOT a caller-supplied key).

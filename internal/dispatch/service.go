@@ -2,8 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,14 +24,15 @@ type Config struct {
 	ReconcileInterval time.Duration // dispatch poll interval
 	ProtocolVersion   string        // advertised in Welcome
 
-	// SessionUIDBase/Range derive a stable per-session sandbox UID for the
-	// AssignTurn SandboxRef. Per-session isolation requires unique UIDs; v1
-	// derives a deterministic UID from the session id within [Base, Base+Range).
-	// Collision-free non-recycling allocation is a HOR-245 sandbox-provisioning
-	// hardening item (the supervisor's fail-closed reap + uid/gid ownership
-	// check is the v1 safety floor). Defaults: Base 10000, Range 9000.
+	// SessionUIDBase/Range + SessionUIDGrace derive a stable, collision-free,
+	// non-recycling per-session sandbox UID for the AssignTurn SandboxRef
+	// (HOR-245 reuse-safety floor). The durable allocator (runtime.session_uid
+	// _allocations) assigns a unique UID per session and never recycles one
+	// within the reap grace after release. Defaults: Base 10000, Range 50000
+	// ([10000,60000)), Grace 5m (must exceed max sandbox reap latency).
 	SessionUIDBase  uint32
 	SessionUIDRange uint32
+	SessionUIDGrace time.Duration
 
 	// DefaultModel is the ModelConfig sent on AssignTurn when the run/step does
 	// not carry one. Per-workflow model selection is HOR-252 (workflow
@@ -61,7 +60,10 @@ func (c Config) defaults() Config {
 		c.SessionUIDBase = 10000
 	}
 	if c.SessionUIDRange == 0 {
-		c.SessionUIDRange = 9000
+		c.SessionUIDRange = 50000
+	}
+	if c.SessionUIDGrace == 0 {
+		c.SessionUIDGrace = 5 * time.Minute
 	}
 	return c
 }
@@ -398,10 +400,12 @@ func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1
 
 // terminalizeTurnOutcome commits the turn SM terminal state from a worker
 // WorkerOutcome (first-terminal-writer), then terminalizes the assignment and
-// releases the worker (it will advertise Ready again when ready).
+// releases the worker (it will advertise Ready again when ready). When the run
+// reaches a terminal state and the worker is still connected, dispatch sends
+// SessionEnd so the supervisor reaps the session sandbox (HOR-245 cleanup), and
+// releases the session UID into its non-recycling reap grace.
 func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *v1.WorkerOutcome) {
 	var reason string
-	runAbort := false
 	switch wo.GetOutcome() {
 	case v1.Outcome_OUTCOME_COMPLETED:
 		reason = "completed"
@@ -409,97 +413,74 @@ func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *
 		reason = "failed"
 	case v1.Outcome_OUTCOME_ABORTED:
 		reason = "aborted"
-		runAbort = true
 	default:
 		reason = "failed"
 	}
-	s.commitTurnTerminal(ctx, a, reason, runAbort)
+	runState := s.commitTurnTerminal(ctx, a, reason)
 	if w := s.pool.get(a.PoolID, a.WorkerID); w != nil {
 		w.releaseTurn()
+		if runtime.IsTerminalRun(runState) {
+			s.sendSessionEnd(ctx, w, a)
+		}
 	}
 	s.kickReconciler()
 }
 
 // terminalizeTurnLoss terminalizes a turn as worker loss (aborted) — used on
 // reconnect-fencing and stream-loss. CP is first-terminal-writer; a late worker
-// outcome is after-terminal audit.
+// outcome is after-terminal audit. The worker is gone, so SessionEnd is not
+// sent (v1 leak-and-reconcile); the session UID stays in-use (non-recyclable)
+// until a later reaper reaps the leaked sandbox.
 func (s *Service) terminalizeTurnLoss(ctx context.Context, a Assignment) {
-	s.commitTurnTerminal(ctx, a, "aborted", true)
+	s.commitTurnTerminal(ctx, a, "aborted")
 }
 
-// commitTurnTerminal performs the turn/step/run terminal transitions (CAS) and
-// terminalizes the assignment. Errors are logged; a CAS miss means the turn was
-// already terminalized (first-terminal-writer held by another path) — the
-// assignment is still terminalized idempotently.
-func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason string, runAbort bool) {
-	rt := s.store.Runtime()
-	if _, err := rt.SettleTurn(ctx, a.TurnID, reason, 0); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-		s.log.Warn("settle turn", "turn", a.TurnID, "reason", reason, "error", err)
+// commitTurnTerminal settles the turn + advances the step/run ATOMICALLY
+// (runtime.SettleTurnAndAdvance, one tx) and terminalizes the assignment
+// (idempotent, separate tx — the benign gap between run-terminal and
+// assignment-terminal cannot produce a duplicate turn because the run is no
+// longer dispatchable once terminal). A turn CAS miss means the turn was
+// already terminalized (first-terminal-writer held by another path). Returns
+// the run's resulting state so the caller can sequence session-end.
+func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason string) (runState string) {
+	rs, err := s.store.Runtime().SettleTurnAndAdvance(ctx, a.TurnID, reason)
+	if err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
+		s.log.Warn("settle+advance turn", "turn", a.TurnID, "reason", reason, "error", err)
 	}
-	// Step terminal: succeed on completed, fail otherwise (aborted/failed).
-	// Step terminal: succeed on completed, fail otherwise (aborted/failed).
-	if reason == "completed" {
-		s.succeedRunningStep(ctx, a.RunID)
-	} else {
-		s.failRunningStep(ctx, a.RunID)
-	}
-	// Run terminal / advance to the next step.
-	switch {
-	case runAbort:
-		if _, err := rt.AbortRun(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-			s.log.Warn("abort run", "run", a.RunID, "error", err)
-		}
-	case reason == "completed":
-		// Advance to the next pending step; SucceedRun only when none remain.
-		// This drives multi-step runs instead of short-circuiting after the
-		// first turn (HOR-249 durable workflow/turn dispatch).
-		if err := s.startNextStep(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-			s.log.Warn("advance run after turn", "run", a.RunID, "error", err)
-		}
-	default:
-		if _, err := rt.FailRun(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-			s.log.Warn("fail run", "run", a.RunID, "error", err)
-		}
+	if err == nil {
+		runState = rs
 	}
 	if err := s.store.TerminalizeAssignment(ctx, a.TurnID); err != nil {
 		s.log.Warn("terminalize assignment", "turn", a.TurnID, "error", err)
 	}
+	return runState
 }
 
-// failRunningStep/succeedRunningStep transition the run's currently-running step
-// (FailStep/SucceedStep take a step id). Used by commitTurnTerminal.
-func (s *Service) failRunningStep(ctx context.Context, runID string) {
-	st, err := s.runningStep(ctx, runID)
+// sendSessionEnd sends SessionEnd {sandbox_id, uid, gid} to the worker serving
+// a just-terminated run so the supervisor reaps the session sandbox (HOR-245
+// cleanup owner/protocol). Best-effort: a send failure leaves the sandbox for
+// leak-and-reconcile. The session UID is released into its non-recycling grace
+// (reuse is ownership-fenced fail-closed, and the sandbox_id is per-session so a
+// recycled UID cannot adopt a prior session's directory).
+func (s *Service) sendSessionEnd(ctx context.Context, w *workerConn, a Assignment) {
+	sessionID, err := s.store.SessionIDForRun(ctx, a.RunID)
 	if err != nil {
+		s.log.Warn("session-end: resolve session", "run", a.RunID, "error", err)
 		return
 	}
-	if _, err := s.store.Runtime().FailStep(ctx, st); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-		s.log.Warn("fail step", "step", st, "error", err)
-	}
-}
-
-func (s *Service) succeedRunningStep(ctx context.Context, runID string) {
-	st, err := s.runningStep(ctx, runID)
+	uid, err := s.store.SessionUID(ctx, sessionID)
 	if err != nil {
+		s.log.Warn("session-end: resolve uid", "session", sessionID, "error", err)
 		return
 	}
-	if _, err := s.store.Runtime().SucceedStep(ctx, st); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-		s.log.Warn("succeed step", "step", st, "error", err)
+	if err := w.send(&v1.ControlMessage{Kind: &v1.ControlMessage_SessionEnd{SessionEnd: &v1.SessionEnd{
+		SandboxId: sessionID, Uid: uid, Gid: uid,
+	}}}); err != nil {
+		s.log.Warn("session-end send", "session", sessionID, "error", err)
 	}
-}
-
-// runningStep returns the id of the run's currently-running step, if any.
-func (s *Service) runningStep(ctx context.Context, runID string) (string, error) {
-	steps, err := s.store.Runtime().ListSteps(ctx, runID)
-	if err != nil {
-		return "", err
+	if err := s.store.ReleaseSessionUID(ctx, sessionID); err != nil {
+		s.log.Warn("release session uid", "session", sessionID, "error", err)
 	}
-	for _, st := range steps {
-		if st.State == runtime.StepRunning {
-			return st.ID, nil
-		}
-	}
-	return "", runtime.ErrNotFound
 }
 
 // handleWorkerLoss is invoked on stream close. If the worker held an active
@@ -761,7 +742,11 @@ func (s *Service) assign(ctx context.Context, turn runtime.Turn, run runtime.Run
 		// reconciler gates on this before starting a turn; guard again here.
 		return errors.New("no default model configured; cannot assign turn")
 	}
-	uid, gid := s.sessionUID(run.SessionID)
+	uid, err := s.store.AllocateSessionUID(ctx, run.SessionID, s.cfg.SessionUIDBase, s.cfg.SessionUIDRange, s.cfg.SessionUIDGrace)
+	if err != nil {
+		return fmt.Errorf("allocate session uid: %w", err)
+	}
+	gid := uid
 	msg := &v1.ControlMessage{Kind: &v1.ControlMessage_AssignTurn{AssignTurn: &v1.AssignTurn{
 		TurnId:          turn.ID,
 		SessionId:       run.SessionID,
@@ -800,16 +785,6 @@ func (s *Service) assign(ctx context.Context, turn runtime.Turn, run runtime.Run
 	}
 	s.log.Info("assigned turn", "turn", turn.ID, "run", run.ID, "pool", poolID, "worker", w.workerID, "gen", w.gen)
 	return nil
-}
-
-// sessionUID derives a stable per-session sandbox UID/GID within the configured
-// range. Per-session isolation requires unique UIDs; v1 derives deterministically
-// from the session id. Collision-free non-recycling is a HOR-245 hardening item.
-func (s *Service) sessionUID(sessionID string) (uint32, uint32) {
-	sum := sha256.Sum256([]byte(sessionID))
-	n := binary.BigEndian.Uint32(sum[:4]) % s.cfg.SessionUIDRange
-	uid := s.cfg.SessionUIDBase + n
-	return uid, uid
 }
 
 func mustJSON(v any) []byte {

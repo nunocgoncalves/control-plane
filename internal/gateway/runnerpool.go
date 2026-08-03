@@ -35,6 +35,19 @@ type runnerConn struct {
 	pending map[string]chan dispatchResult // invocationID -> result chan
 	tools   map[string]string              // tool_name -> digest (registered by this conn)
 	closed  bool
+
+	// sendMu serializes all runner->stream sends (Invoke dispatch + Cancel).
+	// The connect bidi writer shares the HTTP response writer; concurrent
+	// dispatches to the same runner would race/corrupt the stream (same class
+	// as the dispatch Work stream, F2).
+	sendMu sync.Mutex
+}
+
+// send serializes a RunnerControl send on the runner stream.
+func (rc *runnerConn) send(msg *v1.RunnerControl) error {
+	rc.sendMu.Lock()
+	defer rc.sendMu.Unlock()
+	return rc.stream.Send(msg)
 }
 
 // registerTool records a tool version served by this runner.
@@ -70,7 +83,7 @@ func (rc *runnerConn) dispatch(ctx context.Context, invoke *v1.RunnerControl, in
 		rc.mu.Unlock()
 	}()
 
-	if err := rc.stream.Send(invoke); err != nil {
+	if err := rc.send(invoke); err != nil {
 		// Send failure => stream effectively lost; the receive loop will tear down.
 		return dispatchResult{streamLost: true}, nil
 	}
@@ -182,7 +195,7 @@ func (p *runnerPool) propagateCancel(ctx context.Context, invocationID, reason s
 		_, pending := rc.pending[invocationID]
 		rc.mu.Unlock()
 		if pending {
-			_ = rc.stream.Send(&v1.RunnerControl{Kind: &v1.RunnerControl_Cancel{Cancel: &v1.Cancel{
+			_ = rc.send(&v1.RunnerControl{Kind: &v1.RunnerControl_Cancel{Cancel: &v1.Cancel{
 				InvocationId: invocationID, Reason: reason,
 			}}})
 			return

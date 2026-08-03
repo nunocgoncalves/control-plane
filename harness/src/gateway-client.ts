@@ -31,6 +31,10 @@ import type { GatewayToolDescriptor } from "./ipc.js";
 export interface AssignmentScope {
   turnId: string;
   runId: string;
+  /** The supervisor's current Welcome fencing generation (HOR-249/DEC-041).
+   * Sent on every gateway request so the gateway can deny a fenced/old-
+   * generation caller by comparing against the active assignment. */
+  fencingGeneration: bigint;
 }
 
 export class GatewayClientError extends Error {}
@@ -83,6 +87,7 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
         attemptId: scope.runId,
         callerScope: CallerScope.TURN,
         callerScopeId: scope.turnId,
+        fencingGeneration: scope.fencingGeneration,
       };
       let resp: DiscoverResponse;
       try {
@@ -107,6 +112,7 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
         toolName: call.toolName,
         toolVersionDigest: call.toolVersionDigest,
         argumentsJson: new TextEncoder().encode(call.argumentsJson),
+        fencingGeneration: scope.fencingGeneration,
         ...(call.idempotencyKey !== undefined ? { idempotencyKey: call.idempotencyKey } : {}),
       };
       try {

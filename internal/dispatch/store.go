@@ -334,6 +334,139 @@ func (s *Store) AckWatermark(ctx context.Context, turnID string) (uint64, error)
 	return highest, nil
 }
 
+// SessionIDForRun returns the session_id of a run (the sandbox_id), or
+// ErrNotFound. Used by dispatch to send SessionEnd after a run terminates.
+func (s *Store) SessionIDForRun(ctx context.Context, runID string) (string, error) {
+	var sessionID string
+	err := s.pool.QueryRow(ctx, `SELECT session_id FROM runtime.workflow_runs WHERE id = $1`, runID).Scan(&sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return sessionID, nil
+}
+
+// --- session UID allocator (HOR-245 reuse-safety floor, HOR-249 owner) ---
+
+// ErrUIDExhausted is returned when no UID is available in the configured range
+// (all are in use or within their non-recycling reap grace). Dispatch fails
+// closed (the run waits) rather than silently sharing a UID.
+var ErrUIDExhausted = errors.New("dispatch: session UID range exhausted")
+
+// AllocateSessionUID allocates a stable, unique UID (gid = uid) for a session,
+// idempotent per session. A UID is reusable only after it has been released
+// (SessionEnd reaped) AND a bounded grace exceeding max reap latency has
+// elapsed; in-use and within-grace UIDs are never recycled. Fail-closed on
+// exhaustion. base..base+range-1 is the UID space.
+func (s *Store) AllocateSessionUID(ctx context.Context, sessionID string, base, n uint32, grace time.Duration) (uint32, error) {
+	if n == 0 {
+		return 0, ErrUIDExhausted
+	}
+	// Idempotent fast path: this session already holds an in-use UID.
+	var uid uint32
+	err := s.pool.QueryRow(ctx, `
+		SELECT uid FROM runtime.session_uid_allocations
+		WHERE session_id = $1 AND state = 'in_use'`, sessionID).Scan(&uid)
+	if err == nil {
+		return uid, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("read session uid: %w", err)
+	}
+	// Claim the lowest free UID. Retry on a uid PK conflict (two sessions racing
+	// the same candidate); the retry re-selects now that it is in use.
+	for attempt := 0; attempt < 8; attempt++ {
+		claimed, err := s.tryAllocSessionUID(ctx, sessionID, base, n, grace)
+		if err == nil {
+			return claimed, nil
+		}
+		if errors.Is(err, ErrUIDExhausted) {
+			return 0, err
+		}
+		if !isUniqueViolation(err) {
+			return 0, fmt.Errorf("allocate session uid: %w", err)
+		}
+	}
+	return 0, fmt.Errorf("allocate session uid: retries exhausted for session %s", sessionID)
+}
+
+// tryAllocSessionUID claims the lowest free UID for the session in one tx. A
+// unique violation on (uid) means a concurrent allocation won the candidate;
+// the caller retries. A unique violation on (session_id) means this session was
+// allocated concurrently — re-read via the idempotent path.
+func (s *Store) tryAllocSessionUID(ctx context.Context, sessionID string, base, n uint32, grace time.Duration) (uint32, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// A UID is non-recyclable while in_use OR freed within the grace window.
+	// Pass the grace threshold as a timestamp to avoid interval-literal parsing.
+	graceBefore := time.Now().Add(-grace)
+	var uid uint32
+	err = tx.QueryRow(ctx, `
+		WITH candidate AS (
+			SELECT g.uid FROM generate_series($1::int, $2::int) AS g(uid)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM runtime.session_uid_allocations a
+				WHERE a.uid = g.uid
+				  AND (a.state = 'in_use' OR (a.state = 'freed' AND a.freed_at >= $3))
+			)
+			ORDER BY g.uid LIMIT 1
+		)
+		INSERT INTO runtime.session_uid_allocations (uid, session_id, state)
+		SELECT uid, $4, 'in_use' FROM candidate
+		ON CONFLICT (session_id) DO UPDATE
+			SET state = 'in_use', freed_at = NULL, updated_at = now()
+		RETURNING uid`,
+		int(base), int(base+n-1), graceBefore, sessionID).Scan(&uid)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return 0, err // uid PK conflict — caller retries.
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrUIDExhausted
+		}
+		return 0, fmt.Errorf("claim uid: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return uid, nil
+}
+
+// SessionUID returns the in-use UID allocated for a session, or ErrNotFound.
+func (s *Store) SessionUID(ctx context.Context, sessionID string) (uint32, error) {
+	var uid uint32
+	err := s.pool.QueryRow(ctx, `
+		SELECT uid FROM runtime.session_uid_allocations
+		WHERE session_id = $1 AND state = 'in_use'`, sessionID).Scan(&uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return uid, nil
+}
+
+// ReleaseSessionUID marks a session's UID freed (non-recyclable until grace
+// elapses), so the allocator does not recycle it while the supervisor reaps the
+// sandbox. Called after dispatch sends SessionEnd. Idempotent.
+func (s *Store) ReleaseSessionUID(ctx context.Context, sessionID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE runtime.session_uid_allocations
+		   SET state = 'freed', freed_at = now()
+		 WHERE session_id = $1 AND state = 'in_use'`, sessionID)
+	if err != nil {
+		return fmt.Errorf("release session uid: %w", err)
+	}
+	return nil
+}
+
 // --- pool resolution (toolgateway.pools read) ---
 
 // Pool is a row from toolgateway.pools (the AgentPool registry, ARCH-016/018).

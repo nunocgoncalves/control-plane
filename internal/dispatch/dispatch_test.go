@@ -407,3 +407,44 @@ func TestDispatch_MultiStepRunSuccession(t *testing.T) {
 		return err == nil && r.State == runtime.RunSucceeded
 	}, 2*time.Second, 20*time.Millisecond, "multi-step run should succeed after both turns complete")
 }
+
+// TestDispatch_SessionEndAndUIDAllocation: completing a run's turn sends
+// SessionEnd {sandbox_id, uid, gid} to the worker (HOR-245 cleanup), and the
+// durable allocator assigns a unique in-range UID per session (no collisions).
+func TestDispatch_SessionEndAndUIDAllocation(t *testing.T) {
+	env := newDispatchEnv(t)
+
+	// Two sessions -> two distinct UIDs (collision-free allocator, F8).
+	uid1 := mustSessionUID(t, env, "sess-A")
+	uid2 := mustSessionUID(t, env, "sess-B")
+	assert.NotEqual(t, uid1, uid2, "allocator must not collide across sessions")
+	assert.GreaterOrEqual(t, uid1, uint32(10000))
+	assert.Less(t, uid1, uint32(60000))
+
+	_ = env.seedPendingRun(t)
+	w := env.connectWorker(t)
+	defer w.close()
+	require.NoError(t, w.ready())
+	at := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetAssignTurn() != nil }).GetAssignTurn()
+	turnID := at.GetTurnId()
+
+	// AssignTurn carried an allocated UID (sandbox_id == session id).
+	assert.GreaterOrEqual(t, at.GetSandbox().GetUid(), uint32(10000))
+	assert.Equal(t, at.GetSandbox().GetSandboxId(), at.GetSessionId())
+
+	// Complete the turn -> SessionEnd for the session (F9).
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: turnID, Sequence: 1,
+		Kind: &v1.TurnEvent_WorkerOutcome{WorkerOutcome: &v1.WorkerOutcome{Outcome: v1.Outcome_OUTCOME_COMPLETED}}}))
+	w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetEventAck() != nil })
+	se := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetSessionEnd() != nil }).GetSessionEnd()
+	assert.Equal(t, at.GetSessionId(), se.GetSandboxId())
+	assert.Equal(t, at.GetSandbox().GetUid(), se.GetUid())
+	assert.Equal(t, se.GetUid(), se.GetGid())
+}
+
+func mustSessionUID(t *testing.T, env *dispatchEnv, sessionID string) uint32 {
+	t.Helper()
+	uid, err := env.store.AllocateSessionUID(context.Background(), sessionID, 10000, 50000, 5*time.Minute)
+	require.NoError(t, err)
+	return uid
+}

@@ -214,6 +214,7 @@ message DiscoverRequest {
   string attempt_id = 1;          // the workflow attempt (version snapshot boundary, ARCH-007)
   CallerScope caller_scope = 2;
   string caller_scope_id = 3;     // turn_id when CALLER_SCOPE_TURN, run_step_id when CALLER_SCOPE_WORKFLOW_STEP
+  uint64 fencing_generation = 4;  // the supervisor's current Welcome generation (HOR-249/DEC-041): the gateway binds authorization to the verified worker AND this generation, denying a fenced/old-generation caller.
 }
 
 message DiscoverResponse {
@@ -230,6 +231,7 @@ message InvokeRequest {
   bytes arguments_json = 7;       // business arguments only; never a secret/binding/tenant
   string idempotency_key = 8;     // required for non_idempotent_write; recommended otherwise
   repeated ArtifactRef artifact_input_refs = 9;
+  uint64 fencing_generation = 10; // the supervisor's current Welcome generation (HOR-249/DEC-041): bound against the active assignment.
 }
 
 message InvokeResponse {
@@ -247,6 +249,7 @@ message InvokeResponse {
 message CancelRequest {
   string invocation_id = 1;
   string reason = 2;
+  uint64 fencing_generation = 3; // the supervisor's current Welcome generation (HOR-249/DEC-041).
 }
 
 message CancelResponse {

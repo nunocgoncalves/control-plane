@@ -1089,12 +1089,13 @@ func (*Ack_Registered) isAck_Kind() {}
 func (*Ack_Heartbeat) isAck_Kind() {}
 
 type DiscoverRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AttemptId     string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"` // the workflow attempt (version snapshot boundary, ARCH-007)
-	CallerScope   CallerScope            `protobuf:"varint,2,opt,name=caller_scope,json=callerScope,proto3,enum=iterabase.gateway.v1.CallerScope" json:"caller_scope,omitempty"`
-	CallerScopeId string                 `protobuf:"bytes,3,opt,name=caller_scope_id,json=callerScopeId,proto3" json:"caller_scope_id,omitempty"` // turn_id when CALLER_SCOPE_TURN, run_step_id when CALLER_SCOPE_WORKFLOW_STEP
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AttemptId         string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"` // the workflow attempt (version snapshot boundary, ARCH-007)
+	CallerScope       CallerScope            `protobuf:"varint,2,opt,name=caller_scope,json=callerScope,proto3,enum=iterabase.gateway.v1.CallerScope" json:"caller_scope,omitempty"`
+	CallerScopeId     string                 `protobuf:"bytes,3,opt,name=caller_scope_id,json=callerScopeId,proto3" json:"caller_scope_id,omitempty"`            // turn_id when CALLER_SCOPE_TURN, run_step_id when CALLER_SCOPE_WORKFLOW_STEP
+	FencingGeneration uint64                 `protobuf:"varint,4,opt,name=fencing_generation,json=fencingGeneration,proto3" json:"fencing_generation,omitempty"` // the supervisor's current Welcome generation (HOR-249/DEC-041): the gateway binds authorization to the verified worker AND this generation, denying a fenced/old-generation caller.
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DiscoverRequest) Reset() {
@@ -1146,6 +1147,13 @@ func (x *DiscoverRequest) GetCallerScopeId() string {
 		return x.CallerScopeId
 	}
 	return ""
+}
+
+func (x *DiscoverRequest) GetFencingGeneration() uint64 {
+	if x != nil {
+		return x.FencingGeneration
+	}
+	return 0
 }
 
 type DiscoverResponse struct {
@@ -1203,6 +1211,7 @@ type InvokeRequest struct {
 	ArgumentsJson     []byte                 `protobuf:"bytes,7,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`               // business arguments only; never a secret/binding/tenant
 	IdempotencyKey    string                 `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`            // required for non_idempotent_write; recommended otherwise
 	ArtifactInputRefs []*ArtifactRef         `protobuf:"bytes,9,rep,name=artifact_input_refs,json=artifactInputRefs,proto3" json:"artifact_input_refs,omitempty"`
+	FencingGeneration uint64                 `protobuf:"varint,10,opt,name=fencing_generation,json=fencingGeneration,proto3" json:"fencing_generation,omitempty"` // the supervisor's current Welcome generation (HOR-249/DEC-041): bound against the active assignment.
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1300,6 +1309,13 @@ func (x *InvokeRequest) GetArtifactInputRefs() []*ArtifactRef {
 	return nil
 }
 
+func (x *InvokeRequest) GetFencingGeneration() uint64 {
+	if x != nil {
+		return x.FencingGeneration
+	}
+	return 0
+}
+
 type InvokeResponse struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	InvocationId       string                 `protobuf:"bytes,1,opt,name=invocation_id,json=invocationId,proto3" json:"invocation_id,omitempty"`
@@ -1388,11 +1404,12 @@ func (x *InvokeResponse) GetExistingInvocationId() string {
 }
 
 type CancelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InvocationId  string                 `protobuf:"bytes,1,opt,name=invocation_id,json=invocationId,proto3" json:"invocation_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	InvocationId      string                 `protobuf:"bytes,1,opt,name=invocation_id,json=invocationId,proto3" json:"invocation_id,omitempty"`
+	Reason            string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	FencingGeneration uint64                 `protobuf:"varint,3,opt,name=fencing_generation,json=fencingGeneration,proto3" json:"fencing_generation,omitempty"` // the supervisor's current Welcome generation (HOR-249/DEC-041).
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CancelRequest) Reset() {
@@ -1437,6 +1454,13 @@ func (x *CancelRequest) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *CancelRequest) GetFencingGeneration() uint64 {
+	if x != nil {
+		return x.FencingGeneration
+	}
+	return 0
 }
 
 type CancelResponse struct {
@@ -2146,14 +2170,15 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"registered\x18\x01 \x01(\tH\x00R\n" +
 	"registered\x12\x1e\n" +
 	"\theartbeat\x18\x02 \x01(\bH\x00R\theartbeatB\x06\n" +
-	"\x04kind\"\x9e\x01\n" +
+	"\x04kind\"\xcd\x01\n" +
 	"\x0fDiscoverRequest\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x12D\n" +
 	"\fcaller_scope\x18\x02 \x01(\x0e2!.iterabase.gateway.v1.CallerScopeR\vcallerScope\x12&\n" +
-	"\x0fcaller_scope_id\x18\x03 \x01(\tR\rcallerScopeId\"Z\n" +
+	"\x0fcaller_scope_id\x18\x03 \x01(\tR\rcallerScopeId\x12-\n" +
+	"\x12fencing_generation\x18\x04 \x01(\x04R\x11fencingGeneration\"Z\n" +
 	"\x10DiscoverResponse\x12F\n" +
-	"\vdescriptors\x18\x01 \x03(\v2$.iterabase.gateway.v1.ToolDescriptorR\vdescriptors\"\xae\x03\n" +
+	"\vdescriptors\x18\x01 \x03(\v2$.iterabase.gateway.v1.ToolDescriptorR\vdescriptors\"\xdd\x03\n" +
 	"\rInvokeRequest\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x12D\n" +
@@ -2165,7 +2190,9 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x13tool_version_digest\x18\x06 \x01(\tR\x11toolVersionDigest\x12%\n" +
 	"\x0earguments_json\x18\a \x01(\fR\rargumentsJson\x12'\n" +
 	"\x0fidempotency_key\x18\b \x01(\tR\x0eidempotencyKey\x12Q\n" +
-	"\x13artifact_input_refs\x18\t \x03(\v2!.iterabase.gateway.v1.ArtifactRefR\x11artifactInputRefs\"\xd3\x02\n" +
+	"\x13artifact_input_refs\x18\t \x03(\v2!.iterabase.gateway.v1.ArtifactRefR\x11artifactInputRefs\x12-\n" +
+	"\x12fencing_generation\x18\n" +
+	" \x01(\x04R\x11fencingGeneration\"\xd3\x02\n" +
 	"\x0eInvokeResponse\x12#\n" +
 	"\rinvocation_id\x18\x01 \x01(\tR\finvocationId\x127\n" +
 	"\x05state\x18\x02 \x01(\x0e2!.iterabase.gateway.v1.InvokeStateR\x05state\x12\x1f\n" +
@@ -2173,10 +2200,11 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"resultJson\x12S\n" +
 	"\x14artifact_output_refs\x18\x04 \x03(\v2!.iterabase.gateway.v1.ArtifactRefR\x12artifactOutputRefs\x127\n" +
 	"\x05error\x18\x05 \x01(\v2!.iterabase.gateway.v1.ErrorDetailR\x05error\x124\n" +
-	"\x16existing_invocation_id\x18\x06 \x01(\tR\x14existingInvocationId\"L\n" +
+	"\x16existing_invocation_id\x18\x06 \x01(\tR\x14existingInvocationId\"{\n" +
 	"\rCancelRequest\x12#\n" +
 	"\rinvocation_id\x18\x01 \x01(\tR\finvocationId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"I\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12-\n" +
+	"\x12fencing_generation\x18\x03 \x01(\x04R\x11fencingGeneration\"I\n" +
 	"\x0eCancelResponse\x127\n" +
 	"\x05state\x18\x01 \x01(\x0e2!.iterabase.gateway.v1.InvokeStateR\x05state\"\x9d\x04\n" +
 	"\x0eToolDescriptor\x12\x12\n" +
