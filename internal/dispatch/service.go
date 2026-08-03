@@ -195,19 +195,22 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 		cancel()
 	}()
 
+	// Fence the prior generation (if any) for this (pool, worker) BEFORE sending
+	// Welcome, so the prior turn is fully terminalized before the new generation
+	// advertises readiness and a reconnecting worker clears its outbox. Atomic
+	// replacement (pool.add returned the prior conn) + a generation-qualified CAS
+	// ensure only the prior gen's assignment is fenced, never a replacement's.
+	// The prior handler's deferred handleWorkerLoss is also generation-qualified
+	// (old.gen) and is a no-op once this fence succeeds. A detached bounded
+	// context is used so prior-gen loss cleanup completes even if this new
+	// connection's request ctx is canceled.
+	s.fenceOldGeneration(ctx, old, pool.ID, id.WorkerID)
+
 	if err := w.send(s.welcome(gen)); err != nil {
 		return fmt.Errorf("welcome send: %w", err)
 	}
 	s.log.Info("worker connected", "pool", pool.ID, "worker", id.WorkerID, "gen", gen,
 		"build", h.BuildVersion, "protocol", h.ProtocolVersion)
-
-	// Fence the prior generation (if any) for this (pool, worker) using a
-	// generation-qualified CAS: only the prior gen's assignment is fenced,
-	// never a replacement generation's. The prior handler's deferred
-	// handleWorkerLoss is also generation-qualified (old.gen) and is a no-op
-	// once this fence succeeds. markClosed unblocks the old receive loop so its
-	// handler tears down promptly (it does not wait for the old TCP stream).
-	s.fenceOldGeneration(ctx, old, pool.ID, id.WorkerID)
 
 	// Ack any in-flight assignment the worker may be replaying after a
 	// reconnect (cumulative ACK through the current watermark so the worker
@@ -269,14 +272,23 @@ func (s *Service) welcome(gen int64) *v1.ControlMessage {
 // handler's deferred handleWorkerLoss is a no-op because (a) the assignment is
 // already fenced here and (b) handleWorkerLoss uses a generation-qualified CAS
 // (old.gen) that cannot fence the replacement generation's assignment.
+//
+// The fence + terminalization run with a detached, bounded context: the prior
+// generation's loss cleanup must complete even if the new connection drops
+// (its request ctx may be canceled), mirroring the stream-loss cleanup path.
+// Leaving the prior turn running behind a fenced assignment would let the
+// reconciler never advance it (HOR-249).
 func (s *Service) fenceOldGeneration(ctx context.Context, old *workerConn, poolID, workerID string) {
+	_ = ctx
 	if old == nil {
 		return // clean connect; no prior generation to fence.
 	}
 	old.markClosed()
-	if a, err := s.store.FenceWorkerGenerationIf(ctx, poolID, workerID, old.gen); err == nil {
+	lossCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if a, err := s.store.FenceWorkerGenerationIf(lossCtx, poolID, workerID, old.gen); err == nil {
 		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", old.gen)
-		s.terminalizeTurnLoss(ctx, a)
+		s.terminalizeTurnLoss(lossCtx, a)
 	}
 }
 
