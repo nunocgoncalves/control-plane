@@ -467,8 +467,10 @@ func TestWorkflowReconcile(t *testing.T) {
 			assert.Contains(t, g.Status.ValidationMessage, "immutable")
 	}, 15*time.Second, 200*time.Millisecond, "content change under same version should be rejected as immutable")
 
-	// A separate CR cannot claim the same immutable definition version.
+	// A separate CR cannot claim a different version of the same logical key;
+	// unversioned resolution must never cross the durable workflow owner.
 	duplicate := validWalterWorkflow("walter-duplicate", ns, "walter-pool")
+	duplicate.Spec.Version = "2"
 	require.NoError(t, adminClient.Create(ctx, duplicate))
 	duplicateNN := types.NamespacedName{Name: duplicate.Name, Namespace: ns}
 	require.Eventually(t, func() bool {
@@ -478,7 +480,7 @@ func TestWorkflowReconcile(t *testing.T) {
 		}
 		return g.Status.ValidationStatus == v1alpha1.ValidationInvalid &&
 			strings.Contains(g.Status.ValidationMessage, "owned by another workflow")
-	}, 15*time.Second, 200*time.Millisecond, "definition version should retain its durable CR owner")
+	}, 15*time.Second, 200*time.Millisecond, "logical definition key should retain one durable CR owner")
 	require.NoError(t, adminClient.Delete(ctx, duplicate))
 
 	// Move this CR to a new spec.key/version. The old definition remains valid

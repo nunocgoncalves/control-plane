@@ -324,7 +324,9 @@ reference.
   unique version identity. A content change must be published under a new
   `spec.version`; the reconciler rejects a content change under an
   already-registered version. Re-registering the same `(key, version, digest)`
-  is idempotent; distinct versions may share a content digest.
+  is idempotent; distinct versions may share a content digest. Every version of
+  one logical `key` retains the same durable workflow scope identity, so latest-
+  version resolution cannot cross workflow/customer ownership boundaries.
 - **Validation runs before execution**: unknown source type / step kind /
   capability / completion rule / binding fails with an inspectable
   `validationStatus: invalid`. v1 source types are `graph_email` (Walter) and

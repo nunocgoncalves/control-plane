@@ -5,9 +5,11 @@
 // A definition is immutable per version (ARCH-007): (key, version) is the
 // unique immutable identity. Publishing a content change creates a new row
 // under a new version; the same (key, version) with different content is
-// rejected. Re-registering the same (key, version, digest) is idempotent. Two
-// versions may share a content digest and remain independently resolvable by
-// their version identity. The definition_key wire format "<key>:<version>"
+// rejected. Re-registering the same (key, version, digest) is idempotent. Every
+// version of a logical key retains one durable scope-identity owner; a different
+// Workflow CR cannot publish another version under that key. Two versions may
+// share a content digest and remain independently resolvable by their version
+// identity. The definition_key wire format "<key>:<version>"
 // (key/version exclude ":") is the stable cross-schema reference stored in
 // runtime.workflow_runs.definition_key (HOR-246) and
 // toolgateway.workflow_pool_bindings.workflow_definition_key (HOR-392).
@@ -40,8 +42,8 @@ var (
 	// an already-registered (key, version) (ARCH-007 immutability).
 	ErrImmutableVersion = errors.New("workflow: immutable version already registered with different content")
 	// ErrDefinitionOwnership is returned when a different Workflow scope
-	// identity already owns the same immutable (key, version) definition.
-	ErrDefinitionOwnership = errors.New("workflow: definition version is owned by another workflow")
+	// identity already owns any version of the same logical definition key.
+	ErrDefinitionOwnership = errors.New("workflow: logical definition key is owned by another workflow")
 )
 
 // ValidationStatus values (mirror api/v1alpha1).
@@ -147,18 +149,49 @@ func DefinitionKey(key, version string) string {
 // ErrImmutableVersion. A new version is always registered as a distinct
 // immutable identity, even when its content digest matches another version's,
 // so every published (key, version) is independently resolvable (REQ-001
-// acceptance: "immutable version identity"). validation_status is inspectable.
+// acceptance: "immutable version identity"). All historical and active
+// versions of one logical key must retain the same durable scope-identity owner
+// so unversioned resolution cannot cross customer/workflow identities
+// (REQ-010). validation_status is inspectable.
 //
-// ON CONFLICT DO NOTHING suppresses the (key, version) unique constraint; the
-// outcome is then determined by reading the canonical row so an immutability
-// violation is surfaced as a typed error rather than a raw SQL unique
-// violation.
+// Registration serializes on the logical key. This makes the owner check and
+// insert atomic even when two Workflow CRs concurrently publish the first
+// versions of the same key. ON CONFLICT DO NOTHING suppresses the (key,
+// version) unique constraint; the outcome is then determined by reading the
+// canonical row so an immutability violation is surfaced as a typed error
+// rather than a raw SQL unique violation.
 func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definition, error) {
+	if err := prepareDefinition(&d); err != nil {
+		return Definition{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Definition{}, fmt.Errorf("register definition: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockAndCheckDefinitionOwner(ctx, tx, d); err != nil {
+		return Definition{}, err
+	}
+	if err := insertDefinition(ctx, tx, d); err != nil {
+		return Definition{}, err
+	}
+	byVersion, err := readRegisteredDefinition(ctx, tx, d)
+	if err != nil {
+		return Definition{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Definition{}, fmt.Errorf("register definition: commit: %w", err)
+	}
+	return byVersion, nil
+}
+
+func prepareDefinition(d *Definition) error {
 	if d.Key == "" || d.Version == "" || d.Digest == "" {
-		return Definition{}, fmt.Errorf("workflow: key, version, and digest are required")
+		return fmt.Errorf("workflow: key, version, and digest are required")
 	}
 	if d.ScopeIdentityID == "" {
-		return Definition{}, fmt.Errorf("workflow: scope_identity_id is required")
+		return fmt.Errorf("workflow: scope_identity_id is required")
 	}
 	if d.SpecJSON == nil {
 		d.SpecJSON = []byte("{}")
@@ -166,33 +199,67 @@ func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definitio
 	if d.Presentation == nil {
 		d.Presentation = []byte("{}")
 	}
-	if _, err := s.pool.Exec(ctx, `
+	return nil
+}
+
+func lockAndCheckDefinitionOwner(ctx context.Context, tx pgx.Tx, d Definition) error {
+	// The transaction-scoped advisory lock closes the first-publish race: only
+	// one owner can establish a logical key, even when different versions are
+	// registered concurrently. Hash collisions only serialize unrelated keys.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, d.Key); err != nil {
+		return fmt.Errorf("register definition: lock logical key: %w", err)
+	}
+	var ownerID string
+	err := tx.QueryRow(ctx, `
+		SELECT scope_identity_id
+		FROM workflow.definitions
+		WHERE key = $1
+		ORDER BY created_at, id
+		LIMIT 1`, d.Key).Scan(&ownerID)
+	if err == nil && ownerID != d.ScopeIdentityID {
+		return fmt.Errorf("%w: key %s belongs to scope identity %s, not %s",
+			ErrDefinitionOwnership, d.Key, ownerID, d.ScopeIdentityID)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("register definition: read logical key owner: %w", err)
+	}
+	return nil
+}
+
+func insertDefinition(ctx context.Context, tx pgx.Tx, d Definition) error {
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO workflow.definitions
 			(key, version, digest, spec_json, validation_status, scope_identity_id, source_type, pool_key, presentation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT DO NOTHING`,
 		d.Key, d.Version, d.Digest, d.SpecJSON, d.ValidationStatus, d.ScopeIdentityID,
 		d.SourceType, d.PoolKey, d.Presentation); err != nil {
-		return Definition{}, fmt.Errorf("register definition: %w", err)
+		return fmt.Errorf("register definition: insert: %w", err)
 	}
-	// The persisted scope_identity_id is the durable owner of this immutable
-	// version. A second CR must not silently share it, even if content matches.
-	byVersion, err := s.GetDefinition(ctx, d.Key, d.Version)
-	if err == nil {
-		if byVersion.ScopeIdentityID != d.ScopeIdentityID {
-			return Definition{}, fmt.Errorf("%w: key %s version %s belongs to scope identity %s, not %s",
-				ErrDefinitionOwnership, d.Key, d.Version, byVersion.ScopeIdentityID, d.ScopeIdentityID)
-		}
-		if byVersion.Digest == d.Digest {
-			return byVersion, nil // idempotent re-registration by the same owner
-		}
+	return nil
+}
+
+func readRegisteredDefinition(ctx context.Context, tx pgx.Tx, d Definition) (Definition, error) {
+	byVersion, err := scanDefinition(tx.QueryRow(ctx, `
+		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,
+		       source_type, pool_key, presentation, created_at, updated_at
+		FROM workflow.definitions
+		WHERE key = $1 AND version = $2 AND deleted_at IS NULL`, d.Key, d.Version))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Definition{}, fmt.Errorf("register definition: read inserted: %w", ErrNotFound)
+	}
+	if err != nil {
+		return Definition{}, fmt.Errorf("register definition: read canonical: %w", err)
+	}
+	if byVersion.ScopeIdentityID != d.ScopeIdentityID {
+		return Definition{}, fmt.Errorf("%w: key %s belongs to scope identity %s, not %s",
+			ErrDefinitionOwnership, d.Key, byVersion.ScopeIdentityID, d.ScopeIdentityID)
+	}
+	if byVersion.Digest != d.Digest {
 		return Definition{}, fmt.Errorf("%w: key %s version %s already registered with digest %s (ARCH-007)",
 			ErrImmutableVersion, d.Key, d.Version, byVersion.Digest)
 	}
-	if !errors.Is(err, ErrNotFound) {
-		return Definition{}, fmt.Errorf("register definition: read canonical: %w", err)
-	}
-	return Definition{}, fmt.Errorf("register definition: read inserted: %w", err)
+	return byVersion, nil
 }
 
 // GetDefinition fetches an active definition by (key, version).
@@ -226,9 +293,9 @@ func (s *Store) GetLatestDefinition(ctx context.Context, key string) (Definition
 }
 
 // ListDefinitionsByKey returns every active definition row for a logical key
-// across all published versions. Workflow finalizer cleanup must use
-// ListDefinitionsByOwner instead because separate CR owners may publish
-// different versions under the same logical key.
+// across all published versions. Every row has the same durable owner, but
+// Workflow finalizer cleanup uses ListDefinitionsByOwner because one CR may
+// have published definitions under previous spec.key values.
 func (s *Store) ListDefinitionsByKey(ctx context.Context, key string) ([]Definition, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,

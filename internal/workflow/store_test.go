@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -139,19 +140,7 @@ func TestRegisterDefinition_NewVersionCoexists(t *testing.T) {
 	assert.Equal(t, "2", latest.Version)
 }
 
-func TestRegisterDefinition_RejectsDifferentOwnerForSameVersion(t *testing.T) {
-	store, pool := newTestStore(t)
-	ctx := context.Background()
-	ownerA := insertWorkflowIdentity(t, pool, "workflow:default/a")
-	ownerB := insertWorkflowIdentity(t, pool, "workflow:default/b")
-
-	_, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerA))
-	require.NoError(t, err)
-	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerB))
-	require.ErrorIs(t, err, workflow.ErrDefinitionOwnership)
-}
-
-func TestOwnerCleanupDoesNotSweepAnotherCRVersion(t *testing.T) {
+func TestRegisterDefinition_RejectsDifferentOwnerForLogicalKey(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()
 	ownerAKey := "workflow:default/a"
@@ -161,13 +150,55 @@ func TestOwnerCleanupDoesNotSweepAnotherCRVersion(t *testing.T) {
 	_, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerA))
 	require.NoError(t, err)
 	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "2", ownerB))
+	require.ErrorIs(t, err, workflow.ErrDefinitionOwnership,
+		"a different CR must not publish another version under an owned logical key")
+	_, err = store.GetDefinition(ctx, "walter/quotation", "2")
+	assert.ErrorIs(t, err, workflow.ErrNotFound)
+	latest, err := store.GetLatestDefinition(ctx, "walter/quotation")
 	require.NoError(t, err)
+	assert.Equal(t, ownerA, latest.ScopeIdentityID,
+		"default resolution must remain bound to the logical key's durable owner")
 
+	// The same durable owner may publish the next version, and owner cleanup
+	// revokes every version of the logical key.
+	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "2", ownerA))
+	require.NoError(t, err)
 	require.NoError(t, store.SoftDeleteDefinitionsByOwner(ctx, ownerAKey))
 	_, err = store.GetDefinition(ctx, "walter/quotation", "1")
 	assert.ErrorIs(t, err, workflow.ErrNotFound)
 	_, err = store.GetDefinition(ctx, "walter/quotation", "2")
-	require.NoError(t, err, "cleanup must not sweep another CR's version")
+	assert.ErrorIs(t, err, workflow.ErrNotFound)
+
+	// Concurrent first publication is serialized by logical key: exactly one
+	// owner wins and the other receives the ownership error, even on a different
+	// version.
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, d := range []workflow.Definition{
+		sampleDefinition("walter/concurrent", "1", ownerA),
+		sampleDefinition("walter/concurrent", "2", ownerB),
+	} {
+		go func() {
+			<-start
+			_, registerErr := store.RegisterDefinition(ctx, d)
+			results <- registerErr
+		}()
+	}
+	close(start)
+	var registered, rejected int
+	for range 2 {
+		registerErr := <-results
+		if registerErr == nil {
+			registered++
+		} else if errors.Is(registerErr, workflow.ErrDefinitionOwnership) {
+			rejected++
+		}
+	}
+	assert.Equal(t, 1, registered)
+	assert.Equal(t, 1, rejected)
+	defs, err := store.ListDefinitionsByKey(ctx, "walter/concurrent")
+	require.NoError(t, err)
+	assert.Len(t, defs, 1)
 }
 
 func TestDefinitionsByOwnerSpanSpecKeys(t *testing.T) {
