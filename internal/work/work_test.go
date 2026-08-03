@@ -103,8 +103,10 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	var invocationID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO toolgateway.invocations
-		(attempt_id,caller_scope,caller_scope_id,tool_call_id,tool_name,tool_version_digest,idempotency_key,effect_class,pool_id,state,result_json,finished_at)
-		VALUES($1,'turn',$2,'call-write','graph.excel.write','sha256:excel-v1','call-write','idempotent_write',$3,'succeeded','{"row":184}',now()) RETURNING id::text`, attemptID, turn.ID, poolID).Scan(&invocationID))
+		(attempt_id,caller_scope,caller_scope_id,tool_call_id,tool_name,tool_version_digest,idempotency_key,effect_class,pool_id,consequence_summary,state,result_json,finished_at)
+		VALUES($1,'turn',$2,'call-write','graph.excel.write','sha256:excel-v1','call-write','idempotent_write',$3,
+		       '{"en":"Add quotation ACME to workbook Quotations 2026","pt":"Adicionar cotação ACME ao livro Quotations 2026"}',
+		       'succeeded','{"row":184}',now()) RETURNING id::text`, attemptID, turn.ID, poolID).Scan(&invocationID))
 	require.NoError(t, store.RecordCompletionReport(ctx, turn.ID, workstore.CompletionReport{Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{"missing":"destination"}`)}))
 	state, err := store.CompleteTurn(ctx, turn.ID, "completed", nil, nil)
 	require.NoError(t, err)
@@ -136,6 +138,8 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.NotContains(t, string(consequence.RequiredConsequences), "result")
 	assert.NotContains(t, string(consequence.RequiredConsequences), "error")
 	assert.NotContains(t, string(consequence.RequiredConsequences), "toolName")
+	assert.NotContains(t, string(consequence.RequiredConsequences), "arguments")
+	assert.Contains(t, string(consequence.RequiredConsequences), "Add quotation ACME to workbook Quotations 2026")
 	_, err = restarted.RespondBlocker(ctx, workstore.BlockerResponseInput{BlockerID: consequence.ID, ActorIdentityID: actorID, Outcome: "confirmed", Response: json.RawMessage(`{}`), ConfirmedInvocationIDs: []string{invocationID}})
 	require.NoError(t, err)
 	second, turn2, dispatch, err := restarted.PrepareNode(ctx, attemptID)
@@ -190,6 +194,7 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, consequences, 1)
 	assert.Equal(t, invocationID, consequences[0].InvocationID)
+	assert.JSONEq(t, `{"en":"Add quotation ACME to workbook Quotations 2026","pt":"Adicionar cotação ACME ao livro Quotations 2026"}`, string(consequences[0].Summary))
 
 	revised, err := restarted.CreateRevision(ctx, workstore.RevisionInput{WorkItemID: item.ID, ActorIdentityID: actorID, FeedbackID: feedback.ID, ActionableGuidance: "Classify using the corrected destination rule", ConfirmedInvocationIDs: []string{invocationID}})
 	require.NoError(t, err)
