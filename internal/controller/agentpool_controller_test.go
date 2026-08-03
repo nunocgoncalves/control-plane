@@ -664,12 +664,18 @@ func TestAgentPoolGatewayRevocationIndependentOfAssembly(t *testing.T) {
 
 	// Generation 2: revoke the grant + binding. The PVC is now unreconcilable,
 	// so assembly never completes — but the gateway MUST still observe the
-	// revoked (empty) grant set.
-	updated := &v1alpha1.AgentPool{}
-	require.NoError(t, adminClient.Get(ctx, poolNN, updated))
-	updated.Spec.GatewayGrants = nil
-	updated.Spec.CredentialBindings = nil
-	require.NoError(t, adminClient.Update(ctx, updated))
+	// revoked (empty) grant set. Retry the Get->Update on conflict: the
+	// reconciler may still be patching status between our Get and Update (the
+	// bare Get->Update-without-retry race that previously flaked under load).
+	require.Eventually(t, func() bool {
+		updated := &v1alpha1.AgentPool{}
+		if err := adminClient.Get(ctx, poolNN, updated); err != nil {
+			return false
+		}
+		updated.Spec.GatewayGrants = nil
+		updated.Spec.CredentialBindings = nil
+		return adminClient.Update(ctx, updated) == nil
+	}, 15*time.Second, 200*time.Millisecond, "should update the AgentPool to revoke the grant + binding")
 
 	// The gateway materializes the REVOKED (empty) grant set even though
 	// ensurePVC keeps failing.
