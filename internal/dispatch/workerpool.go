@@ -23,16 +23,62 @@ type workerConn struct {
 	activeTurn string // turn_id currently assigned ("" when idle)
 	lastSeen   time.Time
 
-	// assignCh lets the dispatcher deliver an AssignTurn to this worker. The
-	// Work receive loop is the sole reader; the dispatcher writes a pending
-	// assignment, the loop sends it after the worker advertised Ready credit.
+	// sendMu serializes all server->worker ControlMessage sends. The connect
+	// bidi writer ultimately shares the HTTP response writer; concurrent sends
+	// from the receive loop (EventAck), the dispatcher (AssignTurn),
+	// cancellation (AbortTurn) and session-end (SessionEnd) would race/corrupt
+	// the stream. All sends MUST go through send().
+	sendMu sync.Mutex
+
+	// done is closed by markClosed to unblock the receive loop (F5: a fenced
+	// prior generation must stop acting; its receive loop is blocked on
+	// stream.Receive, so a reader goroutine forwards into recvCh and the loop
+	// selects on recvCh/done). Closed once.
+	done      chan struct{}
+	recvCh    chan recvResult
+	closeOnce sync.Once
 }
 
-// markClosed marks the conn closed so dispatches/fences stop using it.
+// recvResult is one forwarded stream.Receive result.
+type recvResult struct {
+	msg *v1.WorkerMessage
+	err error
+}
+
+// startReader launches a goroutine that forwards stream.Receive results into
+// recvCh until the stream errors. It is the sole reader of stream.Receive; the
+// Work handler selects on recvCh/done so markClosed can unblock the loop
+// without waiting for the (possibly lingering) old stream to tear down.
+func (w *workerConn) startReader() {
+	go func() {
+		for {
+			msg, err := w.stream.Receive()
+			select {
+			case w.recvCh <- recvResult{msg: msg, err: err}:
+				if err != nil {
+					return
+				}
+			case <-w.done:
+				return
+			}
+		}
+	}()
+}
+
+// send serializes a ControlMessage send. Safe for concurrent callers.
+func (w *workerConn) send(msg *v1.ControlMessage) error {
+	w.sendMu.Lock()
+	defer w.sendMu.Unlock()
+	return w.stream.Send(msg)
+}
+
+// markClosed marks the conn closed so dispatches/fences stop using it and
+// unblocks the receive loop by closing done. Idempotent.
 func (w *workerConn) markClosed() {
 	w.mu.Lock()
 	w.closed = true
 	w.mu.Unlock()
+	w.closeOnce.Do(func() { close(w.done) })
 }
 
 // tryConsumeCredit atomically consumes the Ready credit for a turn assignment.
@@ -59,14 +105,20 @@ func (w *workerConn) releaseTurn() {
 	w.mu.Unlock()
 }
 
-// grantCredit marks the worker idle (it advertised Ready). Legal only when no
-// turn is active; a Ready while busy is a protocol violation handled by the
-// service (stream closed fail-closed).
-func (w *workerConn) grantCredit() {
+// grantCreditIfIdle atomically checks the worker is not busy and grants the
+// Ready credit. Returns false (and is a protocol violation) if a turn is
+// active; the caller closes the stream fail-closed. The busy check and credit
+// grant are one locked operation so the reconciler cannot race a concurrent
+// assignment between the check and the grant.
+func (w *workerConn) grantCreditIfIdle() bool {
 	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.activeTurn != "" {
+		return false
+	}
 	w.idle = true
 	w.lastSeen = time.Now()
-	w.mu.Unlock()
+	return true
 }
 
 // workerPool tracks live worker connections keyed by (pool, worker). At most
@@ -140,4 +192,22 @@ func (p *workerPool) activeConn(turnID string) *workerConn {
 		}
 	}
 	return nil
+}
+
+// all returns a snapshot of all live connections (for lease monitoring).
+func (p *workerPool) all() []*workerConn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]*workerConn, 0, len(p.conns))
+	for _, w := range p.conns {
+		out = append(out, w)
+	}
+	return out
+}
+
+// lastSeenAt returns the worker's last message time under its lock.
+func (w *workerConn) lastSeenAt() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastSeen
 }

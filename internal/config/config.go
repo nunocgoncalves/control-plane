@@ -64,6 +64,14 @@ type DispatchConfig struct {
 	TLSKeyFile   string `yaml:"tls_key_file"`
 	ClientCAFile string `yaml:"client_ca_file"`
 	TrustDomain  string `yaml:"trust_domain"`
+
+	// DefaultModelID + DefaultModelAPI are the configured default model
+	// permission captured on every AssignTurn (HOR-249 active-assignment
+	// context). Per-workflow model selection is HOR-252; v1 dispatch MUST NOT
+	// emit an empty model permission — the child/inference bridge cannot
+	// execute a valid model request without it.
+	DefaultModelID  string `yaml:"default_model_id"`
+	DefaultModelAPI string `yaml:"default_model_api"`
 }
 
 // DatabaseConfig configures the Postgres connection pool.
@@ -215,6 +223,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("DISPATCH_TRUST_DOMAIN"); v != "" {
 		cfg.Dispatch.TrustDomain = v
 	}
+	if v := os.Getenv("DISPATCH_DEFAULT_MODEL_ID"); v != "" {
+		cfg.Dispatch.DefaultModelID = v
+	}
+	if v := os.Getenv("DISPATCH_DEFAULT_MODEL_API"); v != "" {
+		cfg.Dispatch.DefaultModelAPI = v
+	}
 }
 
 func validate(cfg *Config) error {
@@ -292,6 +306,12 @@ func ValidateDispatchServe(cfg *Config) error {
 	}
 	if d.ClientCAFile == "" {
 		return fmt.Errorf("dispatch.client_ca_file is required (mTLS client verification)")
+	}
+	if d.DefaultModelID == "" {
+		return fmt.Errorf("dispatch.default_model_id (or DISPATCH_DEFAULT_MODEL_ID) is required: dispatch must not emit an empty model permission (HOR-249)")
+	}
+	if d.DefaultModelAPI == "" {
+		return fmt.Errorf("dispatch.default_model_api (or DISPATCH_DEFAULT_MODEL_API) is required")
 	}
 	return nil
 }

@@ -73,9 +73,11 @@ func newDispatchEnv(t *testing.T) *dispatchEnv {
 	svc := dispatch.NewService(store, dispatch.Config{
 		TrustDomain:       dispatchTD,
 		ReconcileInterval: 30 * time.Millisecond,
+		DefaultModel:      &v1.ModelConfig{Id: "gpt-4o", Api: "openai-completions"},
 	}, nil)
 	recCtx, cancelRec := context.WithCancel(context.Background())
 	svc.StartReconciler(recCtx)
+	svc.StartLeaseMonitor(recCtx)
 
 	mux := http.NewServeMux()
 	idmw := dispatch.IdentityMiddleware(dispatchTD)
@@ -321,4 +323,87 @@ func TestDispatch_Cancel(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "run not aborted after cancel")
 	_, err := env.store.ResolveActiveAssignment(ctx, turnID)
 	assert.ErrorIs(t, err, dispatch.ErrAssignmentNotActive)
+}
+
+// TestDispatch_SequenceGapRejected: the HOR-381 source-order contract is
+// strictly monotonic, one-based and gapless. A gap (seq jumps from 1 to 100) is
+// rejected without advancing the watermark; the subsequent in-order event (seq
+// 2) is still applied and ACKed.
+func TestDispatch_SequenceGapRejected(t *testing.T) {
+	env := newDispatchEnv(t)
+	ctx := context.Background()
+	_ = env.seedPendingRun(t)
+
+	w := env.connectWorker(t)
+	defer w.close()
+	require.NoError(t, w.ready())
+	at := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetAssignTurn() != nil }).GetAssignTurn()
+	turnID := at.GetTurnId()
+
+	// seq 1 applied + ACKed through 1.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: turnID, Sequence: 1,
+		Kind: &v1.TurnEvent_AssistantMessage{AssistantMessage: &v1.AssistantMessage{Text: "a"}}}))
+	ack1 := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetEventAck() != nil }).GetEventAck()
+	assert.Equal(t, uint64(1), ack1.GetThroughSequence())
+
+	// seq 100 (gap): rejected. No ACK is sent for the gap; the watermark stays at 1.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: turnID, Sequence: 100,
+		Kind: &v1.TurnEvent_AssistantMessage{AssistantMessage: &v1.AssistantMessage{Text: "gap"}}}))
+
+	// seq 2 (in-order) is still applied and ACKed through 2.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: turnID, Sequence: 2,
+		Kind: &v1.TurnEvent_AssistantMessage{AssistantMessage: &v1.AssistantMessage{Text: "b"}}}))
+	ack2 := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetEventAck() != nil }).GetEventAck()
+	assert.Equal(t, uint64(2), ack2.GetThroughSequence())
+
+	// The gap payload was not persisted.
+	high, err := env.store.AckWatermark(ctx, turnID)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), high, "watermark must not advance past the applied in-order sequence")
+}
+
+// TestDispatch_MultiStepRunSuccession: a run with two agent_task steps is not
+// short-circuited after its first turn. Completing turn 1 succeeds step 1 and
+// starts step 2 + a second turn; completing turn 2 succeeds the run.
+func TestDispatch_MultiStepRunSuccession(t *testing.T) {
+	env := newDispatchEnv(t)
+	ctx := context.Background()
+
+	sid := dispatchSID()
+	identID := insertIdentity(t, env.pgpool, "ident-"+sid)
+	run, err := env.rt.CreateRun(ctx, runtime.CreateRunInput{
+		Kind: runtime.KindWorkflow, DefinitionKey: "wf-multi",
+		ScopeIdentityID: identID, SessionID: sid, SessionDir: "/sessions/" + sid,
+		Steps: []runtime.StepInput{
+			{Seq: 1, Kind: runtime.StepKindAgentTask, Config: json.RawMessage(`{"prompt":"a"}`)},
+			{Seq: 2, Kind: runtime.StepKindAgentTask, Config: json.RawMessage(`{"prompt":"b"}`)},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, env.store.AssignRunToPool(ctx, run.ID, env.poolID))
+
+	w := env.connectWorker(t)
+	defer w.close()
+	require.NoError(t, w.ready())
+
+	// First AssignTurn (step 1).
+	at1 := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetAssignTurn() != nil }).GetAssignTurn()
+	require.Equal(t, run.ID, at1.GetRunId())
+	// Complete turn 1.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: at1.GetTurnId(), Sequence: 1,
+		Kind: &v1.TurnEvent_WorkerOutcome{WorkerOutcome: &v1.WorkerOutcome{Outcome: v1.Outcome_OUTCOME_COMPLETED}}}))
+	w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetEventAck() != nil })
+
+	// Worker re-advertises credit; a second AssignTurn (step 2) must arrive.
+	require.NoError(t, w.ready())
+	at2 := w.recvControl(t, func(c *v1.ControlMessage) bool { return c.GetAssignTurn() != nil }).GetAssignTurn()
+	assert.NotEqual(t, at1.GetTurnId(), at2.GetTurnId(), "second step must get a new turn")
+
+	// Complete turn 2 -> run succeeds.
+	require.NoError(t, w.sendEvent(&v1.TurnEvent{TurnId: at2.GetTurnId(), Sequence: 1,
+		Kind: &v1.TurnEvent_WorkerOutcome{WorkerOutcome: &v1.WorkerOutcome{Outcome: v1.Outcome_OUTCOME_COMPLETED}}}))
+	require.Eventually(t, func() bool {
+		r, err := env.rt.GetRun(ctx, run.ID)
+		return err == nil && r.State == runtime.RunSucceeded
+	}, 2*time.Second, 20*time.Millisecond, "multi-step run should succeed after both turns complete")
 }

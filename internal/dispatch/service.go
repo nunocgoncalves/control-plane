@@ -166,15 +166,24 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 		gen:      gen,
 		stream:   st,
 		lastSeen: time.Now(),
+		done:     make(chan struct{}),
+		recvCh:   make(chan recvResult, 1),
 	}
 	s.pool.add(w)
+	w.startReader()
 	defer func() {
 		w.markClosed()
 		s.pool.remove(w)
-		s.handleWorkerLoss(ctx, w)
+		// Stream-loss cleanup must run with a detached, bounded context: the
+		// request ctx is canceled by the time this defer runs, so fencing /
+		// terminalization DB work would fail immediately and leave the
+		// assignment active + gateway-authorizable (HOR-249).
+		lossCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		s.handleWorkerLoss(lossCtx, w)
+		cancel()
 	}()
 
-	if err := st.Send(s.welcome(gen)); err != nil {
+	if err := w.send(s.welcome(gen)); err != nil {
 		return fmt.Errorf("welcome send: %w", err)
 	}
 	s.log.Info("worker connected", "pool", pool.ID, "worker", id.WorkerID, "gen", gen,
@@ -183,36 +192,42 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 	// Ack any in-flight assignment the worker may be replaying after a
 	// reconnect (cumulative ACK through the current watermark so the worker
 	// clears its retained outbox before advertising Ready).
-	s.ackReconnectWatermark(ctx, st, id.PoolUID, id.WorkerID)
+	s.ackReconnectWatermark(ctx, w, id.PoolUID, id.WorkerID)
 
 	for {
-		msg, err := st.Receive()
-		if err != nil {
-			return nil // stream closed (client disconnect / ctx cancel / fenced)
-		}
-		w.mu.Lock()
-		w.lastSeen = time.Now()
-		w.mu.Unlock()
+		select {
+		case <-w.done:
+			return nil
+		case r := <-w.recvCh:
+			if r.err != nil {
+				return nil // stream closed (client disconnect / ctx cancel / fenced)
+			}
+			msg := r.msg
+			w.mu.Lock()
+			w.lastSeen = time.Now()
+			w.mu.Unlock()
 
-		switch m := msg.Kind.(type) {
-		case *v1.WorkerMessage_Ready:
-			// One credit. Legal only when no turn is active; a Ready while busy
-			// is a protocol violation (stream closed fail-closed).
-			if w.activeTurn != "" {
-				return connect.NewError(connect.CodeFailedPrecondition,
-					errors.New("ready while a turn is active is a protocol violation (one-credit dispatch)"))
+			switch m := msg.Kind.(type) {
+			case *v1.WorkerMessage_Ready:
+				// One credit. Legal only when no turn is active; a Ready while busy
+				// is a protocol violation (stream closed fail-closed). The busy
+				// check + credit grant are one locked worker operation so the
+				// reconciler cannot race an assignment between them.
+				if !w.grantCreditIfIdle() {
+					return connect.NewError(connect.CodeFailedPrecondition,
+						errors.New("ready while a turn is active is a protocol violation (one-credit dispatch)"))
+				}
+				s.kickReconciler()
+			case *v1.WorkerMessage_Heartbeat:
+				// Any message renews the lease; nothing else to do.
+			case *v1.WorkerMessage_TurnEvent:
+				if err := s.handleTurnEvent(ctx, m.TurnEvent, w); err != nil {
+					s.log.Warn("turn event handling failed", "turn", m.TurnEvent.GetTurnId(), "error", err)
+				}
+			case *v1.WorkerMessage_TokenDelta:
+				// Ephemeral live token streaming; not durable, not ACKed. Surfaced
+				// to a UI later; ignored by the dispatch path.
 			}
-			w.grantCredit()
-			s.kickReconciler()
-		case *v1.WorkerMessage_Heartbeat:
-			// Any message renews the lease; nothing else to do.
-		case *v1.WorkerMessage_TurnEvent:
-			if err := s.handleTurnEvent(ctx, m.TurnEvent, w); err != nil {
-				s.log.Warn("turn event handling failed", "turn", m.TurnEvent.GetTurnId(), "error", err)
-			}
-		case *v1.WorkerMessage_TokenDelta:
-			// Ephemeral live token streaming; not durable, not ACKed. Surfaced
-			// to a UI later; ignored by the dispatch path.
 		}
 	}
 }
@@ -228,16 +243,21 @@ func (s *Service) welcome(gen int64) *v1.ControlMessage {
 }
 
 // fenceOldGeneration closes any prior live connection for this (pool, worker)
-// and fences its active assignment as worker loss. The old connection's receive
-// loop observes the closed stream and returns; its deferred handleWorkerLoss is
-// a no-op because the assignment is already fenced here.
+// and fences its active assignment as worker loss. markClosed closes the old
+// conn's done channel so its receive loop exits promptly (it does not wait for
+// the old stream TCP to tear down); the old handler's deferred handleWorkerLoss
+// is a no-op because (a) the assignment is already fenced here and (b)
+// handleWorkerLoss uses a generation-qualified CAS that cannot fence the
+// replacement generation's assignment.
 func (s *Service) fenceOldGeneration(ctx context.Context, poolID, workerID string) {
 	if old := s.pool.get(poolID, workerID); old != nil {
 		old.markClosed()
 	}
-	// Fence the active assignment (if any) bound to this worker. The turn is
-	// terminalized as worker loss (aborted); a late WorkerOutcome from the old
-	// generation is after-terminal audit only.
+	// Fence the active assignment (if any) bound to this worker. At this point
+	// the new connection has not created an assignment yet, so the only active
+	// assignment is the prior generation's. The turn is terminalized as worker
+	// loss (aborted); a late WorkerOutcome from the old generation is
+	// after-terminal audit only.
 	if a, err := s.store.FenceWorkerGeneration(ctx, poolID, workerID); err == nil {
 		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID)
 		s.terminalizeTurnLoss(ctx, a)
@@ -245,12 +265,23 @@ func (s *Service) fenceOldGeneration(ctx context.Context, poolID, workerID strin
 }
 
 // ackReconnectWatermark sends a cumulative EventAck for the worker's prior
-// active assignment (if any survived the fence as already-committed events) so
-// the worker clears its retained outbox. After fencing there is no active
-// assignment, so this is a best-effort no-op when none exists.
-func (s *Service) ackReconnectWatermark(ctx context.Context, st *connect.BidiStream[v1.WorkerMessage, v1.ControlMessage], poolID, workerID string) {
-	// After fenceOldGeneration the worker has no active assignment; nothing to
-	// ACK. Kept as an explicit seam for a future durable replay-ack contract.
+// assignment (now fenced by fenceOldGeneration) through its committed
+// highest_applied_sequence, so a reconnected worker clears its retained outbox
+// and may advertise Ready only after the cumulative ACK (HOR-381 EventAck
+// contract). The prior turn was terminalized as worker loss on reconnect; its
+// replayed tail is after-terminal audit, but the worker still needs the
+// cumulative ACK to drop the retained events. Best-effort: a missing prior
+// assignment (clean connect) is a no-op.
+func (s *Service) ackReconnectWatermark(ctx context.Context, w *workerConn, poolID, workerID string) {
+	a, err := s.store.PriorAssignmentForWorker(ctx, poolID, workerID)
+	if err != nil {
+		return // no prior assignment; clean connect.
+	}
+	if err := w.send(&v1.ControlMessage{Kind: &v1.ControlMessage_EventAck{EventAck: &v1.EventAck{
+		TurnId: a.TurnID, ThroughSequence: a.HighestAppliedSequence,
+	}}}); err != nil {
+		s.log.Warn("reconnect watermark ack send", "turn", a.TurnID, "error", err)
+	}
 }
 
 // kickReconciler pokes the dispatch loop to attempt assignment promptly when a
@@ -286,9 +317,14 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 		// first-terminal-writer) or never assigned. A late outcome is
 		// after-terminal audit — append it as an event without mutating state.
 		if wo := te.GetWorkerOutcome(); wo != nil {
-			return s.appendAfterTerminal(ctx, turnID, te)
+			_ = s.appendAfterTerminal(ctx, turnID, te)
 		}
-		return nil
+		// The worker may be replaying its retained outbox after reconnect for a
+		// turn the CP has already terminalized. ACK through this event's
+		// sequence so the worker clears its outbox and may advertise Ready
+		// (HOR-381 cumulative ACK); the replayed events are after-terminal audit,
+		// not redelivered work.
+		return s.ack(ctx, w, turnID, seq)
 	}
 	if a.WorkerID != w.workerID || a.FencingGeneration != w.gen {
 		// Stale generation: ignore (fenced). Do not ACK — the old stream will
@@ -334,9 +370,9 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 	return nil
 }
 
-// ack sends a cumulative EventAck through the worker's stream.
+// ack sends a cumulative EventAck through the worker's stream (serialized).
 func (s *Service) ack(ctx context.Context, w *workerConn, turnID string, through uint64) error {
-	return w.stream.Send(&v1.ControlMessage{Kind: &v1.ControlMessage_EventAck{EventAck: &v1.EventAck{
+	return w.send(&v1.ControlMessage{Kind: &v1.ControlMessage_EventAck{EventAck: &v1.EventAck{
 		TurnId: turnID, ThroughSequence: through,
 	}}})
 }
@@ -401,20 +437,24 @@ func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason s
 		s.log.Warn("settle turn", "turn", a.TurnID, "reason", reason, "error", err)
 	}
 	// Step terminal: succeed on completed, fail otherwise (aborted/failed).
+	// Step terminal: succeed on completed, fail otherwise (aborted/failed).
 	if reason == "completed" {
 		s.succeedRunningStep(ctx, a.RunID)
 	} else {
 		s.failRunningStep(ctx, a.RunID)
 	}
-	// Run terminal.
+	// Run terminal / advance to the next step.
 	switch {
 	case runAbort:
 		if _, err := rt.AbortRun(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
 			s.log.Warn("abort run", "run", a.RunID, "error", err)
 		}
 	case reason == "completed":
-		if _, err := rt.SucceedRun(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-			s.log.Warn("succeed run", "run", a.RunID, "error", err)
+		// Advance to the next pending step; SucceedRun only when none remain.
+		// This drives multi-step runs instead of short-circuiting after the
+		// first turn (HOR-249 durable workflow/turn dispatch).
+		if err := s.startNextStep(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
+			s.log.Warn("advance run after turn", "run", a.RunID, "error", err)
 		}
 	default:
 		if _, err := rt.FailRun(ctx, a.RunID); err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
@@ -463,8 +503,11 @@ func (s *Service) runningStep(ctx context.Context, runID string) (string, error)
 }
 
 // handleWorkerLoss is invoked on stream close. If the worker held an active
-// assignment that is still active (not already fenced/terminalized), fence it
-// and terminalize the turn as worker loss (aborted). Idempotent.
+// assignment that is still active AND still owned by THIS connection's
+// generation, fence it (generation-qualified CAS) and terminalize the turn as
+// worker loss (aborted). The generation CAS is the fencing safety fence
+// (HOR-249): a prior-generation handler tearing down late must not fence a
+// newer-generation assignment owned by the replacement connection. Idempotent.
 func (s *Service) handleWorkerLoss(ctx context.Context, w *workerConn) {
 	w.mu.Lock()
 	turn := w.activeTurn
@@ -472,8 +515,8 @@ func (s *Service) handleWorkerLoss(ctx context.Context, w *workerConn) {
 	if turn == "" {
 		return
 	}
-	if a, err := s.store.FenceWorkerGeneration(ctx, w.poolID, w.workerID); err == nil {
-		s.log.Info("worker loss: terminalize turn", "pool", w.poolID, "worker", w.workerID, "turn", a.TurnID)
+	if a, err := s.store.FenceWorkerGenerationIf(ctx, w.poolID, w.workerID, w.gen); err == nil {
+		s.log.Info("worker loss: terminalize turn", "pool", w.poolID, "worker", w.workerID, "turn", a.TurnID, "gen", w.gen)
 		s.terminalizeTurnLoss(ctx, a)
 	}
 }
@@ -488,15 +531,15 @@ func (s *Service) CancelTurn(ctx context.Context, turnID string, reason v1.Abort
 	if err != nil {
 		return nil // not active: already terminal or never assigned.
 	}
-	// Propagate AbortTurn to the serving worker (best-effort).
+	// Propagate AbortTurn to the serving worker (best-effort, serialized).
 	if w := s.pool.activeConn(turnID); w != nil {
-		_ = w.stream.Send(&v1.ControlMessage{Kind: &v1.ControlMessage_AbortTurn{AbortTurn: &v1.AbortTurn{
+		_ = w.send(&v1.ControlMessage{Kind: &v1.ControlMessage_AbortTurn{AbortTurn: &v1.AbortTurn{
 			TurnId: turnID, Reason: reason, Message: msg,
 		}}})
 	}
-	// CP first-terminal-writer: fence + terminalize as aborted. A late worker
-	// outcome is after-terminal audit.
-	if _, ferr := s.store.FenceWorkerGeneration(ctx, a.PoolID, a.WorkerID); ferr == nil {
+	// CP first-terminal-writer: fence (generation-qualified CAS) + terminalize
+	// as aborted. A late worker outcome is after-terminal audit.
+	if _, ferr := s.store.FenceWorkerGenerationIf(ctx, a.PoolID, a.WorkerID, a.FencingGeneration); ferr == nil {
 		s.terminalizeTurnLoss(ctx, a)
 	}
 	return nil
@@ -521,6 +564,56 @@ func (s *Service) StartReconciler(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// StartLeaseMonitor enforces worker lease expiry (HOR-249 retains
+// heartbeats/leases): a connected worker whose lastSeen is older than
+// LeaseInterval is deemed lost, fenced with a generation-qualified CAS (so only
+// this conn's own generation is fenced) and terminalized as lease-expired
+// (aborted). Run once per process alongside the reconciler.
+func (s *Service) StartLeaseMonitor(ctx context.Context) {
+	interval := s.cfg.LeaseInterval / 2
+	if interval <= 0 {
+		interval = time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.expireLeases(ctx)
+			}
+		}
+	}()
+}
+
+// expireLeases fences + terminalizes workers whose lease has expired.
+func (s *Service) expireLeases(ctx context.Context) {
+	deadline := time.Now().Add(-s.cfg.LeaseInterval)
+	for _, w := range s.pool.all() {
+		last := w.lastSeenAt()
+		if last.After(deadline) {
+			continue
+		}
+		w.mu.Lock()
+		turn := w.activeTurn
+		w.mu.Unlock()
+		if turn == "" {
+			continue // idle workers are not terminalized; the conn is simply stale.
+		}
+		if a, err := s.store.FenceWorkerGenerationIf(ctx, w.poolID, w.workerID, w.gen); err == nil {
+			s.log.Info("lease expired: terminalize turn", "pool", w.poolID, "worker", w.workerID,
+				"turn", a.TurnID, "gen", w.gen, "last_seen", last)
+			// Lease expiry is worker loss; terminalize as aborted. The
+			// ABORT_REASON_LEASE_EXPIRED classification is recorded in the log;
+			// the runtime turn SM has no lease_expired state.
+			s.terminalizeTurnLoss(ctx, a)
+			w.markClosed()
+		}
+	}
 }
 
 // reconcileOnce drives one dispatch pass: start pending runs, then assign
@@ -595,13 +688,24 @@ func (s *Service) dispatchRun(ctx context.Context, run runtime.Run) {
 	// Active turn?
 	turn, err := rt.ActiveTurn(ctx, run.ID)
 	if errors.Is(err, runtime.ErrNotFound) {
-		// No active turn: start one. The model is the configured default for v1
-		// (per-workflow model selection is HOR-252).
-		model := ""
-		if s.cfg.DefaultModel != nil {
-			model = s.cfg.DefaultModel.Id
+		// Durable guard against the terminalization race (REQ-009/SCN-008): a
+		// step whose turn has just settled but whose step/run succession has
+		// not yet committed would otherwise be handed a duplicate turn. v1 is
+		// one turn per step with no auto-redelivery, so a step that already has
+		// any turn waits for succession instead of starting another.
+		if has, gerr := rt.HasTurnForStep(ctx, stID); gerr == nil && has {
+			return
 		}
-		turn, err = rt.StartTurn(ctx, run.ID, stID, model)
+		// No active turn: start one. The model is the configured default for v1
+		// (per-workflow model selection is HOR-252). Dispatch MUST NOT emit an
+		// empty model permission (HOR-249 active-assignment context): if no
+		// default is configured, the run waits rather than dispatching an
+		// unexecutable assignment.
+		if s.cfg.DefaultModel == nil || s.cfg.DefaultModel.Id == "" {
+			s.log.Warn("no default model configured; run waits", "run", run.ID)
+			return
+		}
+		turn, err = rt.StartTurn(ctx, run.ID, stID, s.cfg.DefaultModel.Id)
 		if err != nil {
 			s.log.Warn("start turn", "run", run.ID, "error", err)
 			return
@@ -652,8 +756,10 @@ func (s *Service) runningStepID(ctx context.Context, runID string) (string, erro
 // release it.
 func (s *Service) assign(ctx context.Context, turn runtime.Turn, run runtime.Run, poolID string, w *workerConn) error {
 	model := s.cfg.DefaultModel
-	if model == nil {
-		model = &v1.ModelConfig{Id: "", Api: "openai-completions"}
+	if model == nil || model.Id == "" {
+		// Dispatch must not emit an empty model permission (HOR-249). The
+		// reconciler gates on this before starting a turn; guard again here.
+		return errors.New("no default model configured; cannot assign turn")
 	}
 	uid, gid := s.sessionUID(run.SessionID)
 	msg := &v1.ControlMessage{Kind: &v1.ControlMessage_AssignTurn{AssignTurn: &v1.AssignTurn{
@@ -682,11 +788,12 @@ func (s *Service) assign(ctx context.Context, turn runtime.Turn, run runtime.Run
 	if _, err := s.store.CreateAssignment(ctx, in); err != nil {
 		return err
 	}
-	if err := w.stream.Send(msg); err != nil {
+	if err := w.send(msg); err != nil {
 		// Send failed: the assignment is recorded active but the worker never
-		// received it. Fence + terminalize as worker loss (the conn is dead).
-		_, _ = s.store.FenceWorkerGeneration(ctx, poolID, w.workerID)
-		if a, ferr := s.store.ResolveActiveAssignment(ctx, turn.ID); ferr == nil {
+		// received it. Fence (generation-qualified CAS) + terminalize as worker
+		// loss using the assignment returned by the fence (the row is no longer
+		// active after fencing, so ResolveActiveAssignment would miss it).
+		if a, ferr := s.store.FenceWorkerGenerationIf(ctx, poolID, w.workerID, w.gen); ferr == nil {
 			s.terminalizeTurnLoss(ctx, a)
 		}
 		return err
@@ -717,12 +824,25 @@ func turnEventToRuntime(te *v1.TurnEvent) (kind string, payload []byte, isOutcom
 	switch k := te.Kind.(type) {
 	case *v1.TurnEvent_ExecutionStarted:
 		return runtime.EvTurnStarted, mustJSON(k.ExecutionStarted), false
+	case *v1.TurnEvent_ModelCallStarted:
+		return runtime.EvModelCallStarted, mustJSON(k.ModelCallStarted), false
 	case *v1.TurnEvent_AssistantMessage:
 		return runtime.EvAssistantMessage, mustJSON(k.AssistantMessage), false
+	case *v1.TurnEvent_ModelCallFailed:
+		return runtime.EvModelCallFailed, mustJSON(k.ModelCallFailed), false
+	case *v1.TurnEvent_ModelRetryScheduled:
+		return runtime.EvModelRetryScheduled, mustJSON(k.ModelRetryScheduled), false
+	case *v1.TurnEvent_ModelRetryFinished:
+		return runtime.EvModelRetryFinished, mustJSON(k.ModelRetryFinished), false
+	case *v1.TurnEvent_ToolCallStarted:
+		// The ambiguous side-effect boundary (HOR-381/ARCH-014): durable.
+		return runtime.EvToolCallStarted, mustJSON(k.ToolCallStarted), false
 	case *v1.TurnEvent_ToolResult:
 		return runtime.EvToolResult, mustJSON(k.ToolResult), false
-	case *v1.TurnEvent_ModelCallFailed:
-		return runtime.EvError, mustJSON(k.ModelCallFailed), false
+	case *v1.TurnEvent_CompactionStarted:
+		return runtime.EvCompactionStarted, mustJSON(k.CompactionStarted), false
+	case *v1.TurnEvent_CompactionFinished:
+		return runtime.EvCompactionFinished, mustJSON(k.CompactionFinished), false
 	case *v1.TurnEvent_HarnessError:
 		return runtime.EvError, mustJSON(k.HarnessError), false
 	case *v1.TurnEvent_WorkerOutcome:

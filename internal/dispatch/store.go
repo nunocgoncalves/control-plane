@@ -44,6 +44,12 @@ var (
 	// ErrAssignmentNotActive is returned when an assignment exists but is not
 	// active (fenced/terminal) — gateways treat this as denial.
 	ErrAssignmentNotActive = errors.New("dispatch: assignment not active")
+	// ErrOutOfOrderSequence is returned when a worker presents a TurnEvent
+	// sequence with a gap (greater than highest+1). The HOR-381 source-order
+	// contract is strictly monotonic, one-based and gapless; a gap is a sender
+	// bug and the event is rejected without advancing the watermark
+	// (fail-closed).
+	ErrOutOfOrderSequence = errors.New("dispatch: out-of-order turn event sequence")
 )
 
 // AssignmentState is the active-assignment lifecycle.
@@ -188,6 +194,49 @@ func (s *Store) FenceWorkerGeneration(ctx context.Context, poolID, workerID stri
 	return a, nil
 }
 
+// FenceWorkerGenerationIf fences the active assignment bound to a (pool,
+// worker) ONLY if its fencing_generation matches expectedGen (a CAS). This is
+// the fencing safety fence (HOR-249): a prior-generation handler whose stream
+// is finally tearing down must not fence a newer-generation assignment already
+// owned by the replacement connection. Returns ErrNotFound if no active
+// assignment matches (already fenced/terminal, or a different generation).
+func (s *Store) FenceWorkerGenerationIf(ctx context.Context, poolID, workerID string, expectedGen int64) (Assignment, error) {
+	row := s.pool.QueryRow(ctx, `
+		UPDATE runtime.turn_assignments SET state = 'fenced'
+		WHERE pool_id = $1 AND worker_id = $2 AND state = 'active' AND fencing_generation = $3
+		RETURNING turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+	          scope_identity_id, agent_pool_key, model_permission, capability_request,
+	          tool_version_snapshot, state, highest_applied_sequence, assigned_at, terminalized_at`,
+		poolID, workerID, expectedGen)
+	a, err := scanAssignment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Assignment{}, ErrNotFound
+	}
+	if err != nil {
+		return Assignment{}, fmt.Errorf("fence worker generation (cas): %w", err)
+	}
+	return a, nil
+}
+
+// PriorAssignmentForWorker returns the most recent assignment (any state) bound
+// to a (pool, worker), or ErrNotFound. Used on reconnect to send a cumulative
+// EventAck for the prior assignment's committed watermark so a reconnected
+// worker clears its retained outbox before advertising Ready (HOR-381).
+func (s *Store) PriorAssignmentForWorker(ctx context.Context, poolID, workerID string) (Assignment, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT turn_id, run_id, pool_id, worker_id, fencing_generation, attempt_id,
+	       scope_identity_id, agent_pool_key, model_permission, capability_request,
+	       tool_version_snapshot, state, highest_applied_sequence, assigned_at, terminalized_at
+		FROM runtime.turn_assignments
+		WHERE pool_id = $1 AND worker_id = $2
+		ORDER BY assigned_at DESC LIMIT 1`, poolID, workerID)
+	a, err := scanAssignment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Assignment{}, ErrNotFound
+	}
+	return a, err
+}
+
 // TerminalizeAssignment moves a turn's assignment active -> terminal. Called
 // after the turn SM is terminalized (worker outcome committed, cancellation, or
 // worker-loss). Idempotent: a fenced assignment is also moved to terminal.
@@ -232,7 +281,16 @@ func (s *Store) AppendTurnEvent(ctx context.Context, turnID string, workerSeq ui
 		return false, fmt.Errorf("lock assignment: %w", err)
 	}
 	if workerSeq <= highest {
-		return false, nil // dedup: already applied (replayed tail).
+		// Dedup: a replayed/resent event already applied (source-order contract
+		// allows <= highest replay). The caller still ACKs through the watermark
+		// so the worker clears its retained outbox.
+		return false, nil
+	}
+	// HOR-381 source-order contract: strictly monotonic, one-based, gapless.
+	// A sequence greater than highest+1 is a gap (sender bug); reject without
+	// advancing the watermark so 1..highest+1-1 cannot be silently ACKed away.
+	if workerSeq != highest+1 {
+		return false, ErrOutOfOrderSequence
 	}
 
 	// Append the runtime audit event with a gapless per-run seq (mirrors

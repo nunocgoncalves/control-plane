@@ -28,6 +28,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/dispatch"
+	v1 "github.com/nunocgoncalves/control-plane/internal/harnessrpc/iterabase/harness/v1"
 	"github.com/nunocgoncalves/control-plane/internal/harnessrpc/iterabase/harness/v1/harnessv1connect"
 	"github.com/nunocgoncalves/control-plane/internal/logging"
 	"github.com/nunocgoncalves/control-plane/internal/runtime"
@@ -87,8 +88,13 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	defer pool.Close()
 
 	store := dispatch.NewStore(pool, runtime.NewStore(pool))
+	var defaultModel *v1.ModelConfig
+	if cfg.Dispatch.DefaultModelID != "" {
+		defaultModel = &v1.ModelConfig{Id: cfg.Dispatch.DefaultModelID, Api: cfg.Dispatch.DefaultModelAPI}
+	}
 	svc := dispatch.NewService(store, dispatch.Config{
-		TrustDomain: cfg.Dispatch.TrustDomain,
+		TrustDomain:  cfg.Dispatch.TrustDomain,
+		DefaultModel: defaultModel,
 	}, logger)
 
 	// Dispatch reconciler: drive pending runs to idle workers before accepting
@@ -96,6 +102,7 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	recCtx, cancelRec := context.WithCancel(ctx)
 	defer cancelRec()
 	svc.StartReconciler(recCtx)
+	svc.StartLeaseMonitor(recCtx)
 
 	mux := http.NewServeMux()
 	idmw := dispatch.IdentityMiddleware(cfg.Dispatch.TrustDomain)

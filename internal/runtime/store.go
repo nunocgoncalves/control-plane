@@ -73,12 +73,21 @@ const (
 	TurnFailed    = "failed"
 	TurnAborted   = "aborted"
 
-	// Turn-level events (mirror harness Event).
-	EvTurnStarted      = "turn_started"
-	EvAssistantMessage = "assistant_message"
-	EvToolResult       = "tool_result"
-	EvError            = "error"
-	EvSettled          = "settled"
+	// Turn-level events (mirror harness Event). The durable harness
+	// TurnEvent variants (HOR-381) are all mapped to attributable runtime
+	// events so required audit history / ambiguity evidence is retained.
+	EvTurnStarted         = "turn_started"
+	EvModelCallStarted    = "model_call_started"
+	EvAssistantMessage    = "assistant_message"
+	EvModelCallFailed     = "model_call_failed"
+	EvModelRetryScheduled = "model_retry_scheduled"
+	EvModelRetryFinished  = "model_retry_finished"
+	EvToolCallStarted     = "tool_call_started"
+	EvToolResult          = "tool_result"
+	EvCompactionStarted   = "compaction_started"
+	EvCompactionFinished  = "compaction_finished"
+	EvError               = "error"
+	EvSettled             = "settled"
 	// Step-level events.
 	EvStepStarted       = "step_started"
 	EvStepSucceeded     = "step_succeeded"
@@ -703,6 +712,21 @@ func (s *Store) turnTransitionErr(ctx context.Context, tx pgx.Tx, id string) err
 		return err
 	}
 	return fmt.Errorf("%w: turn state is %s", ErrInvalidTransition, state)
+}
+
+// HasTurnForStep reports whether a step already has any turn (any state). v1
+// dispatch is one turn per step with no automatic redelivery of an ambiguous
+// turn (HOR-249 / REQ-009): the reconciler uses this as a durable guard so a
+// step whose turn has settled (but whose step/run succession is not yet
+// committed) is not handed a duplicate turn.
+func (s *Store) HasTurnForStep(ctx context.Context, stepID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM runtime.turns WHERE step_id = $1::uuid)`, stepID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("has turn for step: %w", err)
+	}
+	return exists, nil
 }
 
 // ActiveTurn returns the run's pending/running turn (if any) for reattach/resume.
