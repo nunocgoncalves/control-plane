@@ -39,6 +39,9 @@ var (
 	// ErrImmutableVersion is returned when a content change is published under
 	// an already-registered (key, version) (ARCH-007 immutability).
 	ErrImmutableVersion = errors.New("workflow: immutable version already registered with different content")
+	// ErrDefinitionOwnership is returned when a different Workflow scope
+	// identity already owns the same immutable (key, version) definition.
+	ErrDefinitionOwnership = errors.New("workflow: definition version is owned by another workflow")
 )
 
 // ValidationStatus values (mirror api/v1alpha1).
@@ -172,11 +175,16 @@ func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definitio
 		d.SourceType, d.PoolKey, d.Presentation); err != nil {
 		return Definition{}, fmt.Errorf("register definition: %w", err)
 	}
-	// Same (key, version) exists?
+	// The persisted scope_identity_id is the durable owner of this immutable
+	// version. A second CR must not silently share it, even if content matches.
 	byVersion, err := s.GetDefinition(ctx, d.Key, d.Version)
 	if err == nil {
+		if byVersion.ScopeIdentityID != d.ScopeIdentityID {
+			return Definition{}, fmt.Errorf("%w: key %s version %s belongs to scope identity %s, not %s",
+				ErrDefinitionOwnership, d.Key, d.Version, byVersion.ScopeIdentityID, d.ScopeIdentityID)
+		}
 		if byVersion.Digest == d.Digest {
-			return byVersion, nil // idempotent re-registration of the same version
+			return byVersion, nil // idempotent re-registration by the same owner
 		}
 		return Definition{}, fmt.Errorf("%w: key %s version %s already registered with digest %s (ARCH-007)",
 			ErrImmutableVersion, d.Key, d.Version, byVersion.Digest)
@@ -184,14 +192,7 @@ func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definitio
 	if !errors.Is(err, ErrNotFound) {
 		return Definition{}, fmt.Errorf("register definition: read canonical: %w", err)
 	}
-	// (key, version) not present: the insert succeeded and registered a new
-	// immutable version identity (distinct from any same-content version).
-	// Re-read the canonical row to return the assigned id/timestamps.
-	inserted, err := s.GetDefinition(ctx, d.Key, d.Version)
-	if err != nil {
-		return Definition{}, fmt.Errorf("register definition: read inserted: %w", err)
-	}
-	return inserted, nil
+	return Definition{}, fmt.Errorf("register definition: read inserted: %w", err)
 }
 
 // GetDefinition fetches an active definition by (key, version).
@@ -224,10 +225,10 @@ func (s *Store) GetLatestDefinition(ctx context.Context, key string) (Definition
 	return d, err
 }
 
-// ListDefinitionsByKey returns every active definition row for a key (all
-// published versions). Used by CR-deletion cleanup to revoke the
-// workflow_pool_binding for every owned version before finalizer removal
-// (REQ-010: no usable gateway authorization may outlive the Workflow CR).
+// ListDefinitionsByKey returns every active definition row for a logical key
+// across all published versions. Workflow finalizer cleanup must use
+// ListDefinitionsByOwner instead because separate CR owners may publish
+// different versions under the same logical key.
 func (s *Store) ListDefinitionsByKey(ctx context.Context, key string) ([]Definition, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,
@@ -237,6 +238,33 @@ func (s *Store) ListDefinitionsByKey(ctx context.Context, key string) ([]Definit
 		ORDER BY version`, key)
 	if err != nil {
 		return nil, fmt.Errorf("list definitions by key: %w", err)
+	}
+	defer rows.Close()
+	var out []Definition
+	for rows.Next() {
+		d, err := scanDefinition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ListDefinitionsByOwner returns every active definition materialized by the
+// Workflow CR identified by its stable scope identity key. Unlike spec.key,
+// this owner key is derived from metadata namespace/name and survives spec
+// changes, so finalizer cleanup can enumerate every definition the CR created.
+func (s *Store) ListDefinitionsByOwner(ctx context.Context, scopeIdentityKey string) ([]Definition, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.id, d.key, d.version, d.digest, d.spec_json, d.validation_status, d.scope_identity_id,
+		       d.source_type, d.pool_key, d.presentation, d.created_at, d.updated_at
+		FROM workflow.definitions d
+		JOIN identity.identities i ON i.id = d.scope_identity_id
+		WHERE i.key = $1 AND d.deleted_at IS NULL
+		ORDER BY d.key, d.version`, scopeIdentityKey)
+	if err != nil {
+		return nil, fmt.Errorf("list definitions by owner: %w", err)
 	}
 	defer rows.Close()
 	var out []Definition
@@ -318,11 +346,10 @@ func (s *Store) ListTriggerBindings(ctx context.Context, definitionID string) ([
 	return out, rows.Err()
 }
 
-// SoftDeleteDefinitionByKey soft-deletes all versions of a workflow key and
-// their trigger bindings on Workflow CR deletion (access revoked, rows retained
-// for history/audit). The workflow_pool_binding and scope identity are revoked
-// by the reconciler via their owning stores. A no-op if the key is already
-// soft-deleted or never existed.
+// SoftDeleteDefinitionByKey soft-deletes all versions of a logical workflow key
+// and their trigger bindings. This is an administrative key-level operation;
+// Workflow finalizers use SoftDeleteDefinitionsByOwner so one CR cannot sweep
+// another CR's version. A no-op if the key is already deleted or never existed.
 func (s *Store) SoftDeleteDefinitionByKey(ctx context.Context, key string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -343,6 +370,37 @@ func (s *Store) SoftDeleteDefinitionByKey(ctx context.Context, key string) error
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("soft-delete definition: commit: %w", err)
+	}
+	return nil
+}
+
+// SoftDeleteDefinitionsByOwner soft-deletes every definition and trigger
+// binding materialized by one Workflow CR, regardless of later spec.key
+// changes. The stable owner identity is the cleanup boundary (REQ-010).
+func (s *Store) SoftDeleteDefinitionsByOwner(ctx context.Context, scopeIdentityKey string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("soft-delete definitions by owner: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow.trigger_bindings SET deleted_at = now()
+		WHERE definition_id IN (
+			SELECT d.id FROM workflow.definitions d
+			JOIN identity.identities i ON i.id = d.scope_identity_id
+			WHERE i.key = $1
+		) AND deleted_at IS NULL`, scopeIdentityKey); err != nil {
+		return fmt.Errorf("soft-delete trigger bindings by owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow.definitions d SET deleted_at = now()
+		FROM identity.identities i
+		WHERE d.scope_identity_id = i.id AND i.key = $1 AND d.deleted_at IS NULL`, scopeIdentityKey); err != nil {
+		return fmt.Errorf("soft-delete definitions by owner: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("soft-delete definitions by owner: commit: %w", err)
 	}
 	return nil
 }

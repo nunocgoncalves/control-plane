@@ -40,7 +40,8 @@ CREATE SCHEMA IF NOT EXISTS workflow;
 -- row (a new version); old versions remain resolvable for in-flight attempts.
 -- validation_status is inspectable (REQ-001 acceptance: "registered with
 -- immutable version identity and inspectable validation status").
--- scope_identity_id is the kind=workflow identity runs execute under (HOR-242).
+-- scope_identity_id is the kind=workflow identity runs execute under (HOR-242)
+-- and the durable Workflow CR owner used for isolated finalizer cleanup.
 --
 -- (key, version) alone is unique: two versions may legitimately share the same
 -- content digest, and each must be independently resolvable by its version

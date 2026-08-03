@@ -158,7 +158,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// surfaced as invalid — the operator must publish a new version.
 	def, digest, err := r.registerDefinition(ctx, &wf, ident.ID)
 	if err != nil {
-		if errors.Is(err, workflow.ErrImmutableVersion) {
+		if errors.Is(err, workflow.ErrImmutableVersion) || errors.Is(err, workflow.ErrDefinitionOwnership) {
 			_ = r.patchStatus(ctx, &wf, false, v1alpha1.ValidationInvalid, fmt.Sprintf("validation: %v", err), true)
 			return ctrl.Result{}, nil
 		}
@@ -212,16 +212,17 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // It fails closed (REQ-010): any store error is returned so the caller keeps
 // the finalizer and requeues, never leaving usable gateway authorization
 // after the Workflow CR is gone. Revocation order is authorization-first: the
-// workflow_pool_binding for EVERY published version is revoked before the
-// definitions and scope identity, so a transient failure cannot retain a
-// usable binding for an older version. All steps are idempotent (soft-delete
-// is a no-op on already-deleted rows), so retries converge.
+// workflow_pool_binding for EVERY definition owned by this CR is revoked before
+// the definitions and scope identity, so a transient failure cannot retain a
+// usable binding for an older version or a previous spec.key. All steps are
+// idempotent (soft-delete is a no-op on already-deleted rows), so retries
+// converge.
 func (r *WorkflowReconciler) cleanupWorkflow(ctx context.Context, wf *v1alpha1.Workflow) error {
-	key := wf.Spec.Key
-	// Revoke the workflow_pool_binding for every owned version. Listing the
-	// active definitions for the key enumerates every published version's
-	// definition_key ("<key>:<version>").
-	defs, err := r.Store.ListDefinitionsByKey(ctx, key)
+	scopeKey := workflowScopeIdentityKey(wf)
+	// scopeKey is derived from immutable object metadata, while spec.key may
+	// change. Every definition persists the corresponding scope_identity_id, so
+	// owner-based enumeration finds all keys and versions created by this CR.
+	defs, err := r.Store.ListDefinitionsByOwner(ctx, scopeKey)
 	if err != nil {
 		return fmt.Errorf("list workflow definitions for cleanup: %w", err)
 	}
@@ -231,12 +232,11 @@ func (r *WorkflowReconciler) cleanupWorkflow(ctx context.Context, wf *v1alpha1.W
 			return fmt.Errorf("soft-delete workflow pool binding %s: %w", defKey, err)
 		}
 	}
-	// Revoke the definitions + trigger bindings (all versions) and the scope
-	// identity. Rows are retained for history/audit.
-	if err := r.Store.SoftDeleteDefinitionByKey(ctx, key); err != nil {
+	// Revoke every owned definition + trigger binding, then its scope identity.
+	// Rows are retained for history/audit.
+	if err := r.Store.SoftDeleteDefinitionsByOwner(ctx, scopeKey); err != nil {
 		return fmt.Errorf("soft-delete workflow definitions: %w", err)
 	}
-	scopeKey := workflowScopeIdentityKey(wf)
 	if err := r.Identities.SoftDeleteIdentityByKey(ctx, scopeKey); err != nil {
 		return fmt.Errorf("soft-delete workflow scope identity %q: %w", scopeKey, err)
 	}

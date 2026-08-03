@@ -139,6 +139,61 @@ func TestRegisterDefinition_NewVersionCoexists(t *testing.T) {
 	assert.Equal(t, "2", latest.Version)
 }
 
+func TestRegisterDefinition_RejectsDifferentOwnerForSameVersion(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	ownerA := insertWorkflowIdentity(t, pool, "workflow:default/a")
+	ownerB := insertWorkflowIdentity(t, pool, "workflow:default/b")
+
+	_, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerA))
+	require.NoError(t, err)
+	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerB))
+	require.ErrorIs(t, err, workflow.ErrDefinitionOwnership)
+}
+
+func TestOwnerCleanupDoesNotSweepAnotherCRVersion(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	ownerAKey := "workflow:default/a"
+	ownerA := insertWorkflowIdentity(t, pool, ownerAKey)
+	ownerB := insertWorkflowIdentity(t, pool, "workflow:default/b")
+
+	_, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", ownerA))
+	require.NoError(t, err)
+	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "2", ownerB))
+	require.NoError(t, err)
+
+	require.NoError(t, store.SoftDeleteDefinitionsByOwner(ctx, ownerAKey))
+	_, err = store.GetDefinition(ctx, "walter/quotation", "1")
+	assert.ErrorIs(t, err, workflow.ErrNotFound)
+	_, err = store.GetDefinition(ctx, "walter/quotation", "2")
+	require.NoError(t, err, "cleanup must not sweep another CR's version")
+}
+
+func TestDefinitionsByOwnerSpanSpecKeys(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	ownerKey := "workflow:default/a"
+	ownerID := insertWorkflowIdentity(t, pool, ownerKey)
+
+	_, err := store.RegisterDefinition(ctx, sampleDefinition("walter/original", "1", ownerID))
+	require.NoError(t, err)
+	_, err = store.RegisterDefinition(ctx, sampleDefinition("walter/renamed", "2", ownerID))
+	require.NoError(t, err)
+
+	defs, err := store.ListDefinitionsByOwner(ctx, ownerKey)
+	require.NoError(t, err)
+	require.Len(t, defs, 2)
+	assert.Equal(t, "walter/original", defs[0].Key)
+	assert.Equal(t, "walter/renamed", defs[1].Key)
+
+	require.NoError(t, store.SoftDeleteDefinitionsByOwner(ctx, ownerKey))
+	_, err = store.GetDefinition(ctx, "walter/original", "1")
+	assert.ErrorIs(t, err, workflow.ErrNotFound)
+	_, err = store.GetDefinition(ctx, "walter/renamed", "2")
+	assert.ErrorIs(t, err, workflow.ErrNotFound)
+}
+
 func TestTriggerBindings_ReplaceAndList(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()

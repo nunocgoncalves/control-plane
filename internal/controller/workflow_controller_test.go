@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,12 +467,59 @@ func TestWorkflowReconcile(t *testing.T) {
 			assert.Contains(t, g.Status.ValidationMessage, "immutable")
 	}, 15*time.Second, 200*time.Millisecond, "content change under same version should be rejected as immutable")
 
-	// Delete the CR -> materialized state soft-deleted.
+	// A separate CR cannot claim the same immutable definition version.
+	duplicate := validWalterWorkflow("walter-duplicate", ns, "walter-pool")
+	require.NoError(t, adminClient.Create(ctx, duplicate))
+	duplicateNN := types.NamespacedName{Name: duplicate.Name, Namespace: ns}
+	require.Eventually(t, func() bool {
+		var g v1alpha1.Workflow
+		if err := adminClient.Get(ctx, duplicateNN, &g); err != nil {
+			return false
+		}
+		return g.Status.ValidationStatus == v1alpha1.ValidationInvalid &&
+			strings.Contains(g.Status.ValidationMessage, "owned by another workflow")
+	}, 15*time.Second, 200*time.Millisecond, "definition version should retain its durable CR owner")
+	require.NoError(t, adminClient.Delete(ctx, duplicate))
+
+	// Move this CR to a new spec.key/version. The old definition remains valid
+	// while the CR exists, but both keys retain the same persisted owner identity.
+	require.Eventually(t, func() bool {
+		var g v1alpha1.Workflow
+		if err := adminClient.Get(ctx, nn, &g); err != nil {
+			return false
+		}
+		if g.Status.ObservedGeneration != g.Generation {
+			return false
+		}
+		g.Spec = validWalterWorkflow(g.Name, ns, "walter-pool").Spec
+		g.Spec.Key = "walter/renamed"
+		g.Spec.Version = "2"
+		return adminClient.Update(ctx, &g) == nil
+	}, 15*time.Second, 200*time.Millisecond, "should publish the renamed workflow key")
+	require.Eventually(t, func() bool {
+		var g v1alpha1.Workflow
+		if err := adminClient.Get(ctx, nn, &g); err != nil {
+			return false
+		}
+		return g.Status.Ready && g.Status.ValidationStatus == v1alpha1.ValidationValid &&
+			g.Status.ObservedGeneration == g.Generation
+	}, 15*time.Second, 200*time.Millisecond, "renamed workflow should become Ready")
+	_, err = wfStore.GetDefinition(ctx, "walter/renamed", "2")
+	require.NoError(t, err)
+
+	// Delete the CR -> every definition and authorization binding owned by its
+	// stable scope identity is revoked, including the previous spec.key.
 	require.NoError(t, adminClient.Delete(ctx, wf))
 	require.Eventually(t, func() bool {
 		var g v1alpha1.Workflow
 		return errors.IsNotFound(adminClient.Get(ctx, nn, &g))
 	}, 15*time.Second, 200*time.Millisecond, "Workflow should be deleted after finalizer cleanup")
 	_, err = wfStore.GetDefinition(ctx, "walter/quotation", "1")
-	assert.ErrorIs(t, err, workflow.ErrNotFound, "definition should be soft-deleted on CR deletion")
+	assert.ErrorIs(t, err, workflow.ErrNotFound, "original definition should be soft-deleted")
+	_, err = wfStore.GetDefinition(ctx, "walter/renamed", "2")
+	assert.ErrorIs(t, err, workflow.ErrNotFound, "renamed definition should be soft-deleted")
+	_, err = gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/quotation", "1"))
+	assert.ErrorIs(t, err, gateway.ErrNotFound, "original authorization binding should be revoked")
+	_, err = gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/renamed", "2"))
+	assert.ErrorIs(t, err, gateway.ErrNotFound, "renamed authorization binding should be revoked")
 }
