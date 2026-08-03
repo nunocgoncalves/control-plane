@@ -249,17 +249,17 @@ func TestStore_AppendAfterTerminalEventDedup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Late seq 2 (after-terminal audit): applied + watermark advances to 2.
-	applied, err := store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`))
+	applied, err := store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`), poolID, "worker-1")
 	require.NoError(t, err)
 	assert.True(t, applied)
 
 	// Replay seq 2 (ACK lost after commit): deduped, not re-appended.
-	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`))
+	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 2, runtime.EvAssistantMessage, json.RawMessage(`{"text":"b"}`), poolID, "worker-1")
 	require.NoError(t, err)
 	assert.False(t, applied)
 
 	// Late seq 3 applied; watermark is now 3.
-	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 3, runtime.EvAssistantMessage, json.RawMessage(`{"text":"c"}`))
+	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 3, runtime.EvAssistantMessage, json.RawMessage(`{"text":"c"}`), poolID, "worker-1")
 	require.NoError(t, err)
 	assert.True(t, applied)
 
@@ -276,10 +276,17 @@ func TestStore_AppendAfterTerminalEventDedup(t *testing.T) {
 	assert.Equal(t, 3, count, "one active + two after-terminal assistant_message events, no duplicate")
 
 	// Gap (seq jumps to 5 while highest is 3): rejected without advancing.
-	_, err = store.AppendAfterTerminalEvent(ctx, turnID, 5, runtime.EvAssistantMessage, json.RawMessage(`{}`))
+	_, err = store.AppendAfterTerminalEvent(ctx, turnID, 5, runtime.EvAssistantMessage, json.RawMessage(`{}`), poolID, "worker-1")
 	assert.ErrorIs(t, err, dispatch.ErrOutOfOrderSequence)
 
+	// A different worker does not own this assignment: it cannot append forged
+	// audit events or advance the watermark (HOR-381 certificate-authoritative
+	// replay; HOR-249 persisted worker identity). ErrNotFound, not applied.
+	applied, err = store.AppendAfterTerminalEvent(ctx, turnID, 4, runtime.EvAssistantMessage, json.RawMessage(`{"text":"forged"}`), poolID, "worker-2")
+	assert.ErrorIs(t, err, dispatch.ErrNotFound)
+	assert.False(t, applied)
+
 	// A turn with no assignment row at all -> ErrNotFound (nothing to audit).
-	_, err = store.AppendAfterTerminalEvent(ctx, "00000000-0000-0000-0000-000000000000", 1, runtime.EvAssistantMessage, json.RawMessage(`{}`))
+	_, err = store.AppendAfterTerminalEvent(ctx, "00000000-0000-0000-0000-000000000000", 1, runtime.EvAssistantMessage, json.RawMessage(`{}`), poolID, "worker-1")
 	assert.ErrorIs(t, err, dispatch.ErrNotFound)
 }

@@ -329,7 +329,16 @@ func (s *Store) AppendTurnEvent(ctx context.Context, turnID string, workerSeq ui
 // has no assignment row at all (gone/never assigned). The HOR-381 source-order
 // contract (strictly monotonic, one-based, gapless) is enforced: a gap is a
 // sender bug and is rejected without advancing the watermark (fail-closed).
-func (s *Store) AppendAfterTerminalEvent(ctx context.Context, turnID string, workerSeq uint64, kind string, payload json.RawMessage) (applied bool, err error) {
+//
+// The assignment is bound to the authenticated stream's (poolID, workerID):
+// HOR-381 makes the certificate authoritative and defines replay as the
+// disconnected worker's OWN unacknowledged tail, and HOR-381/HOR-249 require
+// persisted worker/assignment identity and attributable late observations. A
+// worker that merely learns another terminal turn ID cannot append forged
+// audit events or advance that assignment's watermark. The fencing generation
+// may legitimately differ after a reconnect, so it is NOT compared (only
+// pool/worker identity).
+func (s *Store) AppendAfterTerminalEvent(ctx context.Context, turnID string, workerSeq uint64, kind string, payload json.RawMessage, poolID, workerID string) (applied bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin: %w", err)
@@ -341,12 +350,15 @@ func (s *Store) AppendAfterTerminalEvent(ctx context.Context, turnID string, wor
 	// Lock the assignment row in ANY state (active rows reach here only via a
 	// concurrent terminalization race; fenced/terminal rows are the common case).
 	// Unlike AppendTurnEvent, no state='active' filter: the turn is terminal.
+	// Bind to the authenticated (pool_id, worker_id) so a different worker
+	// cannot forge audit events against a turn it does not own.
 	if err := tx.QueryRow(ctx, `
 		SELECT run_id::text, highest_applied_sequence
-		FROM runtime.turn_assignments WHERE turn_id = $1::uuid
-		FOR UPDATE`, turnID).Scan(&runID, &highest); err != nil {
+		FROM runtime.turn_assignments
+		WHERE turn_id = $1::uuid AND pool_id = $2 AND worker_id = $3
+		FOR UPDATE`, turnID, poolID, workerID).Scan(&runID, &highest); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, ErrNotFound // turn gone; nothing to audit against.
+			return false, ErrNotFound // turn gone or not owned by this worker.
 		}
 		return false, fmt.Errorf("lock assignment: %w", err)
 	}

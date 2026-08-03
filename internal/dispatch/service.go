@@ -275,65 +275,66 @@ func (s *Service) welcome(gen int64) *v1.ControlMessage {
 
 // fenceOldGeneration closes any prior live connection for this (pool, worker)
 // and fences its active assignment as worker loss. The fence+terminalize runs
-// BEFORE markClosed and synchronously, so it wins the CAS ahead of the old
-// handler's deferred handleWorkerLoss (which is then a no-op: the assignment
-// is already fenced). This avoids a race where the old handler's async loss
-// cleanup terminalizes after this handler has already advertised the new
-// generation's readiness.
+// BEFORE markClosed and synchronously, so it wins ahead of the old handler's
+// deferred handleWorkerLoss (which is then a no-op: its generation-qualified
+// CAS finds no active assignment). This avoids a race where the old handler's
+// async loss cleanup terminalizes after this handler has already advertised
+// the new generation's readiness.
 //
-// Two cases:
-//
-//   - old != nil (in-memory prior conn): a generation-qualified CAS fences only
-//     old.gen's assignment, never a replacement's.
-//   - old == nil (control-plane restart): workerPool was emptied by the
-//     restart while runtime.turn_assignments can still hold this worker's
-//     active assignment. Treat the durable prior assignment as a prior
-//     generation (the new gen has not been advertised yet) and fence it by
-//     (pool, worker) without a generation CAS. Otherwise the durable prior
-//     turn stays active + gateway-authorizable and the restarted in-memory
-//     generation counter can collide with it (HOR-249 reconnect fencing;
-//     HOR-381: a newly accepted connection fences any old active assignment).
+// The fence is UNCONDITIONAL — it fences ANY active assignment for (pool,
+// worker) — because at connect time the new assignment does not exist yet, so
+// any active assignment is necessarily a prior generation's. This closes the
+// post-restart race where the in-memory `old.gen` (reset to 0 by the restart)
+// does not match a durable prior assignment's generation: a generation-
+// qualified CAS would miss it, leaving the durable turn active while a
+// simultaneous reconnect advertises its new generation (HOR-249 reconnect
+// fencing; HOR-381: a newly accepted connection fences any old active
+// assignment). The unconditional UPDATE...RETURNING is atomic in Postgres, so
+// simultaneous reconnects serialize: one fences (wins), the other gets
+// ErrNotFound (clean).
 //
 // A detached, bounded context is used so prior-generation loss cleanup
 // completes even if the new connection's request ctx is canceled, mirroring
 // the stream-loss cleanup path. ErrNotFound (no active assignment) is a clean
-// connect; any other store error is returned so the caller does NOT advertise
-// the new generation until durable fence + loss terminalization succeeds.
+// connect. Any other store error — OR a terminalization failure — is returned
+// so the caller does NOT advertise the new generation until durable fence +
+// loss terminalization succeeds (HOR-249).
 func (s *Service) fenceOldGeneration(ctx context.Context, old *workerConn, poolID, workerID string) error {
 	_ = ctx
 	lossCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if old != nil {
-		a, err := s.store.FenceWorkerGenerationIf(lossCtx, poolID, workerID, old.gen)
-		if err == nil {
-			s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", old.gen)
-			s.terminalizeTurnLoss(lossCtx, a)
-		} else if !errors.Is(err, ErrNotFound) {
-			return fmt.Errorf("fence prior gen (cas): %w", err)
-		}
-		// Mark the old conn closed so its receive loop exits and its handler
-		// tears down promptly (it does not wait for the old TCP stream). Its
-		// deferred handleWorkerLoss is a no-op: the assignment was already
-		// fenced above, and it uses a generation-qualified CAS (old.gen) that
-		// cannot fence a replacement generation's assignment.
-		old.markClosed()
-		return nil
-	}
-
-	// CP restart: no in-memory prior conn. Fence any durable active assignment
-	// for (pool, worker) regardless of its recorded generation — it is by
-	// definition a prior generation, the new one not yet advertised.
+	// Fence ANY active assignment for (pool, worker) before advertising the new
+	// generation. See the doc comment for why this is unconditional (not a
+	// generation-qualified CAS): a CAS keyed on the in-memory old.gen misses a
+	// durable prior-generation assignment after a CP restart.
 	a, err := s.store.FenceWorkerGeneration(lossCtx, poolID, workerID)
 	if err == nil {
-		s.log.Info("fenced durable prior generation after cp restart", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", a.FencingGeneration)
-		s.terminalizeTurnLoss(lossCtx, a)
+		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", a.FencingGeneration)
+		if tErr := s.terminalizeTurnLoss(lossCtx, a); tErr != nil {
+			// The assignment is fenced (no longer active/gateway-authorizable), but
+			// the turn SM was not settled. Do NOT advertise the new generation: the
+			// worker retries and loss terminalization is re-attempted (HOR-249).
+			if old != nil {
+				old.markClosed()
+			}
+			return fmt.Errorf("terminalize fenced prior generation: %w", tErr)
+		}
+		if old != nil {
+			old.markClosed()
+		}
 		return nil
 	}
 	if errors.Is(err, ErrNotFound) {
-		return nil // clean connect; no durable prior assignment.
+		if old != nil {
+			old.markClosed()
+		}
+		return nil // clean connect; no active prior assignment.
 	}
-	return fmt.Errorf("fence durable prior gen: %w", err)
+	if old != nil {
+		old.markClosed()
+	}
+	return fmt.Errorf("fence prior generation: %w", err)
 }
 
 // ackReconnectWatermark sends a cumulative EventAck for the worker's prior
@@ -403,7 +404,7 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 		// has already terminalized; ACK through this event's sequence so it
 		// clears its outbox and may advertise Ready (HOR-381 cumulative ACK).
 		// The replayed events are after-terminal audit, not redelivered work.
-		if err := s.appendAfterTerminal(ctx, turnID, te); err != nil {
+		if err := s.appendAfterTerminal(ctx, turnID, te, w.poolID, w.workerID); err != nil {
 			return fmt.Errorf("after-terminal audit: %w", err)
 		}
 		return s.ack(ctx, w, turnID, seq)
@@ -431,7 +432,7 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 			// observations are never dropped) and ACK so the worker clears its
 			// outbox. The after-terminal append is itself a durable, dedup-by-
 			// (turn, sequence) commit; ACK only after it succeeds.
-			if err := s.appendAfterTerminal(ctx, turnID, te); err != nil {
+			if err := s.appendAfterTerminal(ctx, turnID, te, w.poolID, w.workerID); err != nil {
 				return fmt.Errorf("after-terminal audit: %w", err)
 			}
 			return s.ack(ctx, w, turnID, seq)
@@ -473,12 +474,12 @@ func (s *Service) ack(ctx context.Context, w *workerConn, turnID string, through
 // at all (gone/never assigned) is a no-op: there is nothing to audit against,
 // and the caller ACKs through the sequence so the worker clears its outbox.
 // Any other store error is returned so the caller does NOT ACK.
-func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1.TurnEvent) error {
+func (s *Service) appendAfterTerminal(ctx context.Context, turnID string, te *v1.TurnEvent, poolID, workerID string) error {
 	kind, payload, _ := turnEventToRuntime(te)
 	if kind == "" {
 		return nil // unknown/ignored kind: nothing durable to record.
 	}
-	if _, err := s.store.AppendAfterTerminalEvent(ctx, turnID, te.GetSequence(), kind, payload); err != nil {
+	if _, err := s.store.AppendAfterTerminalEvent(ctx, turnID, te.GetSequence(), kind, payload, poolID, workerID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil // turn gone; nothing to audit against.
 		}
@@ -506,7 +507,10 @@ func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *
 	default:
 		reason = "failed"
 	}
-	runState := s.commitTurnTerminal(ctx, a, reason)
+	runState, tErr := s.commitTurnTerminal(ctx, a, reason)
+	if tErr != nil {
+		s.log.Warn("terminalize turn outcome", "turn", a.TurnID, "error", tErr)
+	}
 	if w := s.pool.get(a.PoolID, a.WorkerID); w != nil {
 		w.releaseTurn()
 		if runtime.IsTerminalRun(runState) {
@@ -521,29 +525,35 @@ func (s *Service) terminalizeTurnOutcome(ctx context.Context, a Assignment, wo *
 // outcome is after-terminal audit. The worker is gone, so SessionEnd is not
 // sent (v1 leak-and-reconcile); the session UID stays in-use (non-recyclable)
 // until a later reaper reaps the leaked sandbox.
-func (s *Service) terminalizeTurnLoss(ctx context.Context, a Assignment) {
-	s.commitTurnTerminal(ctx, a, "aborted")
+func (s *Service) terminalizeTurnLoss(ctx context.Context, a Assignment) error {
+	_, err := s.commitTurnTerminal(ctx, a, "aborted")
+	return err
 }
 
 // commitTurnTerminal settles the turn + advances the step/run ATOMICALLY
 // (runtime.SettleTurnAndAdvance, one tx) and terminalizes the assignment
 // (idempotent, separate tx — the benign gap between run-terminal and
 // assignment-terminal cannot produce a duplicate turn because the run is no
-// longer dispatchable once terminal). A turn CAS miss means the turn was
-// already terminalized (first-terminal-writer held by another path). Returns
-// the run's resulting state so the caller can sequence session-end.
-func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason string) (runState string) {
-	rs, err := s.store.Runtime().SettleTurnAndAdvance(ctx, a.TurnID, reason)
-	if err != nil && !errors.Is(err, runtime.ErrInvalidTransition) {
-		s.log.Warn("settle+advance turn", "turn", a.TurnID, "reason", reason, "error", err)
+// longer dispatchable once terminal). A turn CAS miss (ErrInvalidTransition)
+// means the turn was already terminalized (first-terminal-writer held by
+// another path) and is not an error. Returns the run's resulting state so the
+// caller can sequence session-end, and an error if durable loss terminalization
+// did not succeed — the reconnect path MUST NOT advertise the new generation
+// until it does (HOR-249).
+func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason string) (runState string, err error) {
+	rs, stErr := s.store.Runtime().SettleTurnAndAdvance(ctx, a.TurnID, reason)
+	if stErr != nil && !errors.Is(stErr, runtime.ErrInvalidTransition) {
+		// A real settle/advance failure leaves the turn SM non-terminal; surface
+		// it so loss terminalization is not silently swallowed.
+		return "", fmt.Errorf("settle+advance turn %s (%s): %w", a.TurnID, reason, stErr)
 	}
-	if err == nil {
+	if stErr == nil {
 		runState = rs
 	}
-	if err := s.store.TerminalizeAssignment(ctx, a.TurnID); err != nil {
-		s.log.Warn("terminalize assignment", "turn", a.TurnID, "error", err)
+	if tErr := s.store.TerminalizeAssignment(ctx, a.TurnID); tErr != nil {
+		return runState, fmt.Errorf("terminalize assignment %s: %w", a.TurnID, tErr)
 	}
-	return runState
+	return runState, nil
 }
 
 // sendSessionEnd sends SessionEnd {sandbox_id, uid, gid} to the worker serving
@@ -597,7 +607,9 @@ func (s *Service) handleWorkerLoss(ctx context.Context, w *workerConn) {
 	}
 	if a, err := s.store.FenceWorkerGenerationIf(ctx, w.poolID, w.workerID, w.gen); err == nil {
 		s.log.Info("worker loss: terminalize turn", "pool", w.poolID, "worker", w.workerID, "turn", a.TurnID, "gen", w.gen)
-		s.terminalizeTurnLoss(ctx, a)
+		if tErr := s.terminalizeTurnLoss(ctx, a); tErr != nil {
+			s.log.Warn("worker loss: terminalize turn", "turn", a.TurnID, "error", tErr)
+		}
 	}
 }
 
@@ -620,7 +632,9 @@ func (s *Service) CancelTurn(ctx context.Context, turnID string, reason v1.Abort
 	// CP first-terminal-writer: fence (generation-qualified CAS) + terminalize
 	// as aborted. A late worker outcome is after-terminal audit.
 	if _, ferr := s.store.FenceWorkerGenerationIf(ctx, a.PoolID, a.WorkerID, a.FencingGeneration); ferr == nil {
-		s.terminalizeTurnLoss(ctx, a)
+		if tErr := s.terminalizeTurnLoss(ctx, a); tErr != nil {
+			s.log.Warn("cancel: terminalize turn", "turn", a.TurnID, "error", tErr)
+		}
 	}
 	return nil
 }
@@ -690,7 +704,9 @@ func (s *Service) expireLeases(ctx context.Context) {
 			// Lease expiry is worker loss; terminalize as aborted. The
 			// ABORT_REASON_LEASE_EXPIRED classification is recorded in the log;
 			// the runtime turn SM has no lease_expired state.
-			s.terminalizeTurnLoss(ctx, a)
+			if tErr := s.terminalizeTurnLoss(ctx, a); tErr != nil {
+				s.log.Warn("lease expired: terminalize turn", "turn", a.TurnID, "error", tErr)
+			}
 			w.markClosed()
 		}
 	}
@@ -878,7 +894,9 @@ func (s *Service) assign(ctx context.Context, turn runtime.Turn, run runtime.Run
 		// loss using the assignment returned by the fence (the row is no longer
 		// active after fencing, so ResolveActiveAssignment would miss it).
 		if a, ferr := s.store.FenceWorkerGenerationIf(ctx, poolID, w.workerID, w.gen); ferr == nil {
-			s.terminalizeTurnLoss(ctx, a)
+			if tErr := s.terminalizeTurnLoss(ctx, a); tErr != nil {
+				s.log.Warn("assign send failed: terminalize turn", "turn", a.TurnID, "error", tErr)
+			}
 		}
 		return err
 	}

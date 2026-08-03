@@ -365,6 +365,50 @@ func TestDispatch_FencesDurablePriorGenOnRestart(t *testing.T) {
 	assert.Equal(t, runtime.RunAborted, run.State, "prior turn terminalized as worker loss")
 }
 
+// TestDispatch_FencesDurablePriorGenOnReconnectOldPath: the post-restart race
+// where a durable active assignment (generation 5) coexists with an in-memory
+// prior conn whose generation (1) was reset by the restart and does NOT match
+// the durable assignment. A reconnect hitting the `old != nil` path must still
+// fence the durable prior assignment — a generation-qualified CAS keyed on the
+// in-memory old.gen would miss it and leave the durable turn active while the
+// new generation is advertised (HOR-249 reconnect fencing). The durable
+// assignment is injected AFTER w1 connects (so w1's connect-time fence found
+// nothing), simulating the window where a simultaneous reconnect's fence has
+// not yet completed.
+func TestDispatch_FencesDurablePriorGenOnReconnectOldPath(t *testing.T) {
+	env := newDispatchEnv(t)
+	ctx := context.Background()
+
+	// w1 connects cleanly (no durable prior assignment yet).
+	w1 := env.connectWorker(t)
+	defer w1.close()
+
+	// Inject a durable active assignment (generation 5) for worker-1, as a
+	// prior CP would have left behind — a generation the in-memory w1 (gen 1)
+	// does not own.
+	runID, _, turnID := seedRunTurn(t, env.rt, env.pgpool, dispatchSID())
+	identID := insertIdentity(t, env.pgpool, "ident-oldpath")
+	_, err := env.store.CreateAssignment(ctx, dispatch.AssignmentInput{
+		TurnID: turnID, RunID: runID, PoolID: env.poolID, WorkerID: "worker-1",
+		FencingGeneration: 5, AttemptID: runID, ScopeIdentityID: identID, AgentPoolKey: "ns/pool-1",
+		ModelPermission: json.RawMessage(`{"id":"gpt-4o"}`),
+	})
+	require.NoError(t, err)
+
+	// w2 reconnects (old == w1, gen 2). The `old != nil` path must fence the
+	// durable generation-5 assignment even though old.gen == 1.
+	w2 := env.connectWorker(t)
+	defer w2.close()
+
+	require.Eventually(t, func() bool {
+		_, err := env.store.ResolveActiveAssignment(ctx, turnID)
+		return errors.Is(err, dispatch.ErrAssignmentNotActive)
+	}, 2*time.Second, 20*time.Millisecond, "durable prior assignment not fenced via old!=nil path")
+	run, err := env.rt.GetRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, runtime.RunAborted, run.State, "prior turn terminalized as worker loss")
+}
+
 // TestDispatch_Cancel: CancelTurn propagates AbortTurn and terminalizes the
 // turn as aborted (CP first-terminal-writer).
 func TestDispatch_Cancel(t *testing.T) {
