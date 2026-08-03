@@ -16,6 +16,10 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/spiffe"
 )
 
+// errConnClosed is returned by workerConn.send after the conn has been marked
+// closed (fenced/lost). Callers treat it as a failed send (stream-lost).
+var errConnClosed = errors.New("dispatch: worker conn closed")
+
 // Config configures the dispatch Work server + reconciler.
 type Config struct {
 	TrustDomain       string        // SPIFFE trust domain (default iterabase.local)
@@ -158,10 +162,6 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 
 	gen := int64(s.gen.Add(1)) //nolint:gosec // G115: generation counter
 
-	// Fence the prior generation for this (pool, worker): a reconnect closes
-	// the old stream and fences its active assignment as worker loss.
-	s.fenceOldGeneration(ctx, pool.ID, id.WorkerID)
-
 	w := &workerConn{
 		poolID:   pool.ID,
 		workerID: id.WorkerID,
@@ -171,10 +171,20 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 		done:     make(chan struct{}),
 		recvCh:   make(chan recvResult, 1),
 	}
-	s.pool.add(w)
+	// Atomic replacement: add registers the new conn and returns the prior conn
+	// for the same (pool, worker) in one locked step, so there is no window in
+	// which two conns are both selectable. The prior conn is fenced below using
+	// a generation-qualified CAS (HOR-249).
+	old := s.pool.add(w)
 	w.startReader()
 	defer func() {
 		w.markClosed()
+		// Drain in-flight sends so no stream.Send is in progress when this
+		// handler returns and Connect closes the HTTP/2 response writer. send()
+		// refuses to enter stream.Send once closed is set (markClosed just set
+		// it); waiting on sendWG lets any in-flight send finish. Same class as
+		// the gateway runner-pool teardown race.
+		w.sendWG.Wait()
 		s.pool.remove(w)
 		// Stream-loss cleanup must run with a detached, bounded context: the
 		// request ctx is canceled by the time this defer runs, so fencing /
@@ -190,6 +200,14 @@ func (s *Service) Work(ctx context.Context, st *connect.BidiStream[v1.WorkerMess
 	}
 	s.log.Info("worker connected", "pool", pool.ID, "worker", id.WorkerID, "gen", gen,
 		"build", h.BuildVersion, "protocol", h.ProtocolVersion)
+
+	// Fence the prior generation (if any) for this (pool, worker) using a
+	// generation-qualified CAS: only the prior gen's assignment is fenced,
+	// never a replacement generation's. The prior handler's deferred
+	// handleWorkerLoss is also generation-qualified (old.gen) and is a no-op
+	// once this fence succeeds. markClosed unblocks the old receive loop so its
+	// handler tears down promptly (it does not wait for the old TCP stream).
+	s.fenceOldGeneration(ctx, old, pool.ID, id.WorkerID)
 
 	// Ack any in-flight assignment the worker may be replaying after a
 	// reconnect (cumulative ACK through the current watermark so the worker
@@ -245,23 +263,19 @@ func (s *Service) welcome(gen int64) *v1.ControlMessage {
 }
 
 // fenceOldGeneration closes any prior live connection for this (pool, worker)
-// and fences its active assignment as worker loss. markClosed closes the old
-// conn's done channel so its receive loop exits promptly (it does not wait for
-// the old stream TCP to tear down); the old handler's deferred handleWorkerLoss
-// is a no-op because (a) the assignment is already fenced here and (b)
-// handleWorkerLoss uses a generation-qualified CAS that cannot fence the
-// replacement generation's assignment.
-func (s *Service) fenceOldGeneration(ctx context.Context, poolID, workerID string) {
-	if old := s.pool.get(poolID, workerID); old != nil {
-		old.markClosed()
+// and fences its active assignment as worker loss using a generation-qualified
+// CAS. markClosed closes the old conn's done channel so its receive loop exits
+// promptly (it does not wait for the old stream TCP to tear down); the old
+// handler's deferred handleWorkerLoss is a no-op because (a) the assignment is
+// already fenced here and (b) handleWorkerLoss uses a generation-qualified CAS
+// (old.gen) that cannot fence the replacement generation's assignment.
+func (s *Service) fenceOldGeneration(ctx context.Context, old *workerConn, poolID, workerID string) {
+	if old == nil {
+		return // clean connect; no prior generation to fence.
 	}
-	// Fence the active assignment (if any) bound to this worker. At this point
-	// the new connection has not created an assignment yet, so the only active
-	// assignment is the prior generation's. The turn is terminalized as worker
-	// loss (aborted); a late WorkerOutcome from the old generation is
-	// after-terminal audit only.
-	if a, err := s.store.FenceWorkerGeneration(ctx, poolID, workerID); err == nil {
-		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID)
+	old.markClosed()
+	if a, err := s.store.FenceWorkerGenerationIf(ctx, poolID, workerID, old.gen); err == nil {
+		s.log.Info("fenced prior generation on reconnect", "pool", poolID, "worker", workerID, "turn", a.TurnID, "gen", old.gen)
 		s.terminalizeTurnLoss(ctx, a)
 	}
 }
@@ -316,16 +330,15 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 	a, err := s.store.ResolveActiveAssignment(ctx, turnID)
 	if err != nil {
 		// No active assignment: the turn was already terminalized (CP
-		// first-terminal-writer) or never assigned. A late outcome is
-		// after-terminal audit — append it as an event without mutating state.
-		if wo := te.GetWorkerOutcome(); wo != nil {
-			_ = s.appendAfterTerminal(ctx, turnID, te)
-		}
-		// The worker may be replaying its retained outbox after reconnect for a
-		// turn the CP has already terminalized. ACK through this event's
-		// sequence so the worker clears its outbox and may advertise Ready
-		// (HOR-381 cumulative ACK); the replayed events are after-terminal audit,
-		// not redelivered work.
+		// first-terminal-writer) or never assigned. HOR-381 makes every durable
+		// observation (ModelCallStarted, ToolCallStarted, Compaction*, WorkerOutcome,
+		// ...) audit-history that the CP must never silently drop, so persist the
+		// late/replayed event as after-terminal audit before ACKing. The worker
+		// may be replaying its retained outbox after reconnect for a turn the CP
+		// has already terminalized; ACK through this event's sequence so it
+		// clears its outbox and may advertise Ready (HOR-381 cumulative ACK).
+		// The replayed events are after-terminal audit, not redelivered work.
+		_ = s.appendAfterTerminal(ctx, turnID, te)
 		return s.ack(ctx, w, turnID, seq)
 	}
 	if a.WorkerID != w.workerID || a.FencingGeneration != w.gen {
@@ -346,11 +359,12 @@ func (s *Service) handleTurnEvent(ctx context.Context, te *v1.TurnEvent, w *work
 	applied, err := s.store.AppendTurnEvent(ctx, turnID, seq, kind, payload)
 	if err != nil {
 		if errors.Is(err, ErrAssignmentNotActive) {
-			// Terminalized concurrently; late outcome = after-terminal audit.
-			if isOutcome {
-				return s.appendAfterTerminal(ctx, turnID, te)
-			}
-			return nil
+			// Terminalized concurrently between Resolve and Append: the event was
+			// not committed. Persist it as after-terminal audit (HOR-381 durable
+			// observations are never dropped) and ACK so the worker clears its
+			// outbox.
+			_ = s.appendAfterTerminal(ctx, turnID, te)
+			return s.ack(ctx, w, turnID, seq)
 		}
 		return err
 	}
@@ -458,10 +472,15 @@ func (s *Service) commitTurnTerminal(ctx context.Context, a Assignment, reason s
 
 // sendSessionEnd sends SessionEnd {sandbox_id, uid, gid} to the worker serving
 // a just-terminated run so the supervisor reaps the session sandbox (HOR-245
-// cleanup owner/protocol). Best-effort: a send failure leaves the sandbox for
-// leak-and-reconcile. The session UID is released into its non-recycling grace
-// (reuse is ownership-fenced fail-closed, and the sandbox_id is per-session so a
-// recycled UID cannot adopt a prior session's directory).
+// cleanup owner/protocol). The session UID is released into its non-recycling
+// reap grace ONLY when the SessionEnd was actually sent: a send failure means
+// the worker never received the reap instruction, so releasing would start the
+// grace clock against a reap that will not happen — the UID stays in_use and
+// the sandbox is left for leak-and-reconcile (v1 leak-and-reconcile posture).
+// v1 carries no reap-ack on the wire (founder-approved non-goal); the bounded
+// grace exceeding max reap latency is the non-recycling safety floor, and
+// reuse is ownership-fenced fail-closed (a stale root owned by a prior session
+// is refused, never re-adopted).
 func (s *Service) sendSessionEnd(ctx context.Context, w *workerConn, a Assignment) {
 	sessionID, err := s.store.SessionIDForRun(ctx, a.RunID)
 	if err != nil {
@@ -476,7 +495,11 @@ func (s *Service) sendSessionEnd(ctx context.Context, w *workerConn, a Assignmen
 	if err := w.send(&v1.ControlMessage{Kind: &v1.ControlMessage_SessionEnd{SessionEnd: &v1.SessionEnd{
 		SandboxId: sessionID, Uid: uid, Gid: uid,
 	}}}); err != nil {
-		s.log.Warn("session-end send", "session", sessionID, "error", err)
+		// Send failed: the worker will not reap. Keep the UID in_use
+		// (non-recyclable) so it cannot be handed to a new session while this
+		// sandbox lingers; a later reaper reconciles.
+		s.log.Warn("session-end send; uid kept in_use for leak-and-reconcile", "session", sessionID, "error", err)
+		return
 	}
 	if err := s.store.ReleaseSessionUID(ctx, sessionID); err != nil {
 		s.log.Warn("release session uid", "session", sessionID, "error", err)

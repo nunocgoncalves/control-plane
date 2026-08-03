@@ -771,61 +771,71 @@ func (s *Store) SettleTurnAndAdvance(ctx context.Context, turnID, reason string)
 		}
 	}
 
-	// 3) Run transition.
-	runState := RunRunning
-	switch reason {
-	case "aborted":
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state = $2, finished_at = now()
-			WHERE id = $1 AND state = ANY($3)`, *runID, RunAborted, []string{RunRunning, RunAwaitingApproval}); err != nil {
-			return "", fmt.Errorf("abort run: %w", err)
-		}
-		if _, err := appendEventTx(ctx, tx, *runID, "", "", EvRunAborted, nil); err != nil {
-			return "", fmt.Errorf("append %s: %w", EvRunAborted, err)
-		}
-		runState = RunAborted
-	case "failed":
-		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state = $2, finished_at = now()
-			WHERE id = $1 AND state = ANY($3)`, *runID, RunFailed, []string{RunRunning, RunAwaitingApproval}); err != nil {
-			return "", fmt.Errorf("fail run: %w", err)
-		}
-		if _, err := appendEventTx(ctx, tx, *runID, "", "", EvRunFailed, nil); err != nil {
-			return "", fmt.Errorf("append %s: %w", EvRunFailed, err)
-		}
-		runState = RunFailed
-	case "completed":
-		// Start the next pending step, or succeed the run if none remain.
-		var nextStepID string
-		err := tx.QueryRow(ctx, `
-			SELECT id::text FROM runtime.run_steps
-			WHERE run_id = $1 AND state = $2
-			ORDER BY seq LIMIT 1`, *runID, StepPending).Scan(&nextStepID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state = $2, finished_at = now()
-				WHERE id = $1 AND state = $3`, *runID, RunSucceeded, RunRunning); err != nil {
-				return "", fmt.Errorf("succeed run: %w", err)
-			}
-			if _, err := appendEventTx(ctx, tx, *runID, "", "", EvRunSucceeded, nil); err != nil {
-				return "", fmt.Errorf("append %s: %w", EvRunSucceeded, err)
-			}
-			runState = RunSucceeded
-		} else if err != nil {
-			return "", fmt.Errorf("next pending step: %w", err)
-		} else {
-			if _, err := tx.Exec(ctx, `UPDATE runtime.run_steps SET state = $2, started_at = COALESCE(started_at, now())
-				WHERE id = $1::uuid AND state = $3`, nextStepID, StepRunning, StepPending); err != nil {
-				return "", fmt.Errorf("start next step: %w", err)
-			}
-			if _, err := appendEventTx(ctx, tx, *runID, "", nextStepID, EvStepStarted, nil); err != nil {
-				return "", fmt.Errorf("append %s: %w", EvStepStarted, err)
-			}
-			runState = RunRunning
-		}
+	// 3) Run transition (advance/succeed/fail/abort atomically in this tx).
+	runState, err := advanceRunAfterSettleTx(ctx, tx, *runID, reason)
+	if err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit: %w", err)
 	}
 	return runState, nil
+}
+
+// advanceRunAfterSettleTx performs the run-level transition that follows a
+// settled turn, inside the caller's tx so it is atomic with the turn/step
+// transitions (no intermediate state observable by the reconciler). Returns
+// the run's resulting state (running | succeeded | failed | aborted).
+//
+//nolint:gocyclo // three terminal reasons + the next-step branch is naturally branchy.
+func advanceRunAfterSettleTx(ctx context.Context, tx pgx.Tx, runID, reason string) (string, error) {
+	terminal := func(to, ev string) (string, error) {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state = $2, finished_at = now()
+			WHERE id = $1 AND state = ANY($3)`, runID, to, []string{RunRunning, RunAwaitingApproval}); err != nil {
+			return "", fmt.Errorf("%s run: %w", reason, err)
+		}
+		if _, err := appendEventTx(ctx, tx, runID, "", "", ev, nil); err != nil {
+			return "", fmt.Errorf("append %s: %w", ev, err)
+		}
+		return to, nil
+	}
+	switch reason {
+	case "aborted":
+		return terminal(RunAborted, EvRunAborted)
+	case "failed":
+		return terminal(RunFailed, EvRunFailed)
+	case "completed":
+		// Start the next pending step, or succeed the run if none remain.
+		var nextStepID string
+		err := tx.QueryRow(ctx, `
+			SELECT id::text FROM runtime.run_steps
+			WHERE run_id = $1 AND state = $2
+			ORDER BY seq LIMIT 1`, runID, StepPending).Scan(&nextStepID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			if _, err := tx.Exec(ctx, `UPDATE runtime.workflow_runs SET state = $2, finished_at = now()
+				WHERE id = $1 AND state = $3`, runID, RunSucceeded, RunRunning); err != nil {
+				return "", fmt.Errorf("succeed run: %w", err)
+			}
+			if _, err := appendEventTx(ctx, tx, runID, "", "", EvRunSucceeded, nil); err != nil {
+				return "", fmt.Errorf("append %s: %w", EvRunSucceeded, err)
+			}
+			return RunSucceeded, nil
+		case err != nil:
+			return "", fmt.Errorf("next pending step: %w", err)
+		default:
+			if _, err := tx.Exec(ctx, `UPDATE runtime.run_steps SET state = $2, started_at = COALESCE(started_at, now())
+				WHERE id = $1::uuid AND state = $3`, nextStepID, StepRunning, StepPending); err != nil {
+				return "", fmt.Errorf("start next step: %w", err)
+			}
+			if _, err := appendEventTx(ctx, tx, runID, "", nextStepID, EvStepStarted, nil); err != nil {
+				return "", fmt.Errorf("append %s: %w", EvStepStarted, err)
+			}
+			return RunRunning, nil
+		}
+	}
+	return RunRunning, nil
 }
 
 func (s *Store) turnTransitionErr(ctx context.Context, tx pgx.Tx, id string) error {

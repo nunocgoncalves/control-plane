@@ -41,12 +41,40 @@ type runnerConn struct {
 	// dispatches to the same runner would race/corrupt the stream (same class
 	// as the dispatch Work stream, F2).
 	sendMu sync.Mutex
+	// sendWG tracks in-flight stream.Send calls so RegisterRunner's teardown
+	// can wait for them to finish before returning (and letting Connect close
+	// the HTTP/2 response writer). Without it, a disconnect during a dispatch
+	// send races grpcHandlerConn.Close against stream.Send.
+	sendWG sync.WaitGroup
 }
 
-// send serializes a RunnerControl send on the runner stream.
+// send serializes a RunnerControl send on the runner stream and refuses to
+// write a torn-down conn. Send-to-send serialization alone does not synchronize
+// with RegisterRunner returning and Connect closing the underlying HTTP/2
+// response writer: a disconnect during a dispatch send races grpcHandlerConn
+// .Close against stream.Send. The closed flag (under rc.mu) is checked before
+// registering with sendWG and re-checked after acquiring sendMu; teardown sets
+// closed then waits on sendWG, so no stream.Send is in flight when Connect
+// closes the writer.
 func (rc *runnerConn) send(msg *v1.RunnerControl) error {
+	rc.mu.Lock()
+	if rc.closed {
+		rc.mu.Unlock()
+		return errRunnerConnClosed
+	}
+	rc.sendWG.Add(1)
+	rc.mu.Unlock()
+	defer rc.sendWG.Done()
 	rc.sendMu.Lock()
 	defer rc.sendMu.Unlock()
+	// Re-check closed: teardown may have marked the conn closed and be waiting
+	// on sendWG. Do not touch the stream once closed.
+	rc.mu.Lock()
+	closed := rc.closed
+	rc.mu.Unlock()
+	if closed {
+		return errRunnerConnClosed
+	}
 	return rc.stream.Send(msg)
 }
 
@@ -166,6 +194,10 @@ func (p *runnerPool) pick(tool, digest string) *runnerConn {
 // NEW invocation this is an attributable failure; for a pinned active attempt
 // the gateway fails rather than substitute (ARCH-007).
 var ErrNoRunner = errors.New("gateway: no live runner for the requested tool version")
+
+// errRunnerConnClosed is returned by send after the conn's handler has torn
+// down (or is tearing down). Callers treat it as stream-lost.
+var errRunnerConnClosed = errors.New("gateway: runner conn closed")
 
 // hasRunner reports whether any live runner serves (tool, digest).
 func (p *runnerPool) hasRunner(tool, digest string) bool { return p.pick(tool, digest) != nil }

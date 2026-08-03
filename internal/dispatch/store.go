@@ -364,19 +364,28 @@ func (s *Store) AllocateSessionUID(ctx context.Context, sessionID string, base, 
 	if n == 0 {
 		return 0, ErrUIDExhausted
 	}
-	// Idempotent fast path: this session already holds an in-use UID.
+	// Idempotent fast path: this session already holds a UID. Reclaim it
+	// regardless of state (an in_use UID is reused; a freed UID being
+	// re-allocated for the same session is the same (uid, session) triple and
+	// is ownership-safe). This also guarantees the candidate-claim path below
+	// never hits a session_id unique conflict for a session that already has a
+	// row, so its only conflict target is the recyclable uid PK.
 	var uid uint32
 	err := s.pool.QueryRow(ctx, `
-		SELECT uid FROM runtime.session_uid_allocations
-		WHERE session_id = $1 AND state = 'in_use'`, sessionID).Scan(&uid)
+		UPDATE runtime.session_uid_allocations
+		   SET state = 'in_use', freed_at = NULL
+		 WHERE session_id = $1
+		RETURNING uid`, sessionID).Scan(&uid)
 	if err == nil {
 		return uid, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("read session uid: %w", err)
 	}
-	// Claim the lowest free UID. Retry on a uid PK conflict (two sessions racing
-	// the same candidate); the retry re-selects now that it is in use.
+	// No row for this session: claim the lowest free UID. Retry on a uid PK
+	// conflict (two sessions racing the same recyclable candidate) or a
+	// session_id conflict (concurrent allocation for the same session); the
+	// retry re-selects now that the winner is recorded.
 	for attempt := 0; attempt < 8; attempt++ {
 		claimed, err := s.tryAllocSessionUID(ctx, sessionID, base, n, grace)
 		if err == nil {
@@ -385,17 +394,24 @@ func (s *Store) AllocateSessionUID(ctx context.Context, sessionID string, base, 
 		if errors.Is(err, ErrUIDExhausted) {
 			return 0, err
 		}
-		if !isUniqueViolation(err) {
+		if !isUniqueViolation(err) && !errors.Is(err, errUIDRace) {
 			return 0, fmt.Errorf("allocate session uid: %w", err)
 		}
 	}
 	return 0, fmt.Errorf("allocate session uid: retries exhausted for session %s", sessionID)
 }
 
+// errUIDRace is returned by tryAllocSessionUID when a recyclable candidate was
+// selected but a concurrent allocation claimed it between the candidate select
+// and the upsert (the ON CONFLICT guard no longer matched). It is retryable.
+var errUIDRace = errors.New("dispatch: uid allocation race, retry")
+
 // tryAllocSessionUID claims the lowest free UID for the session in one tx. A
-// unique violation on (uid) means a concurrent allocation won the candidate;
-// the caller retries. A unique violation on (session_id) means this session was
-// allocated concurrently — re-read via the idempotent path.
+// UID is free when no row exists for it OR its row is freed past the grace
+// window. Recycling reclaims an expired freed row by UPSERTing on uid (the uid
+// PK), not by inserting a duplicate — the prior scheme could never recycle a
+// freed row because the uid PK rejected the new session's insert. A unique
+// violation means a concurrent allocation won a candidate; the caller retries.
 func (s *Store) tryAllocSessionUID(ctx context.Context, sessionID string, base, n uint32, grace time.Duration) (uint32, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -406,29 +422,50 @@ func (s *Store) tryAllocSessionUID(ctx context.Context, sessionID string, base, 
 	// A UID is non-recyclable while in_use OR freed within the grace window.
 	// Pass the grace threshold as a timestamp to avoid interval-literal parsing.
 	graceBefore := time.Now().Add(-grace)
+
+	// Select the lowest free UID (never allocated, or freed past grace). This
+	// distinguishes genuine exhaustion (no candidate) from a lost race on a
+	// candidate that existed when selected.
+	var candidate int
+	err = tx.QueryRow(ctx, `
+		SELECT g.uid FROM generate_series($1::int, $2::int) AS g(uid)
+		LEFT JOIN runtime.session_uid_allocations a ON a.uid = g.uid
+		WHERE a.uid IS NULL
+		   OR (a.state = 'freed' AND a.freed_at < $3)
+		ORDER BY g.uid LIMIT 1`, int(base), int(base+n-1), graceBefore).Scan(&candidate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrUIDExhausted // no free UID in range.
+	}
+	if err != nil {
+		return 0, fmt.Errorf("select free uid: %w", err)
+	}
+
+	// Claim the candidate. INSERT if no row exists for this uid, or UPSERT the
+	// freed+expired row to the new session. The ON CONFLICT (uid) guard's WHERE
+	// ensures we only reclaim a row that is still freed-past-grace; if a
+	// concurrent allocation claimed it in between, the update is a no-op and
+	// RETURNING yields no row (errUIDRace — caller retries the next candidate).
 	var uid uint32
 	err = tx.QueryRow(ctx, `
-		WITH candidate AS (
-			SELECT g.uid FROM generate_series($1::int, $2::int) AS g(uid)
-			WHERE NOT EXISTS (
-				SELECT 1 FROM runtime.session_uid_allocations a
-				WHERE a.uid = g.uid
-				  AND (a.state = 'in_use' OR (a.state = 'freed' AND a.freed_at >= $3))
-			)
-			ORDER BY g.uid LIMIT 1
-		)
 		INSERT INTO runtime.session_uid_allocations (uid, session_id, state)
-		SELECT uid, $4, 'in_use' FROM candidate
-		ON CONFLICT (session_id) DO UPDATE
-			SET state = 'in_use', freed_at = NULL, updated_at = now()
-		RETURNING uid`,
-		int(base), int(base+n-1), graceBefore, sessionID).Scan(&uid)
+		VALUES ($1, $2, 'in_use')
+		ON CONFLICT (uid) DO UPDATE
+		   SET session_id = EXCLUDED.session_id,
+		       state = 'in_use',
+		       freed_at = NULL,
+		       updated_at = now()
+		 WHERE session_uid_allocations.state = 'freed'
+		   AND session_uid_allocations.freed_at < $3
+		RETURNING uid`, candidate, sessionID, graceBefore).Scan(&uid)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return 0, err // uid PK conflict — caller retries.
-		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, ErrUIDExhausted
+			// The candidate was claimable when selected but a concurrent
+			// allocation won it before the upsert (ON CONFLICT guard no longer
+			// matched). Retry the next candidate.
+			return 0, errUIDRace
+		}
+		if isUniqueViolation(err) {
+			return 0, err // session_id conflict (concurrent alloc for same session)
 		}
 		return 0, fmt.Errorf("claim uid: %w", err)
 	}

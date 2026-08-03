@@ -29,6 +29,11 @@ type workerConn struct {
 	// cancellation (AbortTurn) and session-end (SessionEnd) would race/corrupt
 	// the stream. All sends MUST go through send().
 	sendMu sync.Mutex
+	// sendWG tracks in-flight stream.Send calls so the Work handler's teardown
+	// can wait for them to finish before returning (and letting Connect close
+	// the HTTP/2 response writer). Without this drain, a disconnect during an
+	// ACK/Assign/Abort send races grpcHandlerConn.Close against stream.Send.
+	sendWG sync.WaitGroup
 
 	// done is closed by markClosed to unblock the receive loop (F5: a fenced
 	// prior generation must stop acting; its receive loop is blocked on
@@ -65,15 +70,40 @@ func (w *workerConn) startReader() {
 	}()
 }
 
-// send serializes a ControlMessage send. Safe for concurrent callers.
+// send serializes a ControlMessage send. Safe for concurrent callers. It also
+// refuses to write a torn-down conn: send-to-send serialization alone does not
+// synchronize with the Work handler returning and Connect closing the HTTP/2
+// response writer, so a disconnect during an ACK/Assign/Abort send would race
+// grpcHandlerConn.Close against stream.Send. The closed flag (under w.mu) is
+// checked before registering with sendWG and re-checked after acquiring
+// sendMu; teardown sets closed then waits on sendWG, so no stream.Send is in
+// flight when Connect closes the writer.
 func (w *workerConn) send(msg *v1.ControlMessage) error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return errConnClosed
+	}
+	w.sendWG.Add(1)
+	w.mu.Unlock()
+	defer w.sendWG.Done()
 	w.sendMu.Lock()
 	defer w.sendMu.Unlock()
+	// Re-check closed: teardown may have marked the conn closed and be waiting
+	// on sendWG. Do not touch the stream once closed.
+	w.mu.Lock()
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return errConnClosed
+	}
 	return w.stream.Send(msg)
 }
 
 // markClosed marks the conn closed so dispatches/fences stop using it and
-// unblocks the receive loop by closing done. Idempotent.
+// unblocks the receive loop by closing done. Idempotent. The Work handler's
+// defer calls this and then waits on sendWG to drain in-flight sends before
+// returning (so Connect's stream close cannot race a stream.Send).
 func (w *workerConn) markClosed() {
 	w.mu.Lock()
 	w.closed = true

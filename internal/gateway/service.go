@@ -574,11 +574,20 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 	}
 	s.pool.add(rc)
 	defer func() {
+		// Mark closed and drain in-flight sends BEFORE the handler returns so
+		// no stream.Send is in progress when Connect closes the HTTP/2 response
+		// writer. send() refuses to enter stream.Send once closed is set; waiting
+		// on sendWG lets any in-flight send finish. Removal from the pool happens
+		// after the closed flag so a dispatch that already picked this conn
+		// observes closed and bails rather than racing teardown.
+		rc.mu.Lock()
+		rc.closed = true
+		rc.mu.Unlock()
+		rc.sendWG.Wait()
 		s.pool.remove(rc)
 		_ = s.store.DeactivateRunnerStream(ctx, rc.runnerID, int64(gen)) //nolint:gosec // G115
 		// Any pending dispatchers on this conn observe streamLost.
 		rc.mu.Lock()
-		rc.closed = true
 		for _, ch := range rc.pending {
 			select {
 			case ch <- dispatchResult{streamLost: true}:
