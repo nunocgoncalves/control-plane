@@ -445,7 +445,7 @@ export class Supervisor {
         { cfg: this.d.cfg },
         { body: req.body },
         assignedModel,
-        { runId: at.runId, turnId: at.turnId },
+        { runId: at.runId, turnId: at.turnId, fencingGeneration: this.welcome?.fencingGeneration ?? 0n },
         ac.signal,
         {
           onChunk: (data) => child.rpcSend({ type: "modelChunk", requestId: req.requestId, data }),

@@ -124,7 +124,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
         { cfg: cfg(srv.url) },
         { body: { model: "m1", messages: [] } },
         "m1",
-        { runId: "run-1", turnId: "turn-1" },
+        { runId: "run-1", turnId: "turn-1", fencingGeneration: 1n },
         undefined,
         { onChunk: (d) => { chunks.push(d); return true; }, onEnd: (status) => (endStatus = status), onDrain: () => () => {} },
       );
@@ -145,7 +145,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
         { cfg: cfg(srv.url) },
         { body: { model: "other", messages: [] } },
         "m1",
-        { runId: "run-1", turnId: "turn-1" },
+        { runId: "run-1", turnId: "turn-1", fencingGeneration: 1n },
         undefined,
         { onChunk: () => true, onEnd: (s, _h, m) => { endStatus = s; errMsg = m; }, onDrain: () => () => {} },
       );
@@ -174,7 +174,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
       { cfg: cfg(`https://localhost:${addr.port}`) },
       { body: { model: "m1", messages: [] } },
       "m1",
-      { runId: "run-1", turnId: "turn-1" },
+      { runId: "run-1", turnId: "turn-1", fencingGeneration: 1n },
       ac.signal,
       { onChunk: () => true, onEnd: (s) => endStatuses.push(s), onDrain: () => () => {} },
     );
@@ -203,7 +203,7 @@ describe("streamModel (mTLS SSE bridge)", () => {
         { cfg: cfg(srv.url) },
         { body: { model: "m1", messages: [] } },
         "m1",
-        { runId: "run-1", turnId: "turn-1" },
+        { runId: "run-1", turnId: "turn-1", fencingGeneration: 1n },
         undefined,
         {
           onChunk: (d) => {

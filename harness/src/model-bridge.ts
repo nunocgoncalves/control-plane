@@ -61,7 +61,7 @@ export function streamModel(
   deps: ModelBridgeDeps,
   req: ModelRequest,
   assignedModelId: string,
-  headers: { runId: string; turnId: string },
+  headers: { runId: string; turnId: string; fencingGeneration: bigint },
   signal: AbortSignal | undefined,
   cb: ModelStreamCallbacks,
 ): Promise<void> {
@@ -155,6 +155,7 @@ export function streamModel(
       "content-length": Buffer.byteLength(bodyJson),
       "x-iterabase-run-id": headers.runId,
       "x-iterabase-turn-id": headers.turnId,
+      "x-iterabase-fencing-generation": headers.fencingGeneration.toString(),
       accept: "text/event-stream",
     };
 
