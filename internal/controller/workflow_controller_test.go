@@ -357,7 +357,8 @@ func newWorkflowTestEnv(t *testing.T) (client.Client, context.Context, *workflow
 // Walter graph_email workflow materializes an immutable definition + trigger
 // bindings + a kind=workflow scope identity + a workflow_pool_binding; an
 // invalid overlay (capability beyond pool) is rejected with inspectable
-// validation status; deleting the CR soft-deletes the materialized state.
+// validation status; deleting the CR soft-deletes the materialized state; and
+// recreating the same artifact revives that state and becomes Ready.
 func TestWorkflowReconcile(t *testing.T) {
 	adminClient, ctx, wfStore, gwStore, idStore := newWorkflowTestEnv(t)
 	ns := "default"
@@ -524,4 +525,26 @@ func TestWorkflowReconcile(t *testing.T) {
 	assert.ErrorIs(t, err, gateway.ErrNotFound, "original authorization binding should be revoked")
 	_, err = gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/renamed", "2"))
 	assert.ErrorIs(t, err, gateway.ErrNotFound, "renamed authorization binding should be revoked")
+
+	// Recreate the original Git artifact under the same Workflow identity. The
+	// durable definition, trigger binding, identity, and pool binding rows are
+	// revived rather than blocked by their soft-deleted unique keys.
+	recreated := validWalterWorkflow("walter-quotation", ns, "walter-pool")
+	require.NoError(t, adminClient.Create(ctx, recreated))
+	require.Eventually(t, func() bool {
+		var g v1alpha1.Workflow
+		if err := adminClient.Get(ctx, nn, &g); err != nil {
+			return false
+		}
+		return g.Status.Ready && g.Status.ValidationStatus == v1alpha1.ValidationValid &&
+			g.Status.ObservedGeneration == g.Generation
+	}, 15*time.Second, 200*time.Millisecond, "recreated Workflow should become Ready")
+	revived, err := wfStore.GetDefinition(ctx, "walter/quotation", "1")
+	require.NoError(t, err)
+	assert.Equal(t, def.ID, revived.ID, "recreation should preserve the immutable definition identity")
+	revivedBindings, err := wfStore.ListTriggerBindings(ctx, revived.ID)
+	require.NoError(t, err)
+	require.Len(t, revivedBindings, 1)
+	_, err = gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/quotation", "1"))
+	require.NoError(t, err, "recreation should revive the workflow authorization binding")
 }

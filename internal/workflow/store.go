@@ -156,10 +156,10 @@ func DefinitionKey(key, version string) string {
 //
 // Registration serializes on the logical key. This makes the owner check and
 // insert atomic even when two Workflow CRs concurrently publish the first
-// versions of the same key. ON CONFLICT DO NOTHING suppresses the (key,
-// version) unique constraint; the outcome is then determined by reading the
-// canonical row so an immutability violation is surfaced as a typed error
-// rather than a raw SQL unique violation.
+// versions of the same key. On conflict, a soft-deleted row is revived only
+// when its durable owner and digest match; otherwise the canonical row is read
+// so ownership and immutability violations are surfaced as typed errors rather
+// than raw SQL unique violations.
 func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definition, error) {
 	if err := prepareDefinition(&d); err != nil {
 		return Definition{}, err
@@ -231,7 +231,11 @@ func insertDefinition(ctx context.Context, tx pgx.Tx, d Definition) error {
 		INSERT INTO workflow.definitions
 			(key, version, digest, spec_json, validation_status, scope_identity_id, source_type, pool_key, presentation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT (key, version) DO UPDATE
+			SET deleted_at = NULL
+			WHERE workflow.definitions.scope_identity_id = EXCLUDED.scope_identity_id
+			  AND workflow.definitions.digest = EXCLUDED.digest
+			  AND workflow.definitions.deleted_at IS NOT NULL`,
 		d.Key, d.Version, d.Digest, d.SpecJSON, d.ValidationStatus, d.ScopeIdentityID,
 		d.SourceType, d.PoolKey, d.Presentation); err != nil {
 		return fmt.Errorf("register definition: insert: %w", err)
@@ -244,9 +248,9 @@ func readRegisteredDefinition(ctx context.Context, tx pgx.Tx, d Definition) (Def
 		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,
 		       source_type, pool_key, presentation, created_at, updated_at
 		FROM workflow.definitions
-		WHERE key = $1 AND version = $2 AND deleted_at IS NULL`, d.Key, d.Version))
+		WHERE key = $1 AND version = $2`, d.Key, d.Version))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Definition{}, fmt.Errorf("register definition: read inserted: %w", ErrNotFound)
+		return Definition{}, fmt.Errorf("register definition: read canonical: %w", ErrNotFound)
 	}
 	if err != nil {
 		return Definition{}, fmt.Errorf("register definition: read canonical: %w", err)

@@ -67,11 +67,46 @@ func TestRegisterDefinition_IdempotentSameDigest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "digest-walter/quotation-1", d1.Digest)
 
-	// Re-registering the same (key, digest) is a no-op returning the same row.
+	// Re-registering the same (key, version, digest) is a no-op returning the same row.
 	d2, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", scopeID))
 	require.NoError(t, err)
 	assert.Equal(t, d1.ID, d2.ID)
 	assert.Equal(t, d1.Digest, d2.Digest)
+	assert.Equal(t, d1.UpdatedAt, d2.UpdatedAt, "active idempotent registration must not mutate the row")
+}
+
+func TestRegisterDefinition_RevivesSoftDeletedSameVersion(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	ownerKey := "workflow:default/recreated"
+	ownerID := insertWorkflowIdentity(t, pool, ownerKey)
+	otherOwnerID := insertWorkflowIdentity(t, pool, "workflow:default/other")
+	definition := sampleDefinition("walter/quotation", "1", ownerID)
+
+	registered, err := store.RegisterDefinition(ctx, definition)
+	require.NoError(t, err)
+	require.NoError(t, store.SoftDeleteDefinitionsByOwner(ctx, ownerKey))
+	_, err = store.GetDefinition(ctx, definition.Key, definition.Version)
+	require.ErrorIs(t, err, workflow.ErrNotFound)
+
+	changed := definition
+	changed.Digest = "digest-changed"
+	_, err = store.RegisterDefinition(ctx, changed)
+	require.ErrorIs(t, err, workflow.ErrImmutableVersion,
+		"recreation must not replace an immutable deleted version")
+
+	otherOwner := definition
+	otherOwner.ScopeIdentityID = otherOwnerID
+	_, err = store.RegisterDefinition(ctx, otherOwner)
+	require.ErrorIs(t, err, workflow.ErrDefinitionOwnership,
+		"recreation must not transfer a logical workflow key to another owner")
+
+	revived, err := store.RegisterDefinition(ctx, definition)
+	require.NoError(t, err)
+	assert.Equal(t, registered.ID, revived.ID, "recreation must revive the durable version identity")
+	got, err := store.GetDefinition(ctx, definition.Key, definition.Version)
+	require.NoError(t, err)
+	assert.Equal(t, registered.ID, got.ID)
 }
 
 func TestRegisterDefinition_ImmutableVersionRejectsDifferentContent(t *testing.T) {
