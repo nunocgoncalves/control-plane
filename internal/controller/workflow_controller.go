@@ -41,7 +41,7 @@ const poolBindingRequeueInterval = 10 * time.Second
 // a fake.
 type PoolBindingStore interface {
 	GetPoolByKey(ctx context.Context, key string) (gateway.Pool, error)
-	UpsertWorkflowPoolBinding(ctx context.Context, workflowDefinitionKey, poolID string, permittedTools []string) error
+	UpsertWorkflowPoolBinding(ctx context.Context, workflowDefinitionKey, poolID string, permitted []gateway.Capability) error
 	SoftDeleteWorkflowPoolBindingByKey(ctx context.Context, workflowDefinitionKey string) error
 }
 
@@ -166,7 +166,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		_ = r.patchStatus(ctx, &wf, false, v1alpha1.ValidationValid, fmt.Sprintf("resolve pool: %v", err), false)
 		return ctrl.Result{}, err
 	}
-	permitted := permittedToolNames(wf.Spec.RequestedCapabilities)
+	permitted := permittedCapabilities(wf.Spec.RequestedCapabilities)
 	if err := r.Pools.UpsertWorkflowPoolBinding(ctx, workflow.DefinitionKey(def.Key, def.Version), pool.ID, permitted); err != nil {
 		_ = r.patchStatus(ctx, &wf, false, v1alpha1.ValidationValid, fmt.Sprintf("bind pool: %v", err), false)
 		return ctrl.Result{}, err
@@ -587,12 +587,15 @@ func toTriggerBindingInputs(in []v1alpha1.TriggerBinding) []workflow.TriggerBind
 	return out
 }
 
-// permittedToolNames returns the tool names the workflow is bound to (its
-// requested capabilities), written to workflow_pool_bindings.permitted_tools.
-func permittedToolNames(caps []v1alpha1.RequestedCapability) []string {
-	out := make([]string, 0, len(caps))
+// permittedCapabilities maps the workflow's requested capabilities to the
+// gateway capability narrowing persisted in workflow_pool_bindings.permitted_tools
+// (tool + maxEffectClass + actions). The gateway enforces the maxEffectClass
+// ceiling at discovery/authorization so the workflow is not widened back to the
+// pool ceiling (ARCH-016; REQ-001/REQ-010).
+func permittedCapabilities(caps []v1alpha1.RequestedCapability) []gateway.Capability {
+	out := make([]gateway.Capability, 0, len(caps))
 	for _, c := range caps {
-		out = append(out, c.Tool)
+		out = append(out, gateway.Capability{Tool: c.Tool, MaxEffectClass: c.MaxEffectClass, Actions: c.Actions})
 	}
 	return out
 }

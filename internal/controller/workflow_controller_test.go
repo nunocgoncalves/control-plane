@@ -345,10 +345,13 @@ func TestWorkflowReconcile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "workflow", ident.Kind)
 
-	// workflow_pool_binding materialized with the permitted tool set.
+	// workflow_pool_binding materialized with the permitted capability narrowing.
 	binding, err := gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/quotation", "1"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"graph.read", "graph.excel.write"}, binding.PermittedTools)
+	assert.Equal(t, []gateway.Capability{
+		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"read", "list"}},
+		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
+	}, binding.PermittedCapabilities)
 
 	// ResolveForAttempt returns the exact versioned definition + permitted tools.
 	resolved, err := wfStore.ResolveForAttempt(ctx, "walter/quotation", "1")

@@ -188,12 +188,16 @@ func TestResolveForAttempt(t *testing.T) {
 	require.NoError(t, store.ReplaceTriggerBindings(ctx, def.ID, "graph_email",
 		[]workflow.TriggerBindingInput{{Name: "inbox", BindingKey: "inbox@walter.example"}}))
 
-	// Bind the workflow's permitted tools to a pool (toolgateway).
+	// Bind the workflow's permitted tools to a pool (toolgateway). The binding
+	// now stores full capability objects (tool + maxEffectClass + actions).
 	poolID := insertPool(t, pool, "default/walter-pool")
 	defKey := workflow.DefinitionKey(def.Key, def.Version)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.workflow_pool_bindings (workflow_definition_key, pool_id, permitted_tools)
-		VALUES ($1, $2, $3)`, defKey, poolID, []string{"graph.read", "graph.excel.write"})
+		VALUES ($1, $2, $3)`, defKey, poolID, []workflow.CanonicalCapability{
+		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"read", "list"}},
+		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
+	})
 	require.NoError(t, err)
 
 	// Resolve by exact version.

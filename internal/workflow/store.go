@@ -392,22 +392,35 @@ func (s *Store) ResolveForAttempt(ctx context.Context, key, version string) (Res
 	return ResolvedDefinition{Definition: d, TriggerBindings: bindings, PermittedTools: permitted, RequestedCapabilities: caps}, nil
 }
 
-// readPermittedTools reads the permitted tool set bound to a definition from
+// readPermittedTools reads the permitted tool names bound to a definition from
 // toolgateway.workflow_pool_bindings (cross-schema read, mirroring the gateway
-// store's cross-schema runtime reads). Absent binding = ErrNotFound (the
-// workflow must be bound to a pool before runs start).
+// store's cross-schema runtime reads). The binding stores full capability
+// objects (tool + maxEffectClass + actions); only the tool names are returned
+// here — the complete narrowing is available on ResolvedDefinition.
+// RequestedCapabilities. Absent binding = ErrNotFound (the workflow must be
+// bound to a pool before runs start).
 func (s *Store) readPermittedTools(ctx context.Context, definitionKey string) ([]string, error) {
-	var permitted []string
+	var raw []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT permitted_tools FROM toolgateway.workflow_pool_bindings
-		WHERE workflow_definition_key = $1 AND deleted_at IS NULL`, definitionKey).Scan(&permitted)
+		WHERE workflow_definition_key = $1 AND deleted_at IS NULL`, definitionKey).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	return permitted, nil
+	var caps []CanonicalCapability
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &caps); err != nil {
+			return nil, fmt.Errorf("decode workflow permitted capabilities: %w", err)
+		}
+	}
+	names := make([]string, 0, len(caps))
+	for _, c := range caps {
+		names = append(names, c.Tool)
+	}
+	return names, nil
 }
 
 // scanDefinition scans a definition row.

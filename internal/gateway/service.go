@@ -173,7 +173,7 @@ func (s *Service) DiscoverEffectiveTools(ctx context.Context, req *connect.Reque
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	tools, err := s.store.DiscoverEffectiveTools(ctx, res.AttemptID, res.Pool.ID, res.PermittedTools)
+	tools, err := s.store.DiscoverEffectiveTools(ctx, res.AttemptID, res.Pool.ID, res.PermittedCapabilities)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -239,7 +239,7 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 	// 3. Authorization (ARCH-008/016/018): workflow-permitted intersection +
 	//    pool grant effect ceiling + action allow-list. Absence = denied,
 	//    attributable.
-	allowed, err := s.authorize(ctx, res.Pool.ID, tv, res.PermittedTools)
+	allowed, err := s.authorize(ctx, res.Pool.ID, tv, res.PermittedCapabilities)
 	if err != nil {
 		s.log.Warn("tool invocation denied", "tool", tv.Name, "pool", res.Pool.ID,
 			"attempt", res.AttemptID, "caller", id.SPIFFEID, "reason", err)
@@ -703,19 +703,30 @@ func (s *Service) resolveCallerScope(ctx context.Context, id spiffe.Identity, re
 // boundary (ARCH-008/016/018): workflow-permitted intersection + pool grant
 // effect ceiling + action allow-list. Returns nil if authorized, an error
 // (permission_denied ...) otherwise.
-func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, permitted []string) (bool, error) {
-	// Workflow-requested intersection. nil = no narrowing (turn path); empty
-	// slice = explicitly none (deny all).
+func (s *Service) authorize(ctx context.Context, poolID string, tv ToolVersion, permitted []Capability) (bool, error) {
+	// Workflow-requested capability narrowing (ARCH-016). nil = no narrowing
+	// (turn path); empty slice = explicitly none (deny all). The workflow's
+	// maxEffectClass is enforced here so a workflow narrowed to read_only cannot
+	// invoke a tool whose effect exceeds it, even when the pool grant ceiling is
+	// higher — the narrowing is not widened back to the pool ceiling at runtime
+	// (REQ-001/REQ-010). Actions is a persisted declaration; v1 invocations carry
+	// no action field, so action-subset enforcement awaits tool-descriptor action
+	// decomposition (HOR-392) and is validated ⊆ pool grant at registration.
 	if permitted != nil {
+		var cap *Capability
 		found := false
-		for _, t := range permitted {
-			if t == tv.Name {
+		for i := range permitted {
+			if permitted[i].Tool == tv.Name {
 				found = true
+				cap = &permitted[i]
 				break
 			}
 		}
 		if !found {
 			return false, errors.New("tool not in workflow-permitted set")
+		}
+		if cap.MaxEffectClass != "" && effectRank(tv.EffectClass) > effectRank(EffectClass(cap.MaxEffectClass)) {
+			return false, fmt.Errorf("tool effect_class %s exceeds workflow-requested ceiling %s", tv.EffectClass, cap.MaxEffectClass)
 		}
 	}
 	grant, err := s.store.GetPoolGrant(ctx, poolID, tv.Name)

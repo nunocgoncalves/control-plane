@@ -84,7 +84,10 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	// cover restriction and denial.
 	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"echo", "send_email", "upsert_row", "graph", "danger"}))
 	// Workflow-step binding (workflow "wf-quote" -> pool-1, permits echo+send_email).
-	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []string{"echo", "send_email"}))
+	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []gateway.Capability{
+		{Tool: "echo", MaxEffectClass: string(gateway.EffectNonIdempotentWrite)},
+		{Tool: "send_email", MaxEffectClass: string(gateway.EffectNonIdempotentWrite)},
+	}))
 
 	// In-memory CA + certs.
 	ca, err := testca.New()
@@ -807,6 +810,40 @@ func TestGateway_WorkflowStepCallerDiscovery(t *testing.T) {
 	}
 	assert.Contains(t, names, "echo")
 	assert.NotContains(t, names, "upsert_row", "workflow does not permit upsert_row -> not pinned")
+}
+
+// TestGateway_WorkflowEffectClassCeilingNarrowsDiscovery verifies ARCH-016 /
+// REQ-001 / REQ-010: a workflow that narrows a tool to a lower effect class
+// than the pool-grant ceiling must NOT discover that tool's higher-effect
+// version. The workflow's maxEffectClass is enforced at discovery so the
+// workflow narrowing is not widened back to the pool ceiling at runtime.
+func TestGateway_WorkflowEffectClassCeilingNarrowsDiscovery(t *testing.T) {
+	env := newTestEnv(t, nil)
+	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer rr.close()
+	t.Cleanup(rr.close)
+
+	// Narrow the wf-quote binding: send_email is a non_idempotent_write tool,
+	// pool-granted at non_idempotent_write, but the workflow requests it at
+	// read_only. The pool ceiling would allow it; the workflow ceiling must
+	// exclude it from discovery.
+	require.NoError(t, env.store.UpsertWorkflowPoolBinding(context.Background(), wfKey, env.poolID, []gateway.Capability{
+		{Tool: "send_email", MaxEffectClass: string(gateway.EffectReadOnly)},
+	}))
+
+	runID, stepID := seedWorkflowStepAttempt(t, env, []string{"send_email"})
+	gc := gatewayClient(env, env.wfStep)
+	dresp, err := gc.DiscoverEffectiveTools(context.Background(), connect.NewRequest(&v1.DiscoverRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_WORKFLOW_STEP, CallerScopeId: stepID,
+	}))
+	require.NoError(t, err)
+	var names []string
+	for _, d := range dresp.Msg.Descriptors {
+		names = append(names, d.Name)
+	}
+	assert.NotContains(t, names, "send_email", "workflow narrowed to read_only must not discover a non_idempotent_write tool (ARCH-016)")
 }
 
 func TestGateway_UnapprovedRunnerRejected(t *testing.T) {

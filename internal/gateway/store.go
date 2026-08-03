@@ -164,13 +164,28 @@ type SecretRef struct {
 	Key  string `json:"key"`
 }
 
+// Capability is one workflow-requested gateway capability narrowing entry,
+// persisted in workflow_pool_bindings.permitted_tools as a JSONB array of
+// objects (ARCH-016). The gateway intersects it with deployed registry
+// availability and AgentPool grants at discovery/authorization so a workflow
+// narrowed to read_only / a subset of actions is not widened back to the pool
+// ceiling at runtime (REQ-001/REQ-010). Actions is a persisted declaration
+// (validated ⊆ pool grant at registration); v1 invocations carry no action
+// field, so runtime enforcement is at tool-name + effect-class granularity
+// until tool descriptors declare action decomposition.
+type Capability struct {
+	Tool           string   `json:"tool"`
+	MaxEffectClass string   `json:"maxEffectClass"`
+	Actions        []string `json:"actions,omitempty"`
+}
+
 // WorkflowPoolBinding is a row from toolgateway.workflow_pool_bindings:
-// workflow definition -> pool + workflow-requested permitted tools.
+// workflow definition -> pool + workflow-requested permitted capabilities.
 type WorkflowPoolBinding struct {
 	ID                    string
 	WorkflowDefinitionKey string
 	PoolID                string
-	PermittedTools        []string // from JSONB array; nil = absent, len==0 = explicitly none (deny all)
+	PermittedCapabilities []Capability // from JSONB array; nil = absent, len==0 = explicitly none (deny all)
 }
 
 // ApprovedRunner is a row from toolgateway.approved_runners — deny-by-default
@@ -218,11 +233,11 @@ type Invocation struct {
 // + scope id (identity-derived + validated; used for the ledger key, never the
 // caller-supplied values).
 type CallerResolution struct {
-	Pool           Pool
-	PermittedTools []string // nil = no workflow narrowing; len==0 = deny all
-	AttemptID      string   // runtime run id (v1 attempt identity)
-	CallerScope    CallerScope
-	CallerScopeID  string // validated turn_id / run_step_id
+	Pool                  Pool
+	PermittedCapabilities []Capability // nil = no workflow narrowing (turn path); len==0 = deny all
+	AttemptID             string       // runtime run id (v1 attempt identity)
+	CallerScope           CallerScope
+	CallerScopeID         string // validated turn_id / run_step_id
 }
 
 // Store reads and writes the toolgateway schema via a pgx connection pool.
@@ -459,14 +474,20 @@ func (s *Store) GetWorkflowPoolBinding(ctx context.Context, workflowDefinitionKe
 		FROM toolgateway.workflow_pool_bindings
 		WHERE workflow_definition_key = $1 AND deleted_at IS NULL`, workflowDefinitionKey)
 	var w WorkflowPoolBinding
-	var permitted []string
-	if err := row.Scan(&w.ID, &w.WorkflowDefinitionKey, &w.PoolID, &permitted); err != nil {
+	var raw []byte
+	if err := row.Scan(&w.ID, &w.WorkflowDefinitionKey, &w.PoolID, &raw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return WorkflowPoolBinding{}, ErrNotFound
 		}
 		return WorkflowPoolBinding{}, err
 	}
-	w.PermittedTools = permitted
+	var caps []Capability
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &caps); err != nil {
+			return WorkflowPoolBinding{}, fmt.Errorf("decode workflow permitted capabilities: %w", err)
+		}
+	}
+	w.PermittedCapabilities = caps
 	return w, nil
 }
 
@@ -523,7 +544,7 @@ func (s *Store) ResolveTurnScope(ctx context.Context, poolID, attemptID, turnID,
 	// attempt-pinned) tools are in scope. nil = no narrowing. The caller scope
 	// is identity-derived (turn) + the validated turn id; callers use these for
 	// the ledger key rather than caller-supplied values.
-	return CallerResolution{Pool: pool, PermittedTools: nil, AttemptID: runID, CallerScope: CallerScopeTurn, CallerScopeID: turnID}, nil
+	return CallerResolution{Pool: pool, PermittedCapabilities: nil, AttemptID: runID, CallerScope: CallerScopeTurn, CallerScopeID: turnID}, nil
 }
 
 // ResolveWorkflowStepScope resolves a control-plane workflow-step caller against
@@ -563,15 +584,15 @@ func (s *Store) ResolveWorkflowStepScope(ctx context.Context, attemptID, runStep
 	if err != nil {
 		return CallerResolution{}, ErrScopeDenied
 	}
-	// permitted_tools: nil (absent) = no narrowing is not valid for the workflow
-	// path — the binding always carries an explicit set. An empty slice = deny all
-	// (preserved distinctly from nil). The caller scope is identity-derived
-	// (workflow_step) + the validated run_step id.
-	permitted := b.PermittedTools
+	// PermittedCapabilities: nil (absent) = no narrowing is not valid for the
+	// workflow path — the binding always carries an explicit set. An empty slice
+	// = deny all (preserved distinctly from nil). The caller scope is
+	// identity-derived (workflow_step) + the validated run_step id.
+	permitted := b.PermittedCapabilities
 	if permitted == nil {
-		permitted = []string{}
+		permitted = []Capability{}
 	}
-	return CallerResolution{Pool: pool, PermittedTools: permitted, AttemptID: attemptID, CallerScope: CallerScopeWorkflowStep, CallerScopeID: runStepID}, nil
+	return CallerResolution{Pool: pool, PermittedCapabilities: permitted, AttemptID: attemptID, CallerScope: CallerScopeWorkflowStep, CallerScopeID: runStepID}, nil
 }
 
 // getPoolByID fetches a non-deleted pool by id.
@@ -682,7 +703,14 @@ func (s *Store) GetAttemptToolPin(ctx context.Context, attemptID, toolName strin
 //
 // permittedTools semantics: nil = no workflow narrowing (turn path; all granted
 // + pinned tools); len==0 = explicitly empty workflow set (deny all).
-func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID string, permittedTools []string) ([]ToolVersion, error) {
+func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID string, permitted []Capability) ([]ToolVersion, error) {
+	// Names for the SQL name filter (nil = turn path: no workflow narrowing).
+	var names []string
+	capByTool := make(map[string]Capability, len(permitted))
+	for _, c := range permitted {
+		names = append(names, c.Tool)
+		capByTool[c.Tool] = c
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT tv.id, tv.name, tv.version, tv.digest, tv.description, tv.input_schema,
 		       tv.effect_class, tv.credential_slots, tv.artifact_capabilities,
@@ -702,7 +730,7 @@ func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID st
 		        WHEN 'non_idempotent_write' THEN 3
 		      END
 		  AND ($3::text[] IS NULL OR tv.name = ANY($3::text[]))
-		ORDER BY tv.name, tv.version`, attemptID, poolID, permittedTools)
+		ORDER BY tv.name, tv.version`, attemptID, poolID, names)
 	if err != nil {
 		return nil, fmt.Errorf("discover effective tools: %w", err)
 	}
@@ -712,6 +740,19 @@ func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID st
 		tv, err := scanToolVersion(rows)
 		if err != nil {
 			return nil, err
+		}
+		// Workflow-requested effect-class ceiling (ARCH-016): a workflow narrowed
+		// to read_only must not discover a higher-effect tool even when the pool
+		// grant ceiling allows it, so the narrowing is not widened back to the
+		// pool ceiling at runtime (REQ-001/REQ-010). nil permitted = turn path.
+		if permitted != nil {
+			cap, ok := capByTool[tv.Name]
+			if !ok {
+				continue
+			}
+			if cap.MaxEffectClass != "" && effectRank(tv.EffectClass) > effectRank(EffectClass(cap.MaxEffectClass)) {
+				continue
+			}
 		}
 		out = append(out, tv)
 	}
@@ -1254,14 +1295,14 @@ func (s *Store) MaterializePool(ctx context.Context, key, name, spiffePrefix str
 
 // UpsertWorkflowPoolBinding inserts/revives a workflow->pool binding
 // (operator-seed; Workflow definitions HOR-252 later).
-func (s *Store) UpsertWorkflowPoolBinding(ctx context.Context, workflowKey, poolID string, permittedTools []string) error {
+func (s *Store) UpsertWorkflowPoolBinding(ctx context.Context, workflowKey, poolID string, permitted []Capability) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO toolgateway.workflow_pool_bindings (workflow_definition_key, pool_id, permitted_tools)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (workflow_definition_key) DO UPDATE
 			SET pool_id = EXCLUDED.pool_id, permitted_tools = EXCLUDED.permitted_tools,
 			    deleted_at = NULL, updated_at = now()`,
-		workflowKey, poolID, permittedTools)
+		workflowKey, poolID, permitted)
 	if err != nil {
 		return fmt.Errorf("upsert workflow pool binding: %w", err)
 	}

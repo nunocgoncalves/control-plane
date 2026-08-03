@@ -180,7 +180,7 @@ CREATE TABLE toolgateway.workflow_pool_bindings (
     id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workflow_definition_key text NOT NULL,
     pool_id               uuid NOT NULL REFERENCES toolgateway.pools(id) ON DELETE CASCADE,
-    permitted_tools       jsonb NOT NULL DEFAULT '[]'::jsonb,  -- tool names the workflow requests
+    permitted_tools       jsonb NOT NULL DEFAULT '[]'::jsonb,  -- workflow-requested capabilities: [{tool, maxEffectClass, actions}] (ARCH-016)
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
     deleted_at            timestamptz,
