@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -86,11 +87,17 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Deletion path: finalizer cleanup. Revokes the definition + trigger
-	// bindings (workflow store), the workflow_pool_binding (gateway store), and
-	// the scope identity (identity store). Rows are retained for history/audit.
+	// bindings (workflow store), the workflow_pool_binding for EVERY owned
+	// version (gateway store), and the scope identity (identity store). Rows are
+	// retained for history/audit. Cleanup fails closed (REQ-010): if any store
+	// revocation errors, the finalizer is NOT removed and the reconcile requeues
+	// so no usable gateway authorization outlives the Workflow CR.
 	if !wf.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&wf, workflowFinalizer) {
-			r.cleanupWorkflow(ctx, &wf)
+			if err := r.cleanupWorkflow(ctx, &wf); err != nil {
+				logger.Error(err, "workflow cleanup failed; keeping finalizer and requeuing")
+				return ctrl.Result{Requeue: true}, nil
+			}
 			controllerutil.RemoveFinalizer(&wf, workflowFinalizer)
 			if err := r.Update(ctx, &wf); err != nil {
 				return ctrl.Result{}, err
@@ -181,29 +188,38 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // cleanupWorkflow revokes the workflow's materialized state on CR deletion.
-// Best-effort per-store; errors are logged but do not block finalizer removal
-// (the rows are retained for history; a missing pool binding is not fatal).
-func (r *WorkflowReconciler) cleanupWorkflow(ctx context.Context, wf *v1alpha1.Workflow) {
-	logger := log.FromContext(ctx)
+// It fails closed (REQ-010): any store error is returned so the caller keeps
+// the finalizer and requeues, never leaving usable gateway authorization
+// after the Workflow CR is gone. Revocation order is authorization-first: the
+// workflow_pool_binding for EVERY published version is revoked before the
+// definitions and scope identity, so a transient failure cannot retain a
+// usable binding for an older version. All steps are idempotent (soft-delete
+// is a no-op on already-deleted rows), so retries converge.
+func (r *WorkflowReconciler) cleanupWorkflow(ctx context.Context, wf *v1alpha1.Workflow) error {
 	key := wf.Spec.Key
-	if err := r.Store.SoftDeleteDefinitionByKey(ctx, key); err != nil {
-		logger.Error(err, "soft-delete workflow definitions", "key", key)
+	// Revoke the workflow_pool_binding for every owned version. Listing the
+	// active definitions for the key enumerates every published version's
+	// definition_key ("<key>:<version>").
+	defs, err := r.Store.ListDefinitionsByKey(ctx, key)
+	if err != nil {
+		return fmt.Errorf("list workflow definitions for cleanup: %w", err)
 	}
-	// Soft-delete the workflow_pool_binding for every version. v1 has at most a
-	// few versions per key; deleting by the latest is insufficient, so delete
-	// by key prefix is not supported by the unique column. Instead, soft-delete
-	// the binding for the current version (the one runs bind to). Older
-	// version bindings are orphaned and cleaned by the definitions soft-delete
-	// cascade semantics in a later hardening pass. For v1 single-version
-	// deployments this is exact.
-	defKey := workflow.DefinitionKey(wf.Spec.Key, wf.Spec.Version)
-	if err := r.Pools.SoftDeleteWorkflowPoolBindingByKey(ctx, defKey); err != nil {
-		logger.Error(err, "soft-delete workflow pool binding", "definitionKey", defKey)
+	for _, d := range defs {
+		defKey := workflow.DefinitionKey(d.Key, d.Version)
+		if err := r.Pools.SoftDeleteWorkflowPoolBindingByKey(ctx, defKey); err != nil {
+			return fmt.Errorf("soft-delete workflow pool binding %s: %w", defKey, err)
+		}
+	}
+	// Revoke the definitions + trigger bindings (all versions) and the scope
+	// identity. Rows are retained for history/audit.
+	if err := r.Store.SoftDeleteDefinitionByKey(ctx, key); err != nil {
+		return fmt.Errorf("soft-delete workflow definitions: %w", err)
 	}
 	scopeKey := workflowScopeIdentityKey(wf)
 	if err := r.Identities.SoftDeleteIdentityByKey(ctx, scopeKey); err != nil {
-		logger.Error(err, "soft-delete workflow scope identity", "key", scopeKey)
+		return fmt.Errorf("soft-delete workflow scope identity %q: %w", scopeKey, err)
 	}
+	return nil
 }
 
 // validateSpec validates the Workflow spec before execution (acceptance:
@@ -219,6 +235,17 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 	if wf.Spec.Version == "" {
 		return fmt.Errorf("spec.version is required")
 	}
+	// key/version must not contain ":" — the definition_key wire format is
+	// "<key>:<version>", so ":" would make the concatenated key ambiguous and
+	// let one workflow overwrite another's pool binding (REQ-010 scope
+	// isolation). The CRD pattern enforces this for API-server writes; this is
+	// defense-in-depth for direct/unvalidated writes.
+	if strings.Contains(wf.Spec.Key, ":") {
+		return fmt.Errorf("spec.key must not contain \":\" (definition_key wire format is \"<key>:<version>\")")
+	}
+	if strings.Contains(wf.Spec.Version, ":") {
+		return fmt.Errorf("spec.version must not contain \":\" (definition_key wire format is \"<key>:<version>\")")
+	}
 	if wf.Spec.PoolRef == "" {
 		return fmt.Errorf("spec.poolRef is required")
 	}
@@ -228,8 +255,11 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 	default:
 		return fmt.Errorf("spec.source.type must be %q or %q", v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact)
 	}
-	// Trigger bindings: unique names, non-empty bindingKey, no secret values
-	// (the CRD type has no secret fields by design; config is non-secret).
+	// Trigger bindings: unique names, non-empty bindingKey, and a non-secret
+	// config (ARCH-008: raw credential values never enter Postgres). config is
+	// validated as a flat JSON object whose keys do not match a secret denylist;
+	// an opaque payload is not accepted because it cannot guarantee secrets are
+	// excluded.
 	seenBindings := make(map[string]bool)
 	for i, b := range wf.Spec.Source.TriggerBindings {
 		if b.Name == "" {
@@ -242,9 +272,21 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 		if b.BindingKey == "" {
 			return fmt.Errorf("spec.source.triggerBindings[%d].bindingKey is required", i)
 		}
+		if b.Config != nil {
+			if err := validateNonSecretConfig(fmt.Sprintf("spec.source.triggerBindings[%d].config", i), b.Config.Raw); err != nil {
+				return err
+			}
+		}
 	}
 	// Steps: at least one, unique names, valid kinds; index approval_gate steps
-	// for completion/blocker reference checks.
+	// for completion/blocker reference checks. A tool_call step must declare its
+	// tool and that tool must be a requested capability, so a workflow cannot
+	// register a tool_call for an unauthorized/unknown tool (REQ-010; acceptance:
+	// unknown tool fails before execution).
+	requestedTools := make(map[string]bool, len(wf.Spec.RequestedCapabilities))
+	for _, c := range wf.Spec.RequestedCapabilities {
+		requestedTools[c.Tool] = true
+	}
 	if len(wf.Spec.Steps) == 0 {
 		return fmt.Errorf("spec.steps must have at least one step")
 	}
@@ -260,6 +302,14 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 		case v1alpha1.WorkflowStepAgentTask, v1alpha1.WorkflowStepToolCall, v1alpha1.WorkflowStepApprovalGate:
 		default:
 			return fmt.Errorf("spec.steps[%d].kind %q is unknown (must be agent_task, tool_call, or approval_gate)", i, s.Kind)
+		}
+		if s.Kind == v1alpha1.WorkflowStepToolCall {
+			if s.Tool == "" {
+				return fmt.Errorf("spec.steps[%d].tool is required for kind=tool_call", i)
+			}
+			if !requestedTools[s.Tool] {
+				return fmt.Errorf("spec.steps[%d].tool %q is not a requested capability (tool_call must reference a requested gateway capability, REQ-010)", i, s.Tool)
+			}
 		}
 		seenSteps[s.Name] = s.Kind
 	}
@@ -479,6 +529,39 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 	return spec
 }
 
+// secretKeyDenylist are case-insensitive substrings that indicate a config
+// key names a credential/secret. Trigger-binding config carrying such a key is
+// rejected so raw credential values never enter Postgres (ARCH-008). This is
+// an enforceable boundary on the opaque config payload: config must be a flat
+// JSON object of non-secret routing fields, never a secret value.
+var secretKeyDenylist = []string{
+	"secret", "token", "password", "passwd", "credential", "credential",
+	"apikey", "api_key", "privatekey", "private_key", "accesskey", "access_key",
+	"clientsecret", "client_secret",
+}
+
+// validateNonSecretConfig enforces the ARCH-008 boundary that raw credential
+// values never enter Postgres on an opaque trigger-binding config payload. The
+// payload must be a JSON object (not a scalar/array/secret blob) whose keys do
+// not match the secret denylist. It does not interpret the fields (downstream
+// ingress tickets HOR-356/393 define their own non-secret schemas); it only
+// guarantees no secret-named value is persisted.
+func validateNonSecretConfig(field string, raw []byte) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return fmt.Errorf("%s must be a JSON object of non-secret routing fields: %w", field, err)
+	}
+	for k := range obj {
+		lk := strings.ToLower(k)
+		for _, bad := range secretKeyDenylist {
+			if strings.Contains(lk, bad) {
+				return fmt.Errorf("%s key %q looks like a secret; raw credential values must not be embedded (ARCH-008)", field, k)
+			}
+		}
+	}
+	return nil
+}
+
 // rawJSON returns the raw bytes of an apiextensionsv1.JSON, or nil.
 func rawJSON(j *apiextensionsv1.JSON) json.RawMessage {
 	if j == nil {
@@ -515,13 +598,14 @@ func permittedToolNames(caps []v1alpha1.RequestedCapability) []string {
 }
 
 // workflowScopeIdentityKey is the natural key of the kind=workflow scope
-// identity runs execute under. Defaults to "<ns>/<name>" (the CR key) unless
-// spec.scopeIdentityKey overrides it.
+// identity runs execute under. It is a collision-free, workflow-owned key:
+// the "workflow:" prefix reserves a keyspace distinct from IdentityMapping's
+// "<ns>/<name>" format, so a Workflow CR cannot overwrite or soft-delete an
+// unrelated identity (REQ-010 durable workflow-identity boundary). The CR key
+// "<ns>/<name>" is stable across version updates of the same Workflow, so all
+// versions of one workflow share one execution identity.
 func workflowScopeIdentityKey(wf *v1alpha1.Workflow) string {
-	if wf.Spec.ScopeIdentityKey != "" {
-		return wf.Spec.ScopeIdentityKey
-	}
-	return fmt.Sprintf("%s/%s", wf.Namespace, wf.Name)
+	return fmt.Sprintf("workflow:%s/%s", wf.Namespace, wf.Name)
 }
 
 // agentPoolKeyFromRef is the toolgateway.pools natural key for the referenced

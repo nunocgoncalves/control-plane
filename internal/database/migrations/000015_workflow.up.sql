@@ -36,16 +36,20 @@ CREATE SCHEMA IF NOT EXISTS workflow;
 -- ---------------------------------------------------------------------------
 -- definitions: immutable versioned workflow definitions (ARCH-007/REQ-001).
 --
--- (key, version) is unique; (key, digest) is unique. A content change publishes
--- a NEW row (a new version); old versions remain resolvable for in-flight
--- attempts. validation_status is inspectable (REQ-001 acceptance: "registered
--- with immutable version identity and inspectable validation status"). scope_identity_id
--- is the kind=workflow identity runs execute under (HOR-242).
+-- (key, version) is the immutable identity. A content change publishes a NEW
+-- row (a new version); old versions remain resolvable for in-flight attempts.
+-- validation_status is inspectable (REQ-001 acceptance: "registered with
+-- immutable version identity and inspectable validation status").
+-- scope_identity_id is the kind=workflow identity runs execute under (HOR-242).
+--
+-- (key, version) alone is unique: two versions may legitimately share the same
+-- content digest, and each must be independently resolvable by its version
+-- identity. Idempotent re-registration is on (key, version, digest).
 -- ---------------------------------------------------------------------------
 CREATE TABLE workflow.definitions (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    key               text NOT NULL,                       -- stable natural key (e.g. "walter/quotation")
-    version           text NOT NULL,                       -- immutable version identity component
+    key               text NOT NULL,                       -- stable natural key (e.g. "walter/quotation"); excludes ":" (wire format)
+    version           text NOT NULL,                       -- immutable version identity component; excludes ":" (wire format)
     digest            text NOT NULL,                       -- canonical spec content digest (immutable identity)
     spec_json         jsonb NOT NULL,                      -- the canonical materialized spec
     validation_status text NOT NULL DEFAULT 'valid' CHECK (validation_status IN ('valid', 'invalid')),
@@ -56,8 +60,7 @@ CREATE TABLE workflow.definitions (
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
     deleted_at        timestamptz,
-    UNIQUE (key, version),
-    UNIQUE (key, digest)
+    UNIQUE (key, version)
 );
 
 CREATE INDEX idx_definitions_key ON workflow.definitions (key) WHERE deleted_at IS NULL;

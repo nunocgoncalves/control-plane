@@ -78,7 +78,7 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 			},
 			Steps: []v1alpha1.WorkflowStep{
 				{Name: "classify", Kind: v1alpha1.WorkflowStepAgentTask, Config: jsonConfig(`{"prompt":"classify"}`)},
-				{Name: "write", Kind: v1alpha1.WorkflowStepToolCall},
+				{Name: "write", Kind: v1alpha1.WorkflowStepToolCall, Tool: "graph.excel.write"},
 				{Name: "review", Kind: v1alpha1.WorkflowStepApprovalGate},
 			},
 			RequestedCapabilities: []v1alpha1.RequestedCapability{
@@ -162,7 +162,8 @@ func TestWorkflowValidation(t *testing.T) {
 	// Capability beyond pool: effect class exceeds grant -> rejected.
 	tooMuch := validWalterWorkflow("w", ns, "walter-pool")
 	tooMuch.Spec.RequestedCapabilities = []v1alpha1.RequestedCapability{
-		{Tool: "graph.read", MaxEffectClass: "non_idempotent_write"}, // pool grants read_only
+		{Tool: "graph.read", MaxEffectClass: "non_idempotent_write"},    // pool grants read_only
+		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}, // keep tool_call step authorized
 	}
 	err = newReconciler(pool).validateSpec(ctx, tooMuch)
 	require.Error(t, err)
@@ -172,6 +173,7 @@ func TestWorkflowValidation(t *testing.T) {
 	badAction := validWalterWorkflow("w", ns, "walter-pool")
 	badAction.Spec.RequestedCapabilities = []v1alpha1.RequestedCapability{
 		{Tool: "graph.read", MaxEffectClass: "read_only", Actions: []string{"send"}}, // pool allows read,list
+		{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},              // keep tool_call step authorized
 	}
 	err = newReconciler(pool).validateSpec(ctx, badAction)
 	require.Error(t, err)
@@ -181,6 +183,41 @@ func TestWorkflowValidation(t *testing.T) {
 	err = newReconciler().validateSpec(ctx, validWalterWorkflow("w", ns, "missing-pool"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+
+	// tool_call without a tool -> rejected (unknown tool must fail before execution).
+	noTool := validWalterWorkflow("w", ns, "walter-pool")
+	noTool.Spec.Steps[1].Tool = ""
+	err = newReconciler(pool).validateSpec(ctx, noTool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool is required for kind=tool_call")
+
+	// tool_call referencing a tool not in requestedCapabilities -> rejected (REQ-010).
+	unknownTool := validWalterWorkflow("w", ns, "walter-pool")
+	unknownTool.Spec.Steps[1].Tool = "graph.mail.send"
+	err = newReconciler(pool).validateSpec(ctx, unknownTool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a requested capability")
+
+	// Trigger binding config with a secret-named key -> rejected (ARCH-008).
+	secretCfg := validWalterWorkflow("w", ns, "walter-pool")
+	secretCfg.Spec.Source.TriggerBindings[0].Config = jsonConfig(`{"clientSecret":"shh"}`)
+	err = newReconciler(pool).validateSpec(ctx, secretCfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secret")
+
+	// key containing ":" -> rejected (definition_key wire format ambiguity, REQ-010).
+	colonKey := validWalterWorkflow("w", ns, "walter-pool")
+	colonKey.Spec.Key = "a:b"
+	err = newReconciler(pool).validateSpec(ctx, colonKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not contain \":\"")
+
+	// version containing ":" -> rejected.
+	colonVer := validWalterWorkflow("w", ns, "walter-pool")
+	colonVer.Spec.Version = "1:0"
+	err = newReconciler(pool).validateSpec(ctx, colonVer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not contain \":\"")
 
 	// operator_artifact (XBS) workflow is representable without customer rules.
 	xbs := &v1alpha1.Workflow{

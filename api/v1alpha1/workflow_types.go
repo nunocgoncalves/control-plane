@@ -20,17 +20,23 @@ import (
 type WorkflowSpec struct {
 	// key is the stable natural key of the workflow (e.g. "walter/quotation").
 	// It identifies the workflow across versions; a new version publishes a new
-	// immutable definition row under the same key.
+	// immutable definition row under the same key. It MUST NOT contain ":" — the
+	// definition_key wire format is "<key>:<version>", so ":" would make the
+	// concatenated key ambiguous (REQ-010 scope isolation).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[^:]+$`
 	Key string `json:"key"`
 
 	// version is the immutable version identity component (e.g. "1", "2"). A
 	// content change MUST be published under a new version; the reconciler
 	// rejects a content change under an already-registered (key, version)
-	// (ARCH-007 immutability).
+	// (ARCH-007 immutability). It MUST NOT contain ":" — the definition_key wire
+	// format is "<key>:<version>", so ":" would make the concatenated key
+	// ambiguous (REQ-010 scope isolation).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[^:]+$`
 	Version string `json:"version"`
 
 	// poolRef names the AgentPool (in the Workflow's namespace) that is the
@@ -83,12 +89,6 @@ type WorkflowSpec struct {
 	// single-workflow Dashboard (REQ-021). No separate Persona CRD exists in v1.
 	// +kubebuilder:validation:Required
 	Presentation PresentationSpec `json:"presentation"`
-
-	// scopeIdentityKey optionally overrides the natural key of the kind=workflow
-	// identity under whose permission/credential scope runs of this workflow
-	// execute. When empty it defaults to a key derived from the workflow key.
-	// +optional
-	ScopeIdentityKey string `json:"scopeIdentityKey,omitempty"`
 }
 
 // WorkflowSource defines the source adapter and trigger bindings that start a
@@ -153,13 +153,21 @@ type WorkflowStep struct {
 	// +kubebuilder:validation:Required
 	Kind string `json:"kind"`
 
-	// config is opaque step configuration (prompt, tool allow-list, branch
-	// condition, approver scope). The runtime stores but does not interpret it
-	// at definition time; HOR-249 evaluates it.
+	// config is opaque step configuration (prompt, arguments, branch condition,
+	// approver scope). The runtime stores but does not interpret it at definition
+	// time; HOR-249 evaluates it.
 	//
 	// +kubebuilder:pruning:NonPrefixed
 	// +optional
 	Config *apiextensionsv1.JSON `json:"config,omitempty"`
+
+	// tool is the logical gateway tool/capability a tool_call step invokes. It
+	// is required for kind=tool_call and MUST be declared in
+	// requestedCapabilities, so a workflow cannot register a tool_call step for
+	// an unauthorized or unknown tool (REQ-010; acceptance: unknown tool fails
+	// before execution). Ignored for agent_task and approval_gate steps.
+	// +optional
+	Tool string `json:"tool,omitempty"`
 }
 
 // RequestedCapability is one gateway tool the workflow requests (REQ-010).

@@ -106,8 +106,11 @@ spec:
                 description: |-
                   key is the stable natural key of the workflow (e.g. "walter/quotation").
                   It identifies the workflow across versions; a new version publishes a new
-                  immutable definition row under the same key.
+                  immutable definition row under the same key. It MUST NOT contain ":" — the
+                  definition_key wire format is "<key>:<version>", so ":" would make the
+                  concatenated key ambiguous (REQ-010 scope isolation).
                 minLength: 1
+                pattern: ^[^:]+$
                 type: string
               poolRef:
                 description: |-
@@ -186,12 +189,6 @@ spec:
                   - tool
                   type: object
                 type: array
-              scopeIdentityKey:
-                description: |-
-                  scopeIdentityKey optionally overrides the natural key of the kind=workflow
-                  identity under whose permission/credential scope runs of this workflow
-                  execute. When empty it defaults to a key derived from the workflow key.
-                type: string
               source:
                 description: |-
                   source defines the source adapter/trigger that starts a run of this
@@ -260,9 +257,9 @@ spec:
                   properties:
                     config:
                       description: |-
-                        config is opaque step configuration (prompt, tool allow-list, branch
-                        condition, approver scope). The runtime stores but does not interpret it
-                        at definition time; HOR-249 evaluates it.
+                        config is opaque step configuration (prompt, arguments, branch condition,
+                        approver scope). The runtime stores but does not interpret it at definition
+                        time; HOR-249 evaluates it.
                       x-kubernetes-preserve-unknown-fields: true
                     kind:
                       description: kind is the step kind.
@@ -276,6 +273,14 @@ spec:
                         name is the step name, unique within the workflow. Referenced by
                         completionRule.ref and blocker.step.
                       minLength: 1
+                      type: string
+                    tool:
+                      description: |-
+                        tool is the logical gateway tool/capability a tool_call step invokes. It
+                        is required for kind=tool_call and MUST be declared in
+                        requestedCapabilities, so a workflow cannot register a tool_call step for
+                        an unauthorized or unknown tool (REQ-010; acceptance: unknown tool fails
+                        before execution). Ignored for agent_task and approval_gate steps.
                       type: string
                   required:
                   - kind
@@ -294,8 +299,11 @@ spec:
                   version is the immutable version identity component (e.g. "1", "2"). A
                   content change MUST be published under a new version; the reconciler
                   rejects a content change under an already-registered (key, version)
-                  (ARCH-007 immutability).
+                  (ARCH-007 immutability). It MUST NOT contain ":" — the definition_key wire
+                  format is "<key>:<version>", so ":" would make the concatenated key
+                  ambiguous (REQ-010 scope isolation).
                 minLength: 1
+                pattern: ^[^:]+$
                 type: string
             required:
             - completionRule

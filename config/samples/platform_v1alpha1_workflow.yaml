@@ -39,8 +39,8 @@ spec:
         prompt: "Extract the agreed fields from the quotation."
     - name: write-excel
       kind: tool_call
-      config:
-        tool: graph.excel.write
+      tool: graph.excel.write   # must be declared in requestedCapabilities (REQ-010)
+      # config may carry non-secret tool arguments (prompt inputs, options).
     - name: review
       kind: approval_gate
       config:

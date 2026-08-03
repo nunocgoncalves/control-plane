@@ -2,11 +2,13 @@
 // (HOR-252): the Postgres-backed registry of operator-defined, versioned
 // customer workflows and their non-secret trigger bindings.
 //
-// A definition is immutable per version (ARCH-007): (key, version) is unique
-// and (key, digest) is unique. Publishing a content change creates a new row
+// A definition is immutable per version (ARCH-007): (key, version) is the
+// unique immutable identity. Publishing a content change creates a new row
 // under a new version; the same (key, version) with different content is
-// rejected. Re-registering the same digest is idempotent. The definition_key
-// wire format "<key>:<version>" is the stable cross-schema reference stored in
+// rejected. Re-registering the same (key, version, digest) is idempotent. Two
+// versions may share a content digest and remain independently resolvable by
+// their version identity. The definition_key wire format "<key>:<version>"
+// (key/version exclude ":") is the stable cross-schema reference stored in
 // runtime.workflow_runs.definition_key (HOR-246) and
 // toolgateway.workflow_pool_bindings.workflow_definition_key (HOR-392).
 //
@@ -99,6 +101,15 @@ type ResolvedDefinition struct {
 	// workflow path; the binding always carries an explicit set (empty = deny
 	// all). Read from toolgateway.workflow_pool_bindings (cross-schema).
 	PermittedTools []string
+	// RequestedCapabilities is the complete workflow-requested capability
+	// narrowing (tool + maxEffectClass + actions) parsed from the immutable
+	// definition's spec_json. HOR-254's attempt creation enforces this narrowing
+	// at the gateway discovery/authorization boundary (ARCH-016: the gateway
+	// intersects pool grants with workflow-requested capabilities) so a workflow
+	// narrowed to read_only / a subset of actions is not widened back to the pool
+	// ceiling at runtime (REQ-001/REQ-010). The tool names in
+	// RequestedCapabilities correspond to PermittedTools.
+	RequestedCapabilities []CanonicalCapability
 }
 
 // Store reads and writes the workflow schema via a pgx connection pool.
@@ -119,16 +130,18 @@ func DefinitionKey(key, version string) string {
 }
 
 // RegisterDefinition inserts an immutable versioned definition. It is
-// idempotent on content: re-registering the same (key, digest) returns the
-// canonical row without mutation (ARCH-007). A different digest for the same
-// (key, version) is rejected with ErrImmutableVersion. Identical content
-// re-registered under a new version returns the existing content row.
-// validation_status is inspectable (REQ-001 acceptance).
+// idempotent on (key, version, digest): re-registering the same content under
+// the same (key, version) returns the canonical row without mutation
+// (ARCH-007). A different digest for the same (key, version) is rejected with
+// ErrImmutableVersion. A new version is always registered as a distinct
+// immutable identity, even when its content digest matches another version's,
+// so every published (key, version) is independently resolvable (REQ-001
+// acceptance: "immutable version identity"). validation_status is inspectable.
 //
-// ON CONFLICT DO NOTHING suppresses both the (key, version) and (key, digest)
-// unique constraints; the outcome is then determined by reading the canonical
-// row(s) so the immutability violation is surfaced as a typed error rather
-// than a raw SQL unique violation.
+// ON CONFLICT DO NOTHING suppresses the (key, version) unique constraint; the
+// outcome is then determined by reading the canonical row so an immutability
+// violation is surfaced as a typed error rather than a raw SQL unique
+// violation.
 func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definition, error) {
 	if d.Key == "" || d.Version == "" || d.Digest == "" {
 		return Definition{}, fmt.Errorf("workflow: key, version, and digest are required")
@@ -155,7 +168,7 @@ func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definitio
 	byVersion, err := s.GetDefinition(ctx, d.Key, d.Version)
 	if err == nil {
 		if byVersion.Digest == d.Digest {
-			return byVersion, nil // idempotent re-registration
+			return byVersion, nil // idempotent re-registration of the same version
 		}
 		return Definition{}, fmt.Errorf("%w: key %s version %s already registered with digest %s (ARCH-007)",
 			ErrImmutableVersion, d.Key, d.Version, byVersion.Digest)
@@ -163,13 +176,14 @@ func (s *Store) RegisterDefinition(ctx context.Context, d Definition) (Definitio
 	if !errors.Is(err, ErrNotFound) {
 		return Definition{}, fmt.Errorf("register definition: read canonical: %w", err)
 	}
-	// (key, version) not present: identical content may already be published
-	// under another version (same digest). Return that row idempotently.
-	byDigest, err := s.GetDefinitionByKeyDigest(ctx, d.Key, d.Digest)
+	// (key, version) not present: the insert succeeded and registered a new
+	// immutable version identity (distinct from any same-content version).
+	// Re-read the canonical row to return the assigned id/timestamps.
+	inserted, err := s.GetDefinition(ctx, d.Key, d.Version)
 	if err != nil {
-		return Definition{}, fmt.Errorf("register definition: resolve canonical: %w", err)
+		return Definition{}, fmt.Errorf("register definition: read inserted: %w", err)
 	}
-	return byDigest, nil
+	return inserted, nil
 }
 
 // GetDefinition fetches an active definition by (key, version).
@@ -179,21 +193,6 @@ func (s *Store) GetDefinition(ctx context.Context, key, version string) (Definit
 		       source_type, pool_key, presentation, created_at, updated_at
 		FROM workflow.definitions
 		WHERE key = $1 AND version = $2 AND deleted_at IS NULL`, key, version)
-	d, err := scanDefinition(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Definition{}, ErrNotFound
-	}
-	return d, err
-}
-
-// GetDefinitionByKeyDigest fetches an active definition by (key, digest) — the
-// immutable identity. Used by RegisterDefinition's idempotent re-registration.
-func (s *Store) GetDefinitionByKeyDigest(ctx context.Context, key, digest string) (Definition, error) {
-	row := s.pool.QueryRow(ctx, `
-		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,
-		       source_type, pool_key, presentation, created_at, updated_at
-		FROM workflow.definitions
-		WHERE key = $1 AND digest = $2 AND deleted_at IS NULL`, key, digest)
 	d, err := scanDefinition(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Definition{}, ErrNotFound
@@ -215,6 +214,32 @@ func (s *Store) GetLatestDefinition(ctx context.Context, key string) (Definition
 		return Definition{}, ErrNotFound
 	}
 	return d, err
+}
+
+// ListDefinitionsByKey returns every active definition row for a key (all
+// published versions). Used by CR-deletion cleanup to revoke the
+// workflow_pool_binding for every owned version before finalizer removal
+// (REQ-010: no usable gateway authorization may outlive the Workflow CR).
+func (s *Store) ListDefinitionsByKey(ctx context.Context, key string) ([]Definition, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, key, version, digest, spec_json, validation_status, scope_identity_id,
+		       source_type, pool_key, presentation, created_at, updated_at
+		FROM workflow.definitions
+		WHERE key = $1 AND deleted_at IS NULL
+		ORDER BY version`, key)
+	if err != nil {
+		return nil, fmt.Errorf("list definitions by key: %w", err)
+	}
+	defer rows.Close()
+	var out []Definition
+	for rows.Next() {
+		d, err := scanDefinition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // ReplaceTriggerBindings atomically replaces a definition's trigger bindings
@@ -354,7 +379,17 @@ func (s *Store) ResolveForAttempt(ctx context.Context, key, version string) (Res
 	if permitted == nil {
 		permitted = []string{}
 	}
-	return ResolvedDefinition{Definition: d, TriggerBindings: bindings, PermittedTools: permitted}, nil
+	// Parse the complete workflow-requested capability narrowing (tool +
+	// maxEffectClass + actions) from the immutable definition's spec_json so
+	// HOR-254 can enforce it at the gateway boundary (ARCH-016) without widening
+	// back to the pool ceiling (REQ-001/REQ-010). A malformed spec_json is a
+	// data-layer invariant violation, not a runtime authorization decision.
+	var spec CanonicalSpec
+	var caps []CanonicalCapability
+	if err := json.Unmarshal(d.SpecJSON, &spec); err == nil {
+		caps = spec.RequestedCapabilities
+	}
+	return ResolvedDefinition{Definition: d, TriggerBindings: bindings, PermittedTools: permitted, RequestedCapabilities: caps}, nil
 }
 
 // readPermittedTools reads the permitted tool set bound to a definition from

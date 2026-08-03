@@ -85,6 +85,36 @@ func TestRegisterDefinition_ImmutableVersionRejectsDifferentContent(t *testing.T
 	assert.ErrorIs(t, err, workflow.ErrImmutableVersion)
 }
 
+func TestRegisterDefinition_NewVersionSameContentCoexists(t *testing.T) {
+	// A new version with identical content must still register as a distinct
+	// immutable version identity and remain independently resolvable (the
+	// former (key, digest) unique constraint suppressed the insert and returned
+	// the existing version's row, leaving the new version unresolvable).
+	store, pool := newTestStore(t)
+	ctx := context.Background()
+	scopeID := insertWorkflowIdentity(t, pool, "wf/test-same-content")
+
+	d1, err := store.RegisterDefinition(ctx, sampleDefinition("walter/quotation", "1", scopeID))
+	require.NoError(t, err)
+
+	// Version 2 with byte-identical content (same digest).
+	same := sampleDefinition("walter/quotation", "1", scopeID)
+	same.Version = "2"
+	d2, err := store.RegisterDefinition(ctx, same)
+	require.NoError(t, err)
+	assert.Equal(t, "2", d2.Version)
+	assert.Equal(t, d1.Digest, d2.Digest, "same content => same digest")
+	assert.NotEqual(t, d1.ID, d2.ID, "distinct version identity")
+
+	// Both versions are independently resolvable.
+	got1, err := store.GetDefinition(ctx, "walter/quotation", "1")
+	require.NoError(t, err)
+	assert.Equal(t, "1", got1.Version)
+	got2, err := store.GetDefinition(ctx, "walter/quotation", "2")
+	require.NoError(t, err)
+	assert.Equal(t, "2", got2.Version)
+}
+
 func TestRegisterDefinition_NewVersionCoexists(t *testing.T) {
 	store, pool := newTestStore(t)
 	ctx := context.Background()
