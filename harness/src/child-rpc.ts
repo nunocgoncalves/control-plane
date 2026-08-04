@@ -39,6 +39,7 @@ export interface ToolCallRequest {
 }
 export interface ToolCallResult {
   resultJson?: string;
+  artifactRefs?: Array<{ artifactId: string; mimeType: string; sizeBytes: number; digest: string }>;
   isError: boolean;
   errorMessage?: string;
 }
@@ -57,6 +58,16 @@ interface PendingTool {
   resolve: (r: ToolCallResult) => void;
   cancelled: boolean;
 }
+export interface PublishedArtifact {
+  artifactId: string;
+  mimeType: string;
+  sizeBytes: number;
+  digest: string;
+}
+interface PendingArtifact {
+  resolve: (r: PublishedArtifact) => void;
+  reject: (err: Error) => void;
+}
 
 /** A unique request id generator (child-local; correlated on fd 5). */
 let requestCounter = 0;
@@ -71,6 +82,7 @@ export class ChildRpc {
   private readonly gatewayTools: Promise<GatewayToolDescriptor[]>;
   private readonly pendingModels = new Map<string, PendingModel>();
   private readonly pendingTools = new Map<string, PendingTool>();
+  private readonly pendingArtifacts = new Map<string, PendingArtifact>();
   private readonly pendingCompletions = new Map<string, () => void>();
   private closed = false;
 
@@ -174,6 +186,15 @@ export class ChildRpc {
     });
   }
 
+  /** Publish a relative workspace file through the trusted supervisor. */
+  publishArtifact(relativePath: string, mimeType: string): Promise<PublishedArtifact> {
+    const requestId = nextRequestId();
+    return new Promise<PublishedArtifact>((resolve, reject) => {
+      this.pendingArtifacts.set(requestId, { resolve, reject });
+      this.send({ type: "publishArtifact", requestId, relativePath, mimeType });
+    });
+  }
+
   /** Report complete_step through the trusted supervisor. Requests on fd 4 are
    * ordered, so the supervisor disables subsequent gateway calls before ACK. */
   reportStepCompletion(report: { outcome: string; summary: string; outputJson: string; artifactRefs: Array<{artifactId:string;role:string;metadataJson:string}> }): Promise<void> {
@@ -193,6 +214,8 @@ export class ChildRpc {
     this.pendingModels.clear();
     for (const p of this.pendingTools.values()) p.resolve({ isError: true, errorMessage: "child rpc closed" });
     this.pendingTools.clear();
+    for (const p of this.pendingArtifacts.values()) p.reject(new Error("child rpc closed"));
+    this.pendingArtifacts.clear();
     for (const resolve of this.pendingCompletions.values()) resolve();
     this.pendingCompletions.clear();
   }
@@ -240,6 +263,17 @@ export class ChildRpc {
         p.resolve(toolResultFrom(frame));
         return;
       }
+      case "artifactPublished": {
+        const p = this.pendingArtifacts.get(frame.requestId);
+        if (!p) return;
+        this.pendingArtifacts.delete(frame.requestId);
+        if (frame.errorMessage) {
+          p.reject(new Error(frame.errorMessage));
+        } else {
+          p.resolve({ artifactId: frame.artifactId!, mimeType: frame.mimeType!, sizeBytes: frame.sizeBytes!, digest: frame.digest! });
+        }
+        return;
+      }
       case "stepCompletionAck": {
         const resolve = this.pendingCompletions.get(frame.requestId);
         if (!resolve) return;
@@ -261,6 +295,11 @@ export class ChildRpc {
           t.cancelled = true;
           t.resolve({ isError: true, errorMessage: "supervisor cancel" });
         }
+        const a = this.pendingArtifacts.get(frame.requestId);
+        if (a) {
+          this.pendingArtifacts.delete(frame.requestId);
+          a.reject(new Error("supervisor cancel"));
+        }
         return;
       }
     }
@@ -270,6 +309,7 @@ export class ChildRpc {
 function toolResultFrom(f: ToolResultFrame): ToolCallResult {
   const r: ToolCallResult = { isError: f.isError };
   if (f.resultJson !== undefined) r.resultJson = f.resultJson;
+  if (f.artifactRefs !== undefined) r.artifactRefs = f.artifactRefs;
   if (f.errorMessage !== undefined) r.errorMessage = f.errorMessage;
   return r;
 }

@@ -43,7 +43,7 @@ bidi method: `rpc Work(stream WorkerMessage) returns (stream ControlMessage)`.
   `Heartbeat`, `TurnEvent` (durable, sequenced, cumulatively ACKed),
   `TokenDelta` (ephemeral, non-sequenced — live token streaming).
 - **CP→worker:** `Welcome` (fencing generation + lease intervals),
-  `AssignTurn` (per-turn session/persona/model/workspace-tools/run-id/sandbox/message),
+  `AssignTurn` (per-turn session/persona/model/workspace-tools/run-id/sandbox/message plus exact artifact materializations),
   `AbortTurn` (idempotent), `EventAck` (cumulative, post-Postgres-commit),
   `SessionEnd` (session terminated → supervisor reaps the per-session sandbox;
   legal only when no turn is active).
@@ -74,6 +74,16 @@ child runs under the session UID with `no_new_privs` + all caps dropped
 (kernel `EACCES` for sibling session roots). Extension code is pool-bound read-only; the per-turn
 `workspaceTools` switch (ARCH-016) exposes exactly pi's built-in
 `read`/`write`/`edit`/`bash` when enabled — no arbitrary local-tool catalogue.
+
+HOR-399 materializes only the canonical artifact references carried by
+`AssignTurn`, before child startup, under the session UID/GID. Size and SHA-256
+must match the service metadata or the turn fails. The reserved
+`publish_artifact(relative_path, mime_type)` platform control function crosses
+fd 4/fd 5 to the supervisor, which opens a regular file without following the
+final symlink, verifies the opened fd still resolves beneath `workspace/`, and
+streams it through the gateway ArtifactService. It is not a fifth AgentPool
+workspace tool. The child receives no MinIO credential, URL, endpoint, or
+network route.
 
 ## Config (`/etc/harness/config.yaml`, ConfigMap-mounted by HOR-245)
 
@@ -117,7 +127,8 @@ streams (ARCH-011).
 - `child.ts` — the pi child: `AgentSession` + custom `streamSimple` provider +
   gateway tool stubs + pi-event → `TurnEvent` mapping.
 - `child-rpc.ts` — child→supervisor RPC demux (model/tool requests over fd 4/fd 5).
-- `gateway-client.ts` — supervisor→tool-gateway Connect client (discover/invoke/cancel).
+- `gateway-client.ts` — supervisor→gateway Connect client (tool discovery/invocation plus streaming artifacts).
+- `artifact-files.ts` — verified input materialization + fd-bound secure publication.
 - `model-bridge.ts` — supervisor→inference-gateway HTTP/2 mTLS SSE bridge.
 - `openai-stream.ts` — OpenAI SSE → pi `AssistantMessageEvent` (child-owned model semantics).
 - `ipc.ts` — framed discriminated-union IPC for fd 0/3/4/5 + runtime validation.

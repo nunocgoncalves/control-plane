@@ -2328,8 +2328,11 @@ type AssignTurn struct {
 	CompletionOutputSchemaJson string                 `protobuf:"bytes,15,opt,name=completion_output_schema_json,json=completionOutputSchemaJson,proto3" json:"completion_output_schema_json,omitempty"` // JSON Schema for complete_step.output
 	Skills                     []*SkillRef            `protobuf:"bytes,16,rep,name=skills,proto3" json:"skills,omitempty"`                                                                               // exact immutable node skill subset
 	WorkItemId                 string                 `protobuf:"bytes,17,opt,name=work_item_id,json=workItemId,proto3" json:"work_item_id,omitempty"`                                                   // stable customer-facing work item identity
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// Exact authorized input set. The supervisor materializes these before the
+	// child starts; the child cannot request an arbitrary artifact id.
+	Materializations []*ArtifactMaterialization `protobuf:"bytes,18,rep,name=materializations,proto3" json:"materializations,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AssignTurn) Reset() {
@@ -2481,6 +2484,13 @@ func (x *AssignTurn) GetWorkItemId() string {
 	return ""
 }
 
+func (x *AssignTurn) GetMaterializations() []*ArtifactMaterialization {
+	if x != nil {
+		return x.Materializations
+	}
+	return nil
+}
+
 type SkillRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -2541,6 +2551,129 @@ func (x *SkillRef) GetDigest() string {
 	return ""
 }
 
+type ArtifactRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactId    string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
+	MimeType      string                 `protobuf:"bytes,2,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Digest        string                 `protobuf:"bytes,4,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactRef) Reset() {
+	*x = ArtifactRef{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactRef) ProtoMessage() {}
+
+func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactRef.ProtoReflect.Descriptor instead.
+func (*ArtifactRef) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ArtifactRef) GetArtifactId() string {
+	if x != nil {
+		return x.ArtifactId
+	}
+	return ""
+}
+
+func (x *ArtifactRef) GetMimeType() string {
+	if x != nil {
+		return x.MimeType
+	}
+	return ""
+}
+
+func (x *ArtifactRef) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ArtifactRef) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+type ArtifactMaterialization struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Ref   *ArtifactRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	// Relative to workspace/. Must be clean, non-empty, and non-escaping. The
+	// dispatcher chooses it from durable context; customer filenames are never
+	// used as path segments without sanitization.
+	RelativePath  string `protobuf:"bytes,2,opt,name=relative_path,json=relativePath,proto3" json:"relative_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactMaterialization) Reset() {
+	*x = ArtifactMaterialization{}
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactMaterialization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactMaterialization) ProtoMessage() {}
+
+func (x *ArtifactMaterialization) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactMaterialization.ProtoReflect.Descriptor instead.
+func (*ArtifactMaterialization) Descriptor() ([]byte, []int) {
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ArtifactMaterialization) GetRef() *ArtifactRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *ArtifactMaterialization) GetRelativePath() string {
+	if x != nil {
+		return x.RelativePath
+	}
+	return ""
+}
+
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
 // Under the HOR-381 provisioning rescope (founder-approved 2026-08-02), the
 // supervisor itself provisions this sandbox at AssignTurn: provisionSandbox
@@ -2563,7 +2696,7 @@ type SandboxRef struct {
 
 func (x *SandboxRef) Reset() {
 	*x = SandboxRef{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2575,7 +2708,7 @@ func (x *SandboxRef) String() string {
 func (*SandboxRef) ProtoMessage() {}
 
 func (x *SandboxRef) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[27]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2588,7 +2721,7 @@ func (x *SandboxRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
 func (*SandboxRef) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{27}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SandboxRef) GetSandboxId() string {
@@ -2632,7 +2765,7 @@ type ModelConfig struct {
 
 func (x *ModelConfig) Reset() {
 	*x = ModelConfig{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2644,7 +2777,7 @@ func (x *ModelConfig) String() string {
 func (*ModelConfig) ProtoMessage() {}
 
 func (x *ModelConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[28]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2657,7 +2790,7 @@ func (x *ModelConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelConfig.ProtoReflect.Descriptor instead.
 func (*ModelConfig) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{28}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ModelConfig) GetId() string {
@@ -2705,7 +2838,7 @@ type Image struct {
 
 func (x *Image) Reset() {
 	*x = Image{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2717,7 +2850,7 @@ func (x *Image) String() string {
 func (*Image) ProtoMessage() {}
 
 func (x *Image) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[29]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2730,7 +2863,7 @@ func (x *Image) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Image.ProtoReflect.Descriptor instead.
 func (*Image) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{29}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *Image) GetData() []byte {
@@ -2761,7 +2894,7 @@ type AbortTurn struct {
 
 func (x *AbortTurn) Reset() {
 	*x = AbortTurn{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2773,7 +2906,7 @@ func (x *AbortTurn) String() string {
 func (*AbortTurn) ProtoMessage() {}
 
 func (x *AbortTurn) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[30]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2786,7 +2919,7 @@ func (x *AbortTurn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortTurn.ProtoReflect.Descriptor instead.
 func (*AbortTurn) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{30}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AbortTurn) GetTurnId() string {
@@ -2824,7 +2957,7 @@ type EventAck struct {
 
 func (x *EventAck) Reset() {
 	*x = EventAck{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2836,7 +2969,7 @@ func (x *EventAck) String() string {
 func (*EventAck) ProtoMessage() {}
 
 func (x *EventAck) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[31]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2849,7 +2982,7 @@ func (x *EventAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventAck.ProtoReflect.Descriptor instead.
 func (*EventAck) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{31}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *EventAck) GetTurnId() string {
@@ -2910,7 +3043,7 @@ type SessionEnd struct {
 
 func (x *SessionEnd) Reset() {
 	*x = SessionEnd{}
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2922,7 +3055,7 @@ func (x *SessionEnd) String() string {
 func (*SessionEnd) ProtoMessage() {}
 
 func (x *SessionEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[32]
+	mi := &file_iterabase_harness_v1_harness_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2935,7 +3068,7 @@ func (x *SessionEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEnd.ProtoReflect.Descriptor instead.
 func (*SessionEnd) Descriptor() ([]byte, []int) {
-	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{32}
+	return file_iterabase_harness_v1_harness_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SessionEnd) GetSandboxId() string {
@@ -3108,7 +3241,7 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
 	"\x12fencing_generation\x18\x02 \x01(\x04R\x11fencingGeneration\x122\n" +
 	"\x15heartbeat_interval_ms\x18\x03 \x01(\x05R\x13heartbeatIntervalMs\x12(\n" +
-	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\xc6\x05\n" +
+	"\x10lease_timeout_ms\x18\x04 \x01(\x05R\x0eleaseTimeoutMs\"\xa1\x06\n" +
 	"\n" +
 	"AssignTurn\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1d\n" +
@@ -3130,11 +3263,22 @@ const file_iterabase_harness_v1_harness_proto_rawDesc = "" +
 	"\x1dcompletion_output_schema_json\x18\x0f \x01(\tR\x1acompletionOutputSchemaJson\x126\n" +
 	"\x06skills\x18\x10 \x03(\v2\x1e.iterabase.harness.v1.SkillRefR\x06skills\x12 \n" +
 	"\fwork_item_id\x18\x11 \x01(\tR\n" +
-	"workItemId\"P\n" +
+	"workItemId\x12Y\n" +
+	"\x10materializations\x18\x12 \x03(\v2-.iterabase.harness.v1.ArtifactMaterializationR\x10materializations\"P\n" +
 	"\bSkillRef\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\tR\x06digest\"p\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\"\x82\x01\n" +
+	"\vArtifactRef\x12\x1f\n" +
+	"\vartifact_id\x18\x01 \x01(\tR\n" +
+	"artifactId\x12\x1b\n" +
+	"\tmime_type\x18\x02 \x01(\tR\bmimeType\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12\x16\n" +
+	"\x06digest\x18\x04 \x01(\tR\x06digest\"s\n" +
+	"\x17ArtifactMaterialization\x123\n" +
+	"\x03ref\x18\x01 \x01(\v2!.iterabase.harness.v1.ArtifactRefR\x03ref\x12#\n" +
+	"\rrelative_path\x18\x02 \x01(\tR\frelativePath\"p\n" +
 	"\n" +
 	"SandboxRef\x12\x1d\n" +
 	"\n" +
@@ -3218,47 +3362,49 @@ func file_iterabase_harness_v1_harness_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_harness_v1_harness_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_iterabase_harness_v1_harness_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_iterabase_harness_v1_harness_proto_goTypes = []any{
-	(WorkerState)(0),            // 0: iterabase.harness.v1.WorkerState
-	(PiPhase)(0),                // 1: iterabase.harness.v1.PiPhase
-	(Retryability)(0),           // 2: iterabase.harness.v1.Retryability
-	(Outcome)(0),                // 3: iterabase.harness.v1.Outcome
-	(DeltaType)(0),              // 4: iterabase.harness.v1.DeltaType
-	(AbortReason)(0),            // 5: iterabase.harness.v1.AbortReason
-	(*WorkerMessage)(nil),       // 6: iterabase.harness.v1.WorkerMessage
-	(*Hello)(nil),               // 7: iterabase.harness.v1.Hello
-	(*Ready)(nil),               // 8: iterabase.harness.v1.Ready
-	(*Heartbeat)(nil),           // 9: iterabase.harness.v1.Heartbeat
-	(*TurnEvent)(nil),           // 10: iterabase.harness.v1.TurnEvent
-	(*ExecutionStarted)(nil),    // 11: iterabase.harness.v1.ExecutionStarted
-	(*ModelCallStarted)(nil),    // 12: iterabase.harness.v1.ModelCallStarted
-	(*AssistantMessage)(nil),    // 13: iterabase.harness.v1.AssistantMessage
-	(*ToolCall)(nil),            // 14: iterabase.harness.v1.ToolCall
-	(*ToolCallStarted)(nil),     // 15: iterabase.harness.v1.ToolCallStarted
-	(*ToolResult)(nil),          // 16: iterabase.harness.v1.ToolResult
-	(*Usage)(nil),               // 17: iterabase.harness.v1.Usage
-	(*ModelCallFailed)(nil),     // 18: iterabase.harness.v1.ModelCallFailed
-	(*ModelRetryScheduled)(nil), // 19: iterabase.harness.v1.ModelRetryScheduled
-	(*ModelRetryFinished)(nil),  // 20: iterabase.harness.v1.ModelRetryFinished
-	(*CompactionStarted)(nil),   // 21: iterabase.harness.v1.CompactionStarted
-	(*CompactionFinished)(nil),  // 22: iterabase.harness.v1.CompactionFinished
-	(*HarnessError)(nil),        // 23: iterabase.harness.v1.HarnessError
-	(*ErrorDetail)(nil),         // 24: iterabase.harness.v1.ErrorDetail
-	(*StepCompletion)(nil),      // 25: iterabase.harness.v1.StepCompletion
-	(*StepArtifactRef)(nil),     // 26: iterabase.harness.v1.StepArtifactRef
-	(*WorkerOutcome)(nil),       // 27: iterabase.harness.v1.WorkerOutcome
-	(*TokenDelta)(nil),          // 28: iterabase.harness.v1.TokenDelta
-	(*ControlMessage)(nil),      // 29: iterabase.harness.v1.ControlMessage
-	(*Welcome)(nil),             // 30: iterabase.harness.v1.Welcome
-	(*AssignTurn)(nil),          // 31: iterabase.harness.v1.AssignTurn
-	(*SkillRef)(nil),            // 32: iterabase.harness.v1.SkillRef
-	(*SandboxRef)(nil),          // 33: iterabase.harness.v1.SandboxRef
-	(*ModelConfig)(nil),         // 34: iterabase.harness.v1.ModelConfig
-	(*Image)(nil),               // 35: iterabase.harness.v1.Image
-	(*AbortTurn)(nil),           // 36: iterabase.harness.v1.AbortTurn
-	(*EventAck)(nil),            // 37: iterabase.harness.v1.EventAck
-	(*SessionEnd)(nil),          // 38: iterabase.harness.v1.SessionEnd
+	(WorkerState)(0),                // 0: iterabase.harness.v1.WorkerState
+	(PiPhase)(0),                    // 1: iterabase.harness.v1.PiPhase
+	(Retryability)(0),               // 2: iterabase.harness.v1.Retryability
+	(Outcome)(0),                    // 3: iterabase.harness.v1.Outcome
+	(DeltaType)(0),                  // 4: iterabase.harness.v1.DeltaType
+	(AbortReason)(0),                // 5: iterabase.harness.v1.AbortReason
+	(*WorkerMessage)(nil),           // 6: iterabase.harness.v1.WorkerMessage
+	(*Hello)(nil),                   // 7: iterabase.harness.v1.Hello
+	(*Ready)(nil),                   // 8: iterabase.harness.v1.Ready
+	(*Heartbeat)(nil),               // 9: iterabase.harness.v1.Heartbeat
+	(*TurnEvent)(nil),               // 10: iterabase.harness.v1.TurnEvent
+	(*ExecutionStarted)(nil),        // 11: iterabase.harness.v1.ExecutionStarted
+	(*ModelCallStarted)(nil),        // 12: iterabase.harness.v1.ModelCallStarted
+	(*AssistantMessage)(nil),        // 13: iterabase.harness.v1.AssistantMessage
+	(*ToolCall)(nil),                // 14: iterabase.harness.v1.ToolCall
+	(*ToolCallStarted)(nil),         // 15: iterabase.harness.v1.ToolCallStarted
+	(*ToolResult)(nil),              // 16: iterabase.harness.v1.ToolResult
+	(*Usage)(nil),                   // 17: iterabase.harness.v1.Usage
+	(*ModelCallFailed)(nil),         // 18: iterabase.harness.v1.ModelCallFailed
+	(*ModelRetryScheduled)(nil),     // 19: iterabase.harness.v1.ModelRetryScheduled
+	(*ModelRetryFinished)(nil),      // 20: iterabase.harness.v1.ModelRetryFinished
+	(*CompactionStarted)(nil),       // 21: iterabase.harness.v1.CompactionStarted
+	(*CompactionFinished)(nil),      // 22: iterabase.harness.v1.CompactionFinished
+	(*HarnessError)(nil),            // 23: iterabase.harness.v1.HarnessError
+	(*ErrorDetail)(nil),             // 24: iterabase.harness.v1.ErrorDetail
+	(*StepCompletion)(nil),          // 25: iterabase.harness.v1.StepCompletion
+	(*StepArtifactRef)(nil),         // 26: iterabase.harness.v1.StepArtifactRef
+	(*WorkerOutcome)(nil),           // 27: iterabase.harness.v1.WorkerOutcome
+	(*TokenDelta)(nil),              // 28: iterabase.harness.v1.TokenDelta
+	(*ControlMessage)(nil),          // 29: iterabase.harness.v1.ControlMessage
+	(*Welcome)(nil),                 // 30: iterabase.harness.v1.Welcome
+	(*AssignTurn)(nil),              // 31: iterabase.harness.v1.AssignTurn
+	(*SkillRef)(nil),                // 32: iterabase.harness.v1.SkillRef
+	(*ArtifactRef)(nil),             // 33: iterabase.harness.v1.ArtifactRef
+	(*ArtifactMaterialization)(nil), // 34: iterabase.harness.v1.ArtifactMaterialization
+	(*SandboxRef)(nil),              // 35: iterabase.harness.v1.SandboxRef
+	(*ModelConfig)(nil),             // 36: iterabase.harness.v1.ModelConfig
+	(*Image)(nil),                   // 37: iterabase.harness.v1.Image
+	(*AbortTurn)(nil),               // 38: iterabase.harness.v1.AbortTurn
+	(*EventAck)(nil),                // 39: iterabase.harness.v1.EventAck
+	(*SessionEnd)(nil),              // 40: iterabase.harness.v1.SessionEnd
 }
 var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	7,  // 0: iterabase.harness.v1.WorkerMessage.hello:type_name -> iterabase.harness.v1.Hello
@@ -3281,7 +3427,7 @@ var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	23, // 17: iterabase.harness.v1.TurnEvent.harness_error:type_name -> iterabase.harness.v1.HarnessError
 	27, // 18: iterabase.harness.v1.TurnEvent.worker_outcome:type_name -> iterabase.harness.v1.WorkerOutcome
 	25, // 19: iterabase.harness.v1.TurnEvent.step_completion:type_name -> iterabase.harness.v1.StepCompletion
-	33, // 20: iterabase.harness.v1.ExecutionStarted.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	35, // 20: iterabase.harness.v1.ExecutionStarted.sandbox:type_name -> iterabase.harness.v1.SandboxRef
 	14, // 21: iterabase.harness.v1.AssistantMessage.tool_calls:type_name -> iterabase.harness.v1.ToolCall
 	17, // 22: iterabase.harness.v1.AssistantMessage.usage:type_name -> iterabase.harness.v1.Usage
 	24, // 23: iterabase.harness.v1.ModelCallFailed.error:type_name -> iterabase.harness.v1.ErrorDetail
@@ -3292,21 +3438,23 @@ var file_iterabase_harness_v1_harness_proto_depIdxs = []int32{
 	4,  // 28: iterabase.harness.v1.TokenDelta.type:type_name -> iterabase.harness.v1.DeltaType
 	30, // 29: iterabase.harness.v1.ControlMessage.welcome:type_name -> iterabase.harness.v1.Welcome
 	31, // 30: iterabase.harness.v1.ControlMessage.assign_turn:type_name -> iterabase.harness.v1.AssignTurn
-	36, // 31: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
-	37, // 32: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
-	38, // 33: iterabase.harness.v1.ControlMessage.session_end:type_name -> iterabase.harness.v1.SessionEnd
-	33, // 34: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
-	34, // 35: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
-	35, // 36: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
+	38, // 31: iterabase.harness.v1.ControlMessage.abort_turn:type_name -> iterabase.harness.v1.AbortTurn
+	39, // 32: iterabase.harness.v1.ControlMessage.event_ack:type_name -> iterabase.harness.v1.EventAck
+	40, // 33: iterabase.harness.v1.ControlMessage.session_end:type_name -> iterabase.harness.v1.SessionEnd
+	35, // 34: iterabase.harness.v1.AssignTurn.sandbox:type_name -> iterabase.harness.v1.SandboxRef
+	36, // 35: iterabase.harness.v1.AssignTurn.model:type_name -> iterabase.harness.v1.ModelConfig
+	37, // 36: iterabase.harness.v1.AssignTurn.images:type_name -> iterabase.harness.v1.Image
 	32, // 37: iterabase.harness.v1.AssignTurn.skills:type_name -> iterabase.harness.v1.SkillRef
-	5,  // 38: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
-	6,  // 39: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
-	29, // 40: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
-	40, // [40:41] is the sub-list for method output_type
-	39, // [39:40] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	34, // 38: iterabase.harness.v1.AssignTurn.materializations:type_name -> iterabase.harness.v1.ArtifactMaterialization
+	33, // 39: iterabase.harness.v1.ArtifactMaterialization.ref:type_name -> iterabase.harness.v1.ArtifactRef
+	5,  // 40: iterabase.harness.v1.AbortTurn.reason:type_name -> iterabase.harness.v1.AbortReason
+	6,  // 41: iterabase.harness.v1.Harness.Work:input_type -> iterabase.harness.v1.WorkerMessage
+	29, // 42: iterabase.harness.v1.Harness.Work:output_type -> iterabase.harness.v1.ControlMessage
+	42, // [42:43] is the sub-list for method output_type
+	41, // [41:42] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_harness_v1_harness_proto_init() }
@@ -3349,7 +3497,7 @@ func file_iterabase_harness_v1_harness_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_harness_v1_harness_proto_rawDesc), len(file_iterabase_harness_v1_harness_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   33,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

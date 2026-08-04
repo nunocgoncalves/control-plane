@@ -18,12 +18,15 @@ import { createClient, type Transport } from "@connectrpc/connect";
 import { createGrpcTransport } from "@connectrpc/connect-node";
 import {
   GatewayService,
+  ArtifactService,
   EffectClass,
   CallerScope,
   type ToolDescriptor,
   type InvokeResponse,
   type CancelResponse,
   type DiscoverResponse,
+  type GetArtifactResponse,
+  type ArtifactMetadata,
 } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { HarnessConfig } from "./config.js";
 import type { GatewayToolDescriptor } from "./ipc.js";
@@ -66,6 +69,14 @@ export interface GatewayClient {
     call: { toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
     signal: AbortSignal | undefined,
   ): Promise<InvokeResponse>;
+  /** Stream an authorized artifact for supervisor materialization. */
+  getArtifact?(scope: AssignmentScope, artifactId: string, signal?: AbortSignal): AsyncIterable<GetArtifactResponse>;
+  /** Stream one validated sandbox file into a new immutable artifact. */
+  putArtifact?(
+    scope: AssignmentScope,
+    input: { mimeType: string; expectedSizeBytes: bigint; expectedDigest: string; chunks: AsyncIterable<Uint8Array> },
+    signal?: AbortSignal,
+  ): Promise<ArtifactMetadata>;
   /** Cancel an in-flight invocation (ARCH-014 — cannot undo an effect). */
   cancelInvocation(invocationId: string): Promise<CancelResponse>;
   /** Drop the memoized mTLS transport so the next call re-reads the cert/key/CA
@@ -122,6 +133,49 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
       }
     },
 
+    getArtifact(scope: AssignmentScope, artifactId: string, signal?: AbortSignal): AsyncIterable<GetArtifactResponse> {
+      const client = createClient(ArtifactService, getTransport());
+      const responses = client.getArtifact({ context: artifactContext(scope), artifactId }, signal ? { signal } : undefined);
+      return (async function* (): AsyncIterable<GetArtifactResponse> {
+        try {
+          for await (const response of responses) yield response;
+        } catch (err) {
+          throw new GatewayClientError(`get artifact ${artifactId} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+    },
+
+    async putArtifact(
+      scope: AssignmentScope,
+      input: { mimeType: string; expectedSizeBytes: bigint; expectedDigest: string; chunks: AsyncIterable<Uint8Array> },
+      signal?: AbortSignal,
+    ): Promise<ArtifactMetadata> {
+      const client = createClient(ArtifactService, getTransport());
+      async function* requests() {
+        yield {
+          kind: {
+            case: "init" as const,
+            value: {
+              context: artifactContext(scope),
+              mimeType: input.mimeType,
+              expectedSizeBytes: input.expectedSizeBytes,
+              expectedDigest: input.expectedDigest,
+            },
+          },
+        };
+        for await (const chunk of input.chunks) {
+          yield { kind: { case: "chunk" as const, value: chunk } };
+        }
+      }
+      try {
+        const response = await client.putArtifact(requests(), signal ? { signal } : undefined);
+        if (!response.metadata?.ref) throw new Error("artifact service returned no canonical reference");
+        return response.metadata;
+      } catch (err) {
+        throw new GatewayClientError(`put artifact failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
     async cancelInvocation(invocationId: string): Promise<CancelResponse> {
       const client = createClient(GatewayService, getTransport());
       const req = { invocationId };
@@ -142,6 +196,16 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
 }
 
 /** Reduce a full ToolDescriptor to the non-secret shape passed to the child (ARCH-006). */
+function artifactContext(scope: AssignmentScope) {
+  return {
+    attemptId: scope.runId,
+    callerScope: CallerScope.TURN,
+    callerScopeId: scope.turnId,
+    fencingGeneration: scope.fencingGeneration,
+    invocationId: "",
+  };
+}
+
 function descriptorToNonSecret(d: ToolDescriptor): GatewayToolDescriptor {
   const desc: GatewayToolDescriptor = {
     name: d.name,

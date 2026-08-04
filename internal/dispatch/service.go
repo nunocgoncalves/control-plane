@@ -910,6 +910,13 @@ func (s *Service) assignGraph(ctx context.Context, turn runtime.Turn, run runtim
 	for _, skill := range assignment.Skills {
 		skills = append(skills, &v1.SkillRef{Name: skill.Name, Version: skill.Version, Digest: skill.Digest})
 	}
+	materializations := make([]*v1.ArtifactMaterialization, 0, len(assignment.Materializations))
+	for _, m := range assignment.Materializations {
+		materializations = append(materializations, &v1.ArtifactMaterialization{
+			Ref:          &v1.ArtifactRef{ArtifactId: m.ArtifactID, MimeType: m.MIMEType, SizeBytes: m.SizeBytes, Digest: m.Digest},
+			RelativePath: m.RelativePath,
+		})
+	}
 	msg := &v1.ControlMessage{Kind: &v1.ControlMessage_AssignTurn{AssignTurn: &v1.AssignTurn{
 		TurnId: turn.ID, SessionId: run.SessionID,
 		Sandbox:        &v1.SandboxRef{SandboxId: run.SessionID, Uid: uid, Gid: uid, WorkingDir: "workspace"},
@@ -919,6 +926,7 @@ func (s *Service) assignGraph(ctx context.Context, turn runtime.Turn, run runtim
 		Message: prompt, RunId: run.ID, WorkItemId: assignment.WorkItemID,
 		NodeExecutionId: node.ID, NodeKey: node.NodeKey, ContextJson: string(node.Context),
 		CompletionOutcomes: assignment.AllowedOutcomes, CompletionOutputSchemaJson: string(assignment.OutputSchema), Skills: skills,
+		Materializations: materializations,
 	}}}
 	in := AssignmentInput{
 		TurnID: turn.ID, RunID: run.ID, PoolID: poolID, WorkerID: w.workerID,

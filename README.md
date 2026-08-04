@@ -32,7 +32,10 @@ to the verified worker + fencing generation, and the dispatch reconciler.
 HOR-254 evolves that foundation into a single-active-node graph runtime and adds
 the durable `work` domain: stable work items, first-class attempts, append-only
 node visits/transitions, blockers, feedback, artifact references, business
-SSE events, and an estimated-value ledger.
+SSE events, and an estimated-value ledger. HOR-399 adds the immutable artifact
+service: Postgres lifecycle metadata, MinIO bytes, REST + workload streaming,
+active-execution authorization, retention/deletion, and supervisor-controlled
+materialization/publication.
 
 ## Binaries
 
@@ -42,7 +45,7 @@ Two Go images + one Node image:
 |---|---|---|---|
 | `manager` | `cmd/manager` | `control-plane` | controller-runtime operator: reconcilers, webhooks, probes, metrics |
 | `api` | `cmd/api` | `control-plane` | HTTP API (chi) + durable runtime (later); subcommands `serve`, `migrate up`, `migrate down`, `bootstrap` |
-| `gateway` | `cmd/gateway` | `control-plane` | tool gateway gRPC server (HOR-392): mTLS `RunnerService` + `GatewayService` |
+| `gateway` | `cmd/gateway` | `control-plane` | mTLS workload boundary: tool `RunnerService`/`GatewayService` plus streaming `ArtifactService` |
 | `dispatch` | `cmd/dispatch` | `control-plane` | durable-dispatch Work gRPC server (HOR-249): mTLS `Harness.Work` bidi stream, worker fencing, one-credit dispatch, TurnEvent ACK/dedup, cancellation/worker-loss |
 
 The `control-plane` image (manager + api + gateway + dispatch) runs in the platform
@@ -62,6 +65,7 @@ internal/database/  pgx pool + embedded golang-migrate migrations
 internal/identity/  identity store, API keys, JWT/JWKS issuer, resolver
 internal/permissions/ permission store + effective_capabilities view (HOR-243)
 internal/catalog/   model catalog store (backends + models) + effective_catalog view (HOR-306/268)
+internal/artifact/  immutable metadata/lifecycle, MinIO streaming, retention/deletion (HOR-399)
 internal/gateway/   tool gateway: registry, authorization, credential resolution, durable invocation ledger (HOR-392)
 internal/dispatch/  durable dispatch Work server: warm-worker bidi stream, one-credit dispatch, worker fencing, active-assignment context, TurnEvent ACK/dedup, cancellation/worker-loss (HOR-249)
 internal/spiffe/    shared SPIFFE/mTLS identity verifier (HOR-392; reused by HOR-249)
@@ -96,7 +100,8 @@ make install-hooks      # use .githooks/pre-commit
 
 The API reads `control-plane.example.yaml` (copy to `control-plane.yaml`) or
 env vars (`DATABASE_URL`, `API_ADDR`, `LOG_LEVEL`, `LOG_FORMAT`,
-`JWT_SIGNING_KEY_PATH`, `JWT_KEY_ID`, `IDENTITY_MODE`). The manager reads only
+`JWT_SIGNING_KEY_PATH`, `JWT_KEY_ID`, `IDENTITY_MODE`, and `ARTIFACT_*`). The
+manager reads only
 `DATABASE_URL` from the environment.
 
 ## Database
@@ -417,6 +422,33 @@ Work APIs require a `work`-scope bearer key and operation capability
 never returned by customer work APIs. `work.timeline_events` is append-only and
 contains only semantic business codes/parameters. HOR-399 owns artifact bytes
 and metadata; HOR-254 stores immutable references and trace relationships.
+
+## Immutable artifacts (HOR-399)
+
+The installation is the tenant boundary. `artifact.artifacts` stores immutable
+identity/source/MIME/size/SHA-256/retention metadata and the durable
+`pending → available → deleting → deleted` lifecycle. MinIO stores bytes under
+a unique key; metadata becomes readable only after a complete verified upload.
+`work.artifact_links` is the authoritative work-item/attempt/node relationship.
+
+Work-scope users with `artifact:write|read` use streaming `POST`, `GET`, and
+`HEAD /v1/artifacts[/{id}]`. Explicit `DELETE /v1/artifacts/{id}` is admin-only.
+The gateway mTLS listener exposes client-streaming `PutArtifact`,
+server-streaming `GetArtifact`, and unary `StatArtifact`. Supervisors are
+validated against active turn ownership/fencing; runners are validated against
+the exact live invocation and declared input refs. No caller receives MinIO
+credentials or presigned URLs.
+
+`AssignTurn.materializations` is the exact authorized input set. The trusted
+supervisor downloads and verifies size/digest before starting the child. The
+reserved `publish_artifact` control function validates a regular relative
+workspace path, rejects traversal/symlink escape, and streams a new immutable
+reference through supervisor IPC. It is not an AgentPool workspace tool.
+
+Inline tool JSON remains bounded at 64 KiB by default. Artifact size is
+configurable (1 GiB default). `retention_until = NULL` means indefinite;
+finite retention and explicit deletion preserve metadata tombstones while
+removing bytes.
 
 ## Git workflow
 

@@ -159,6 +159,31 @@ export class StepCompletionState {
   }
 }
 
+class ArtifactPublicationState {
+  constructor(private readonly rpc: Pick<ChildRpc, "publishArtifact">) {}
+
+  tool(): ToolDefinition {
+    return defineTool({
+      name: "publish_artifact",
+      label: "Publish workspace artifact",
+      description: "Publish one regular file from the active workspace as a new immutable artifact reference.",
+      parameters: Type.Object({
+        relative_path: Type.String({ minLength: 1 }),
+        mime_type: Type.String({ minLength: 1 }),
+      }, { additionalProperties: false }),
+      execute: async (_toolCallId, raw) => {
+        const p = raw as { relative_path?: unknown; mime_type?: unknown };
+        if (typeof p.relative_path !== "string" || typeof p.mime_type !== "string") throw new Error("relative_path and mime_type are required");
+        const ref = await this.rpc.publishArtifact(p.relative_path, p.mime_type);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ artifact_id: ref.artifactId, mime_type: ref.mimeType, size_bytes: ref.sizeBytes, digest: ref.digest }) }],
+          details: ref,
+        };
+      },
+    });
+  }
+}
+
 function assignmentMessage(a: Assignment): string {
   if (!a.nodeExecutionId) return a.message;
   const outcomes = (a.completionOutcomes ?? []).join(", ");
@@ -525,9 +550,19 @@ function gatewayToolStub(rpc: ChildRpc, completion: StepCompletionState): (d: Ga
           // tool_execution_end / model history carry it (REQ-010/SCN-009).
           throw new Error(res.errorMessage ?? `gateway tool ${d.name} failed`);
         }
+        const artifactRefs = res.artifactRefs ?? [];
+        let text = res.resultJson ?? "";
+        if (artifactRefs.length > 0) {
+          let result: unknown = text;
+          try { result = text ? JSON.parse(text) : {}; } catch { /* retain text */ }
+          text = JSON.stringify({
+            result,
+            artifact_refs: artifactRefs.map((ref) => ({ artifact_id: ref.artifactId, mime_type: ref.mimeType, size_bytes: ref.sizeBytes, digest: ref.digest })),
+          });
+        }
         return {
-          content: [{ type: "text", text: res.resultJson ?? "" }],
-          details: {},
+          content: [{ type: "text", text }],
+          details: { artifactRefs },
         };
       },
     });
@@ -681,10 +716,12 @@ export async function createSession(
   // would strip every gateway stub from the agent (HOR-395/ARCH-006).
   const gatewayToolNames = descriptors.map((d) => d.name);
   const controlToolNames = completion.required ? ["complete_step"] : [];
+  if (a.workspaceTools) controlToolNames.push("publish_artifact");
   const toolOpts = a.workspaceTools
     ? { tools: [...gatewayToolNames, ...controlToolNames, "read", "write", "edit", "bash"] as string[] }
     : { tools: [...gatewayToolNames, ...controlToolNames] };
   const customTools = descriptors.map(gatewayToolStub(rpc, completion));
+  if (a.workspaceTools) customTools.push(new ArtifactPublicationState(rpc).tool());
   if (completion.required) customTools.push(completion.tool());
 
   // The runtime factory closes over the assignment-specific inputs (provider,

@@ -85,6 +85,12 @@ export interface ToolCallFrame {
   argumentsJson: string;
   idempotencyKey?: string;
 }
+export interface PublishArtifactRpcFrame {
+  type: "publishArtifact";
+  requestId: string;
+  relativePath: string;
+  mimeType: string;
+}
 export interface StepCompletionRpcFrame {
   type: "stepCompletion";
   requestId: string;
@@ -97,7 +103,7 @@ export interface CancelRpcFrame {
   type: "cancel";
   requestId: string;
 }
-export type ChildRpcFrame = ModelRequestFrame | ToolCallFrame | StepCompletionRpcFrame | CancelRpcFrame;
+export type ChildRpcFrame = ModelRequestFrame | ToolCallFrame | PublishArtifactRpcFrame | StepCompletionRpcFrame | CancelRpcFrame;
 
 // ---- Supervisor → Child RPC (fd 5) — HOR-395 ----
 //
@@ -141,7 +147,17 @@ export interface ToolResultFrame {
   requestId: string;
   /** Committed result JSON string (when succeeded). */
   resultJson?: string;
+  artifactRefs?: Array<{ artifactId: string; mimeType: string; sizeBytes: number; digest: string }>;
   isError: boolean;
+  errorMessage?: string;
+}
+export interface ArtifactPublishedFrame {
+  type: "artifactPublished";
+  requestId: string;
+  artifactId?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  digest?: string;
   errorMessage?: string;
 }
 export interface StepCompletionAckFrame {
@@ -157,6 +173,7 @@ export type SupervisorRpcFrame =
   | ModelChunkFrame
   | ModelEndFrame
   | ToolResultFrame
+  | ArtifactPublishedFrame
   | StepCompletionAckFrame
   | SupervisorCancelFrame;
 
@@ -255,6 +272,9 @@ export function parseChildRpcFrame(raw: unknown): ChildRpcFrame | null {
       if (typeof r.idempotencyKey === "string") f.idempotencyKey = r.idempotencyKey;
       return f;
     }
+    case "publishArtifact":
+      if (typeof r.relativePath !== "string" || typeof r.mimeType !== "string") return null;
+      return { type: "publishArtifact", requestId: r.requestId, relativePath: r.relativePath, mimeType: r.mimeType };
     case "stepCompletion": {
       if (typeof r.outcome !== "string" || typeof r.summary !== "string" || typeof r.outputJson !== "string" || !Array.isArray(r.artifactRefs)) return null;
       const artifactRefs: StepCompletionRpcFrame["artifactRefs"] = [];
@@ -323,7 +343,28 @@ export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null
       if (typeof r.requestId !== "string" || typeof r.isError !== "boolean") return null;
       const f: ToolResultFrame = { type: "toolResult", requestId: r.requestId, isError: r.isError };
       if (typeof r.resultJson === "string") f.resultJson = r.resultJson;
+      if (Array.isArray(r.artifactRefs)) {
+        const refs: NonNullable<ToolResultFrame["artifactRefs"]> = [];
+        for (const rawRef of r.artifactRefs) {
+          if (!rawRef || typeof rawRef !== "object") return null;
+          const ref = rawRef as Record<string, unknown>;
+          if (typeof ref.artifactId !== "string" || typeof ref.mimeType !== "string" || typeof ref.sizeBytes !== "number" || typeof ref.digest !== "string") return null;
+          refs.push({ artifactId: ref.artifactId, mimeType: ref.mimeType, sizeBytes: ref.sizeBytes, digest: ref.digest });
+        }
+        f.artifactRefs = refs;
+      }
       if (typeof r.errorMessage === "string") f.errorMessage = r.errorMessage;
+      return f;
+    }
+    case "artifactPublished": {
+      if (typeof r.requestId !== "string") return null;
+      const f: ArtifactPublishedFrame = { type: "artifactPublished", requestId: r.requestId };
+      if (typeof r.artifactId === "string") f.artifactId = r.artifactId;
+      if (typeof r.mimeType === "string") f.mimeType = r.mimeType;
+      if (typeof r.sizeBytes === "number") f.sizeBytes = r.sizeBytes;
+      if (typeof r.digest === "string") f.digest = r.digest;
+      if (typeof r.errorMessage === "string") f.errorMessage = r.errorMessage;
+      if (!f.errorMessage && (!f.artifactId || !f.mimeType || f.sizeBytes === undefined || !f.digest)) return null;
       return f;
     }
     case "stepCompletionAck":

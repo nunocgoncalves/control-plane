@@ -198,16 +198,27 @@ type TimelineEvent struct {
 // AssignmentContext is the exact non-secret graph-node context dispatch sends
 // to a worker and persists in the active assignment.
 type AssignmentContext struct {
-	WorkItemID      string
-	AttemptID       string
-	ScopeIdentityID string
-	AgentPoolKey    string
-	Persona         string
-	Node            NodeExecution
-	AllowedOutcomes []string
-	OutputSchema    json.RawMessage
-	Skills          []SkillSnapshot
-	ToolPins        json.RawMessage
+	WorkItemID       string
+	AttemptID        string
+	ScopeIdentityID  string
+	AgentPoolKey     string
+	Persona          string
+	Node             NodeExecution
+	AllowedOutcomes  []string
+	OutputSchema     json.RawMessage
+	Skills           []SkillSnapshot
+	ToolPins         json.RawMessage
+	Materializations []ArtifactMaterialization
+}
+
+// ArtifactMaterialization is one canonical, authorized input copied into the
+// session workspace before the child starts.
+type ArtifactMaterialization struct {
+	ArtifactID   string
+	MIMEType     string
+	SizeBytes    int64
+	Digest       string
+	RelativePath string
 }
 
 // SkillSnapshot is one immutable skill exposed to the node.

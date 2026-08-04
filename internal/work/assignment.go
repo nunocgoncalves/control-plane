@@ -12,6 +12,8 @@ import (
 
 // GetAssignmentContext resolves the exact immutable context for one graph-node
 // execution. No prompt/model/tool scope is inferred by dispatch.
+//
+//nolint:gocyclo // Assignment assembly validates each immutable snapshot and canonical artifact input fail-closed.
 func (s *Store) GetAssignmentContext(ctx context.Context, nodeExecutionID string) (AssignmentContext, error) {
 	var out AssignmentContext
 	var graphJSON, specJSON []byte
@@ -61,15 +63,41 @@ func (s *Store) GetAssignmentContext(ctx context.Context, nodeExecutionID string
 	if err != nil {
 		return AssignmentContext{}, err
 	}
-	defer rows.Close()
 	pins := make([]map[string]string, 0)
 	for rows.Next() {
 		var name, digest string
 		if err := rows.Scan(&name, &digest); err != nil {
+			rows.Close()
 			return AssignmentContext{}, err
 		}
 		pins = append(pins, map[string]string{"tool": name, "digest": digest})
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AssignmentContext{}, err
+	}
+	rows.Close()
 	out.ToolPins, _ = json.Marshal(pins)
-	return out, rows.Err()
+
+	artifactRows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ar.id::text,ar.mime_type,ar.size_bytes,ar.digest
+		FROM work.artifact_links l
+		JOIN artifact.artifacts ar ON ar.id=l.artifact_id
+		WHERE l.attempt_id=$1 AND ar.state='available'
+		ORDER BY ar.id::text`, out.AttemptID)
+	if err != nil {
+		return AssignmentContext{}, err
+	}
+	defer artifactRows.Close()
+	for artifactRows.Next() {
+		var m ArtifactMaterialization
+		if err := artifactRows.Scan(&m.ArtifactID, &m.MIMEType, &m.SizeBytes, &m.Digest); err != nil {
+			return AssignmentContext{}, err
+		}
+		// Artifact ids are UUIDs, so this deterministic destination contains no
+		// customer-controlled path segment.
+		m.RelativePath = "inputs/" + m.ArtifactID
+		out.Materializations = append(out.Materializations, m)
+	}
+	return out, artifactRows.Err()
 }

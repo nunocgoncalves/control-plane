@@ -51,6 +51,7 @@ import { createGatewayClient, type GatewayClient, type AssignmentScope } from ".
 import { streamModel } from "./model-bridge.js";
 import { InvokeState } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { GatewayToolDescriptor } from "./ipc.js";
+import { materializeArtifacts, publishWorkspaceArtifact } from "./artifact-files.js";
 
 /** A durable TurnEvent payload (the oneof) the supervisor sequences + sends. */
 export type TurnEventPayload = TurnEvent["kind"];
@@ -67,6 +68,7 @@ export interface ChildResult {
 export type ChildRpcRequest =
   | { type: "modelRequest"; requestId: string; body: unknown }
   | { type: "toolCall"; requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string }
+  | { type: "publishArtifact"; requestId: string; relativePath: string; mimeType: string }
   | { type: "stepCompletion"; requestId: string; outcome: string; summary: string; outputJson: string; artifactRefs: Array<{artifactId:string;role:string;metadataJson:string}> }
   | { type: "cancel"; requestId: string };
 export interface Child {
@@ -88,6 +90,7 @@ export class SupervisorError extends Error {}
 /** Bounded deadline for gateway-tool discovery (HOR-395: slow upstream behavior
  * must remain bounded). Aborts the discovery request and fails the turn. */
 const DISCOVERY_DEADLINE_MS = 10_000;
+const MATERIALIZATION_DEADLINE_MS = 5 * 60_000;
 
 interface TurnCtx {
   turnId: string;
@@ -304,6 +307,19 @@ export class Supervisor {
       });
       const cwd = resolveWorkingDir(sandbox.root, at.sandbox?.workingDir || "home");
       const scope = { turnId: at.turnId, runId: at.runId, fencingGeneration: this.welcome?.fencingGeneration ?? 0n };
+      const materializeAc = new AbortController();
+      if (this.turn) this.turn.discoveryAc = materializeAc;
+      const materializeDeadline = setTimeout(() => materializeAc.abort(), MATERIALIZATION_DEADLINE_MS);
+      materializeDeadline.unref?.();
+      try {
+        await materializeArtifacts(this.gatewayClient, scope, at.materializations, sandbox.workspace, at.sandbox?.uid ?? 0, at.sandbox?.gid ?? 0, materializeAc.signal);
+      } catch (err) {
+        throw new SandboxError(`artifact materialization failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        clearTimeout(materializeDeadline);
+        if (this.turn) this.turn.discoveryAc = null;
+      }
+      if (this.turn?.aborted) throw new SandboxError("aborted during artifact materialization");
       // Discover the effective gateway tools BEFORE spawning the child and pass
       // the non-secret descriptors to the child (ARCH-006). Discovery is
       // bounded (deadline) and cancellable (aborted on AbortTurn): a hanging
@@ -332,7 +348,7 @@ export class Supervisor {
       child.rpcSend({ type: "gatewayTools", descriptors });
       // Drain the child's model/tool RPC requests (fd 4) concurrently with the
       // audit event stream (fd 3). Both close when the child exits.
-      const rpcDone = this.dispatchChildRpc(child, at, descriptors).catch(() => {
+      const rpcDone = this.dispatchChildRpc(child, at, descriptors, sandbox).catch(() => {
         /* errors surface as tool/model error frames; logged only as outcome */
       });
       for await (const ev of child.events) {
@@ -370,7 +386,7 @@ export class Supervisor {
    * the in-flight upstream call (ARCH-014 — cannot undo an effect already
    * started; the gateway classifies per effect class on caller disconnect).
    */
-  private async dispatchChildRpc(child: Child, at: AssignTurn, descriptors: GatewayToolDescriptor[]): Promise<void> {
+  private async dispatchChildRpc(child: Child, at: AssignTurn, descriptors: GatewayToolDescriptor[], sandbox: SandboxPaths): Promise<void> {
     const scope = { turnId: at.turnId, runId: at.runId, fencingGeneration: this.welcome?.fencingGeneration ?? 0n };
     const assignedModel = at.model?.id ?? "";
     // The effective gateway tools discovered for this turn (ARCH-006). The
@@ -422,6 +438,8 @@ export class Supervisor {
       if (controllers.has(req.requestId)) {
         if (req.type === "modelRequest") {
           child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: "duplicate request id" });
+        } else if (req.type === "publishArtifact") {
+          child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: "duplicate request id" });
         } else {
           child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "duplicate request id" });
         }
@@ -431,6 +449,8 @@ export class Supervisor {
         // Fail-closed overflow: bound queued/in-flight work.
         if (req.type === "modelRequest") {
           child.rpcSend({ type: "modelEnd", requestId: req.requestId, status: "error", errorMessage: "too many in-flight model/tool requests" });
+        } else if (req.type === "publishArtifact") {
+          child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: "too many in-flight requests" });
         } else {
           child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "too many in-flight model/tool requests" });
         }
@@ -440,6 +460,15 @@ export class Supervisor {
       const done = (): void => { inflight -= 1; };
       if (req.type === "modelRequest") {
         void this.handleModelRequest(child, req, assignedModel, at, controllers, done);
+        continue;
+      }
+      if (req.type === "publishArtifact") {
+        if (!at.workspaceTools || this.turn?.completionReported) {
+          done();
+          child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: "artifact publication is not permitted" });
+          continue;
+        }
+        void this.handlePublishArtifact(child, req, scope, at, sandbox, controllers, done);
         continue;
       }
       if (req.type === "toolCall") {
@@ -529,10 +558,51 @@ export class Supervisor {
         requestId: req.requestId,
         isError,
         ...(resultJson !== undefined ? { resultJson } : {}),
+        artifactRefs: resp.artifactOutputRefs.map((ref) => ({ artifactId: ref.artifactId, mimeType: ref.mimeType, sizeBytes: Number(ref.sizeBytes), digest: ref.digest })),
         ...(errorMessage !== undefined ? { errorMessage } : {}),
       });
     } catch (err) {
       child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: err instanceof Error ? err.message : String(err) });
+    } finally {
+      controllers.delete(req.requestId);
+      onDone();
+    }
+  }
+
+  private async handlePublishArtifact(
+    child: Child,
+    req: { requestId: string; relativePath: string; mimeType: string },
+    scope: AssignmentScope,
+    at: AssignTurn,
+    sandbox: SandboxPaths,
+    controllers: Map<string, AbortController>,
+    onDone: () => void,
+  ): Promise<void> {
+    const ac = new AbortController();
+    controllers.set(req.requestId, ac);
+    try {
+      const metadata = await publishWorkspaceArtifact(
+        this.gatewayClient,
+        scope,
+        sandbox.workspace,
+        req.relativePath,
+        req.mimeType,
+        at.sandbox?.uid ?? 0,
+        at.sandbox?.gid ?? 0,
+        ac.signal,
+      );
+      const ref = metadata.ref;
+      if (!ref) throw new SandboxError("artifact service returned no reference");
+      child.rpcSend({
+        type: "artifactPublished",
+        requestId: req.requestId,
+        artifactId: ref.artifactId,
+        mimeType: ref.mimeType,
+        sizeBytes: Number(ref.sizeBytes),
+        digest: ref.digest,
+      });
+    } catch (err) {
+      child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: err instanceof Error ? err.message : String(err) });
     } finally {
       controllers.delete(req.requestId);
       onDone();

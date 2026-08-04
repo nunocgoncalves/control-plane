@@ -324,12 +324,30 @@ message AssignTurn {
   string completion_output_schema_json = 15; // JSON Schema for complete_step.output
   repeated SkillRef skills = 16;      // exact immutable node skill subset
   string work_item_id = 17;           // stable customer-facing work item identity
+  // Exact authorized input set. The supervisor materializes these before the
+  // child starts; the child cannot request an arbitrary artifact id.
+  repeated ArtifactMaterialization materializations = 18;
 }
 
 message SkillRef {
   string name = 1;
   string version = 2;
   string digest = 3;
+}
+
+message ArtifactRef {
+  string artifact_id = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  string digest = 4;
+}
+
+message ArtifactMaterialization {
+  ArtifactRef ref = 1;
+  // Relative to workspace/. Must be clean, non-empty, and non-escaping. The
+  // dispatcher chooses it from durable context; customer filenames are never
+  // used as path segments without sanitization.
+  string relative_path = 2;
 }
 
 // SandboxRef identifies the session's private filesystem on the shared RWX PVC.
