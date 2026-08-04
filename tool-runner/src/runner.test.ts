@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 import {
-  CredentialScheme, InvokeSchema, InvokeState, RunnerMessageSchema, ToolDescriptorSchema,
+  CredentialScheme, InvokeSchema, InvokeState, RunnerMessageSchema, ToolDescriptorSchema, ToolVersionRefSchema,
+  type ToolVersionRef,
 } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { LoadedGeneration, ToolManifest } from "./manifest.js";
 import { AsyncQueue } from "./queue.js";
@@ -26,11 +27,23 @@ function generation(module: ToolModule): LoadedGeneration {
     tools: [{ manifest, module, directory: "/readonly/tools/product/echo", sizeBytes: 10, layer: "product" }] };
 }
 
+function acknowledgeDrainWithoutGateway(runner: ToolRunner): void {
+  const internal = runner as unknown as {
+    active: Map<string, { tool: LoadedGeneration["tools"][number]; drainingAt?: number }>;
+    applyDrainStatus: (pinned: ToolVersionRef[], releasable: ToolVersionRef[]) => void;
+  };
+  const draining = [...internal.active.values()]
+    .filter((active) => active.drainingAt !== undefined)
+    .map((active) => create(ToolVersionRefSchema, { name: active.tool.manifest.name, digest: active.tool.manifest.digest }));
+  if (draining.length) internal.applyDrainStatus(draining, []);
+}
+
 async function acceptWithoutGateway(runner: ToolRunner, loaded: LoadedGeneration): Promise<void> {
   const activation = runner.activate(loaded);
   const internal = runner as unknown as { acceptedKeys: Set<string>; checkActivationAccepted: () => void };
   for (const tool of loaded.tools) internal.acceptedKeys.add(`${tool.manifest.name}\0${tool.manifest.digest}`);
   internal.checkActivationAccepted();
+  acknowledgeDrainWithoutGateway(runner);
   await activation;
 }
 
@@ -89,6 +102,75 @@ describe("generation lifecycle", () => {
       tools: [{ ...generation(module).tools[0], manifest: conflictManifest }],
     };
     await expect(runner.activate(conflict)).rejects.toThrow("immutable version 1.0.0 was already accepted");
+  });
+
+  it("reactivates a still-loaded draining version on rollback", async () => {
+    const runner = new ToolRunner(config);
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    const first = generation(module);
+    await acceptWithoutGateway(runner, first);
+    const nextManifest = { ...manifest, version: "2.0.0", digest: `sha256:${"2".repeat(64)}` };
+    await acceptWithoutGateway(runner, {
+      ...first, revision: "main@sha1:next", artifactDigest: "sha256:next",
+      tools: [{ ...first.tools[0], manifest: nextManifest }],
+    });
+
+    const queue = new AsyncQueue<ReturnType<typeof create<typeof RunnerMessageSchema>>>();
+    const internal = runner as unknown as {
+      queue: typeof queue;
+      active: Map<string, { drainingAt?: number }>;
+      applyDrainStatus: (pinned: ToolVersionRef[], releasable: ToolVersionRef[]) => void;
+    };
+    internal.queue = queue;
+    let activated = false;
+    const activation = runner.activate({
+      ...first, revision: "main@sha1:rollback", artifactDigest: "sha256:rollback",
+    }).then(() => { activated = true; });
+
+    await Promise.resolve();
+    expect(activated).toBe(false);
+    expect(internal.active.get(`${manifest.name}\0${manifest.digest}`)?.drainingAt).toBeUndefined();
+    expect(internal.active.get(`${nextManifest.name}\0${nextManifest.digest}`)?.drainingAt).toEqual(expect.any(Number));
+    const message = await queue[Symbol.asyncIterator]().next();
+    if (message.done || message.value.kind.case !== "beginDrain") throw new Error("rollback did not publish drain state");
+    expect(message.value.kind.value.versions.map((ref) => ({ name: ref.name, digest: ref.digest }))).toEqual([
+      { name: nextManifest.name, digest: nextManifest.digest },
+    ]);
+    internal.applyDrainStatus([
+      create(ToolVersionRefSchema, { name: nextManifest.name, digest: nextManifest.digest }),
+    ], []);
+    await activation;
+    expect(activated).toBe(true);
+  });
+
+  it("re-registers an exact version reintroduced after retirement", async () => {
+    const runner = new ToolRunner(config);
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    const first = generation(module);
+    await acceptWithoutGateway(runner, first);
+    const nextManifest = { ...manifest, version: "2.0.0", digest: `sha256:${"2".repeat(64)}` };
+    await acceptWithoutGateway(runner, {
+      ...first, revision: "main@sha1:next", artifactDigest: "sha256:next",
+      tools: [{ ...first.tools[0], manifest: nextManifest }],
+    });
+    const internal = runner as unknown as {
+      queue: AsyncQueue<ReturnType<typeof create<typeof RunnerMessageSchema>>>;
+      retire: (refs: Array<{ name: string; digest: string }>, forced: boolean) => void;
+      acceptRegistration: (name?: string) => void;
+    };
+    internal.retire([{ name: manifest.name, digest: manifest.digest }], false);
+    const queue = new AsyncQueue<ReturnType<typeof create<typeof RunnerMessageSchema>>>();
+    internal.queue = queue;
+
+    const activation = runner.activate({
+      ...first, revision: "main@sha1:rollback", artifactDigest: "sha256:rollback",
+    });
+    const message = await queue[Symbol.asyncIterator]().next();
+    if (message.done || message.value.kind.case !== "register") throw new Error("reintroduced version was not registered");
+    expect(message.value.kind.value.descriptor?.digest).toBe(manifest.digest);
+    internal.acceptRegistration(manifest.name);
+    acknowledgeDrainWithoutGateway(runner);
+    await activation;
   });
 
   it("reclaims unreferenced identical-tool generations before capacity checks", async () => {

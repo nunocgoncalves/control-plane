@@ -502,11 +502,15 @@ func (x *ToolVersionRef) GetDigest() string {
 	return ""
 }
 
-// BeginDrain atomically removes superseded versions from NEW-attempt
-// resolution. Existing attempt pins remain dispatchable over this stream until
-// DrainStatus reports them releasable. The runner may force retirement at its
-// configured hard retention deadline; pinned attempts then fail unavailable
-// rather than substitute (HOR-397 / ARCH-007).
+// BeginDrain atomically reconciles NEW-attempt eligibility for this stream.
+// `versions` is the complete superseded set: those versions stop accepting new
+// attempts, while every other live registration becomes eligible (including an
+// exact still-loaded version deliberately made current again by rollback).
+// Existing attempt pins remain dispatchable until DrainStatus reports them
+// releasable; that response also acknowledges the eligibility transition. The
+// runner may force retirement at its configured hard retention deadline;
+// pinned attempts then fail unavailable rather than substitute (HOR-397 /
+// ARCH-007).
 type BeginDrain struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Versions      []*ToolVersionRef      `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`

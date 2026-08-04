@@ -102,11 +102,15 @@ export const ToolVersionRefSchema: GenMessage<ToolVersionRef> = /*@__PURE__*/
   messageDesc(file_iterabase_gateway_v1_gateway, 1);
 
 /**
- * BeginDrain atomically removes superseded versions from NEW-attempt
- * resolution. Existing attempt pins remain dispatchable over this stream until
- * DrainStatus reports them releasable. The runner may force retirement at its
- * configured hard retention deadline; pinned attempts then fail unavailable
- * rather than substitute (HOR-397 / ARCH-007).
+ * BeginDrain atomically reconciles NEW-attempt eligibility for this stream.
+ * `versions` is the complete superseded set: those versions stop accepting new
+ * attempts, while every other live registration becomes eligible (including an
+ * exact still-loaded version deliberately made current again by rollback).
+ * Existing attempt pins remain dispatchable until DrainStatus reports them
+ * releasable; that response also acknowledges the eligibility transition. The
+ * runner may force retirement at its configured hard retention deadline;
+ * pinned attempts then fail unavailable rather than substitute (HOR-397 /
+ * ARCH-007).
  *
  * @generated from message iterabase.gateway.v1.BeginDrain
  */

@@ -480,14 +480,21 @@ func (s *Store) HeartbeatRunner(ctx context.Context, runnerID string, gen int64)
 	return nil
 }
 
-// BeginDrain removes the runner's superseded versions from new-attempt
-// selection while keeping the live stream dispatchable for existing pins.
+// BeginDrain atomically reconciles the stream's generation selection state:
+// superseded refs stop accepting new attempts, while every other live version
+// becomes eligible. The complement update lets a deliberate rollback reactivate
+// an exact still-loaded version without weakening reconnect drain preservation.
 func (s *Store) BeginDrain(ctx context.Context, runnerID string, gen int64, refs []ToolRef) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin drain: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.runner_registrations SET accepting_new=true
+		WHERE runner_id=$1 AND fencing_generation=$2 AND active`, runnerID, gen); err != nil {
+		return fmt.Errorf("reactivate current generation: %w", err)
+	}
 	for _, ref := range refs {
 		if ref.Name == "" || ref.Digest == "" {
 			return fmt.Errorf("begin drain: name and digest are required")

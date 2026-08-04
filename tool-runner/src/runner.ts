@@ -41,6 +41,7 @@ interface PendingActivation {
   snapshot: RunnerSnapshot;
   resolve: () => void;
   reject: (error: Error) => void;
+  awaitingDrainKeys?: Set<string>;
 }
 const keyOf = (ref: { name: string; digest: string }) => `${ref.name}\0${ref.digest}`;
 const versionKeyOf = (ref: { name: string; version: string }) => `${ref.name}\0${ref.version}`;
@@ -102,11 +103,19 @@ export class ToolRunner {
     };
     const nextKeys = new Set(generation.tools.map((tool) => keyOf(tool.manifest)));
     const projected = new Map([...this.active].map(([key, value]) => [key, { ...value }]));
+    const newlyActiveKeys = new Set<string>();
     for (const tool of generation.tools) {
       const key = keyOf(tool.manifest);
       const existing = projected.get(key);
-      if (existing) existing.generation = generation.artifactDigest;
-      else projected.set(key, { tool, generation: generation.artifactDigest });
+      if (existing) {
+        existing.generation = generation.artifactDigest;
+        // A deliberate rollback makes this exact loaded version current again;
+        // it must no longer carry the superseded generation's drain state.
+        delete existing.drainingAt;
+      } else {
+        projected.set(key, { tool, generation: generation.artifactDigest });
+        newlyActiveKeys.add(key);
+      }
     }
     for (const [key, current] of projected) {
       if (!nextKeys.has(key) && current.drainingAt === undefined) current.drainingAt = Date.now();
@@ -122,6 +131,9 @@ export class ToolRunner {
 
     this.active = projected;
     this.generations = projectedGenerations;
+    // acceptedKeys is stream-lifetime acknowledgement state. A retired exact
+    // version removed from active must be registered again when reintroduced.
+    for (const key of newlyActiveKeys) this.acceptedKeys.delete(key);
     const accepted = new Promise<void>((resolve, reject) => {
       this.pendingActivation = { generation, requiredKeys: nextKeys, snapshot, resolve, reject };
     });
@@ -186,7 +198,7 @@ export class ToolRunner {
             break;
           case "invoke": void this.execute(control.kind.value); break;
           case "cancel": this.invocationAborts.get(control.kind.value.invocationId)?.abort(control.kind.value.reason); break;
-          case "drainStatus": this.applyDrainStatus(control.kind.value.releasable); break;
+          case "drainStatus": this.applyDrainStatus(control.kind.value.pinned, control.kind.value.releasable); break;
         }
       }
       throw new Error("gateway closed runner stream");
@@ -198,6 +210,9 @@ export class ToolRunner {
       this.queue = null;
       this.acceptedKeys.clear();
       this.registrationPending = [];
+      // A lost stream may have dropped the lifecycle acknowledgement. The next
+      // connection re-registers all versions and safely replays BeginDrain.
+      if (this.pendingActivation) this.pendingActivation.awaitingDrainKeys = undefined;
     }
   }
 
@@ -218,13 +233,22 @@ export class ToolRunner {
 
   private checkActivationAccepted(): void {
     const pending = this.pendingActivation;
-    if (!pending || [...pending.requiredKeys].some((key) => !this.acceptedKeys.has(key))) return;
+    if (!pending || pending.awaitingDrainKeys || [...pending.requiredKeys].some((key) => !this.acceptedKeys.has(key))) return;
+    const draining = [...this.active.values()].filter((active) => active.drainingAt !== undefined).map((active) => refFor(active.tool));
+    if (draining.length) {
+      pending.awaitingDrainKeys = new Set(draining.map(keyOf));
+      this.send(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
+      return;
+    }
+    this.completeActivation(pending);
+  }
+
+  private completeActivation(pending: PendingActivation): void {
+    if (this.pendingActivation !== pending) return;
     this.currentGeneration = pending.generation.artifactDigest;
     for (const tool of pending.generation.tools) this.versionDigests.set(versionKeyOf(tool.manifest), tool.manifest.digest);
     this.pendingActivation = null;
     this.reapUnusedGenerations();
-    const draining = [...this.active.values()].filter((active) => active.drainingAt !== undefined).map((active) => refFor(active.tool));
-    if (draining.length) this.send(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
     console.info(JSON.stringify({ event: "generation_activated", revision: pending.generation.revision, digest: pending.generation.artifactDigest, tools: pending.generation.tools.length }));
     pending.resolve();
     this.checkServing();
@@ -273,7 +297,12 @@ export class ToolRunner {
     if (forced.length) this.retire(forced, true);
   }
 
-  private applyDrainStatus(releasable: ToolVersionRef[]): void {
+  private applyDrainStatus(pinned: ToolVersionRef[], releasable: ToolVersionRef[]): void {
+    const pending = this.pendingActivation;
+    if (pending?.awaitingDrainKeys) {
+      const acknowledged = new Set([...pinned, ...releasable].map(keyOf));
+      if ([...pending.awaitingDrainKeys].every((key) => acknowledged.has(key))) this.completeActivation(pending);
+    }
     if (releasable.length) this.retire(releasable, false);
   }
 

@@ -433,6 +433,49 @@ func TestGateway_ReconnectPreservesDrainingRegistrationState(t *testing.T) {
 	require.NoError(t, env.store.SnapshotAttemptTools(context.Background(), "reactivated-attempt", env.poolID, []string{desc.Name}))
 }
 
+func TestGateway_GenerationRollbackReactivatesStillLoadedVersion(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	desc := echoDescriptor()
+	runner := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer runner.close()
+	runner.mu.Lock()
+	gen := int64(runner.welcome.FencingGeneration) //nolint:gosec // test generation is tiny
+	runner.mu.Unlock()
+
+	v1 := gateway.ToolRef{Name: desc.Name, Digest: desc.Digest}
+	require.NoError(t, env.store.BeginDrain(ctx, "runner-1", gen, []gateway.ToolRef{v1}))
+	v2 := gateway.ToolVersion{
+		Name: desc.Name, Version: "2.0.0", Digest: "sha256:echo-2", Description: desc.Description,
+		InputSchema: desc.InputSchema, EffectClass: gateway.EffectReadOnly,
+		CredentialSlots: []byte(`[]`), ArtifactCapabs: []byte(`{}`), TimeoutMS: 5000,
+		ConsequenceTemplate: []byte(`{}`),
+	}
+	_, err := env.store.RegisterToolVersion(ctx, v2)
+	require.NoError(t, err)
+	_, err = env.store.UpsertRunnerRegistration(ctx, gateway.RunnerRegistration{
+		RunnerID: "runner-1", SpiffeID: runnerSpiffe, Namespace: "ns-1", ToolName: v2.Name,
+		ToolVersion: v2.Version, ToolDigest: v2.Digest, FencingGeneration: gen,
+	})
+	require.NoError(t, err)
+
+	// Rolling back while v1 is still loaded makes v1 current and v2 draining.
+	// The lifecycle update must flip both states in one transaction.
+	require.NoError(t, env.store.BeginDrain(ctx, "runner-1", gen, []gateway.ToolRef{{Name: v2.Name, Digest: v2.Digest}}))
+	var v1Accepting, v2Accepting bool
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		SELECT accepting_new FROM toolgateway.runner_registrations
+		WHERE runner_id='runner-1' AND fencing_generation=$1 AND tool_digest=$2 AND active`, gen, v1.Digest).Scan(&v1Accepting))
+	require.NoError(t, env.pgpool.QueryRow(ctx, `
+		SELECT accepting_new FROM toolgateway.runner_registrations
+		WHERE runner_id='runner-1' AND fencing_generation=$1 AND tool_digest=$2 AND active`, gen, v2.Digest).Scan(&v2Accepting))
+	assert.True(t, v1Accepting, "the deliberately reactivated exact version must accept new snapshots")
+	assert.False(t, v2Accepting, "the superseded version must drain")
+	require.NoError(t, env.store.SnapshotAttemptTools(ctx, "rollback-attempt", env.poolID, []string{desc.Name}))
+}
+
 // TestGateway_FencingGenerationBinding (HOR-249 / DEC-041): the gateway binds
 // authorization to the verified worker AND the current fencing generation. A
 // request carrying a stale/wrong generation is denied even with a valid
