@@ -405,7 +405,9 @@ func (s *Store) GetToolVersion(ctx context.Context, name, digest string) (ToolVe
 // on Register over a new stream; the fencing generation distinguishes
 // reconnects (ARCH-015). A reconnect preserves the latest registration's
 // accepting_new state so a draining version never becomes snapshot-eligible
-// during the Register -> BeginDrain replay window.
+// during the Register -> BeginDrain replay window. A deliberately retired
+// registration resets that inherited state so an exact immutable version can
+// later become current and accept new attempts again.
 func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistration) (RunnerRegistration, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -415,7 +417,8 @@ func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistrati
 
 	acceptingNew := true
 	if err := tx.QueryRow(ctx, `
-		SELECT accepting_new FROM toolgateway.runner_registrations
+		SELECT CASE WHEN retired_at IS NULL THEN accepting_new ELSE true END
+		FROM toolgateway.runner_registrations
 		WHERE runner_id = $1 AND tool_name = $2 AND tool_version = $3
 		ORDER BY registered_at DESC LIMIT 1`,
 		r.RunnerID, r.ToolName, r.ToolVersion).Scan(&acceptingNew); err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -539,11 +542,14 @@ func (s *Store) DrainingStatus(ctx context.Context, runnerID string, gen int64) 
 	return pinned, releasable, rows.Err()
 }
 
-// RetireVersions marks versions unloaded by this exact runner stream.
+// RetireVersions marks versions unloaded by this exact runner stream. The
+// retirement marker distinguishes a completed drain from a disconnected
+// draining registration when a later stream reintroduces the exact version.
 func (s *Store) RetireVersions(ctx context.Context, runnerID string, gen int64, refs []ToolRef) error {
 	for _, ref := range refs {
 		ct, err := s.pool.Exec(ctx, `
-			UPDATE toolgateway.runner_registrations SET active=false, accepting_new=false
+			UPDATE toolgateway.runner_registrations
+			SET active=false, accepting_new=false, retired_at=now()
 			WHERE runner_id=$1 AND fencing_generation=$2 AND tool_name=$3
 			  AND tool_digest=$4 AND active AND NOT accepting_new`,
 			runnerID, gen, ref.Name, ref.Digest)

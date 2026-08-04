@@ -43,6 +43,7 @@ interface PendingActivation {
   reject: (error: Error) => void;
 }
 const keyOf = (ref: { name: string; digest: string }) => `${ref.name}\0${ref.digest}`;
+const versionKeyOf = (ref: { name: string; version: string }) => `${ref.name}\0${ref.version}`;
 
 class Semaphore {
   private used = 0;
@@ -63,6 +64,7 @@ export class ToolRunner {
   private heartbeatMs = 10_000;
   private semaphore: Semaphore;
   private currentGeneration = "";
+  private versionDigests = new Map<string, string>();
   private acceptedKeys = new Set<string>();
   private registrationPending: Array<{ key: string; name: string }> = [];
   private pendingActivation: PendingActivation | null = null;
@@ -79,15 +81,13 @@ export class ToolRunner {
     if (this.pendingActivation) throw new Error("another generation activation is still awaiting gateway acceptance");
 
     // Immutable versions are process-lifetime identities, not just identities
-    // within one overlay layer. Reject a conflicting revision before changing
+    // within the currently loaded generations. Keep accepted identities after
+    // retirement so a later conflicting rollback is rejected before changing
     // serving state or sending any registration to the gateway.
     for (const candidate of generation.tools) {
-      for (const current of this.active.values()) {
-        if (current.tool.manifest.name === candidate.manifest.name &&
-            current.tool.manifest.version === candidate.manifest.version &&
-            current.tool.manifest.digest !== candidate.manifest.digest) {
-          throw new Error(`${candidate.manifest.name}: immutable version ${candidate.manifest.version} is already retained with digest ${current.tool.manifest.digest}`);
-        }
+      const knownDigest = this.versionDigests.get(versionKeyOf(candidate.manifest));
+      if (knownDigest !== undefined && knownDigest !== candidate.manifest.digest) {
+        throw new Error(`${candidate.manifest.name}: immutable version ${candidate.manifest.version} was already accepted with digest ${knownDigest}`);
       }
     }
 
@@ -220,6 +220,7 @@ export class ToolRunner {
     const pending = this.pendingActivation;
     if (!pending || [...pending.requiredKeys].some((key) => !this.acceptedKeys.has(key))) return;
     this.currentGeneration = pending.generation.artifactDigest;
+    for (const tool of pending.generation.tools) this.versionDigests.set(versionKeyOf(tool.manifest), tool.manifest.digest);
     this.pendingActivation = null;
     this.reapUnusedGenerations();
     const draining = [...this.active.values()].filter((active) => active.drainingAt !== undefined).map((active) => refFor(active.tool));

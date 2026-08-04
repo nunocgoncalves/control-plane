@@ -16,4 +16,6 @@ CREATE INDEX idx_runner_reg_available
     WHERE active;
 
 ALTER TABLE toolgateway.approved_runners DROP COLUMN managed_by;
-ALTER TABLE toolgateway.runner_registrations DROP COLUMN accepting_new;
+ALTER TABLE toolgateway.runner_registrations
+    DROP COLUMN retired_at,
+    DROP COLUMN accepting_new;

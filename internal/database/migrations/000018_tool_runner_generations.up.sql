@@ -1,7 +1,8 @@
 -- HOR-397: coordinated immutable tool-runner generation draining.
 
 ALTER TABLE toolgateway.runner_registrations
-    ADD COLUMN accepting_new boolean NOT NULL DEFAULT true;
+    ADD COLUMN accepting_new boolean NOT NULL DEFAULT true,
+    ADD COLUMN retired_at timestamptz;
 
 ALTER TABLE toolgateway.approved_runners
     ADD COLUMN managed_by text NOT NULL DEFAULT 'operator'

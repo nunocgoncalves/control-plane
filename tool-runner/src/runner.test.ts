@@ -65,10 +65,30 @@ describe("generation lifecycle", () => {
       ...generation(module), artifactDigest: "sha256:conflict",
       tools: [{ ...generation(module).tools[0], manifest: conflictManifest }],
     };
-    await expect(runner.activate(conflict)).rejects.toThrow("immutable version 1.0.0 is already retained");
+    await expect(runner.activate(conflict)).rejects.toThrow("immutable version 1.0.0 was already accepted");
     const internal = runner as unknown as { currentGeneration: string; active: Map<string, unknown> };
     expect(internal.currentGeneration).toBe("sha256:artifact");
     expect(internal.active.size).toBe(1);
+  });
+
+  it("remembers immutable version digests after a generation retires", async () => {
+    const runner = new ToolRunner(config);
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    await acceptWithoutGateway(runner, generation(module));
+    const nextManifest = { ...manifest, version: "2.0.0", digest: `sha256:${"2".repeat(64)}` };
+    await acceptWithoutGateway(runner, {
+      ...generation(module), revision: "main@sha1:next", artifactDigest: "sha256:next",
+      tools: [{ ...generation(module).tools[0], manifest: nextManifest }],
+    });
+    const internal = runner as unknown as { retire: (refs: Array<{ name: string; digest: string }>, forced: boolean) => void };
+    internal.retire([{ name: manifest.name, digest: manifest.digest }], false);
+
+    const conflictManifest = { ...manifest, digest: `sha256:${"3".repeat(64)}` };
+    const conflict: LoadedGeneration = {
+      ...generation(module), artifactDigest: "sha256:conflict-after-retirement",
+      tools: [{ ...generation(module).tools[0], manifest: conflictManifest }],
+    };
+    await expect(runner.activate(conflict)).rejects.toThrow("immutable version 1.0.0 was already accepted");
   });
 
   it("reclaims unreferenced identical-tool generations before capacity checks", async () => {

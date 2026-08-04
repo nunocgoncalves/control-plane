@@ -413,7 +413,8 @@ func TestGateway_ReconnectPreservesDrainingRegistrationState(t *testing.T) {
 	runner.mu.Lock()
 	gen := int64(runner.welcome.FencingGeneration) //nolint:gosec // test generation is tiny
 	runner.mu.Unlock()
-	require.NoError(t, env.store.BeginDrain(context.Background(), "runner-1", gen, []gateway.ToolRef{{Name: desc.Name, Digest: desc.Digest}}))
+	ref := gateway.ToolRef{Name: desc.Name, Digest: desc.Digest}
+	require.NoError(t, env.store.BeginDrain(context.Background(), "runner-1", gen, []gateway.ToolRef{ref}))
 
 	reconnected, err := env.store.UpsertRunnerRegistration(context.Background(), gateway.RunnerRegistration{
 		RunnerID: "runner-1", SpiffeID: runnerSpiffe, Namespace: "ns-1", ToolName: desc.Name,
@@ -421,6 +422,15 @@ func TestGateway_ReconnectPreservesDrainingRegistrationState(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, reconnected.AcceptingNew, "reconnect must not expose a draining version to new snapshots")
+
+	require.NoError(t, env.store.RetireVersions(context.Background(), "runner-1", gen+1, []gateway.ToolRef{ref}))
+	reintroduced, err := env.store.UpsertRunnerRegistration(context.Background(), gateway.RunnerRegistration{
+		RunnerID: "runner-1", SpiffeID: runnerSpiffe, Namespace: "ns-1", ToolName: desc.Name,
+		ToolVersion: desc.Version, ToolDigest: desc.Digest, FencingGeneration: gen + 2,
+	})
+	require.NoError(t, err)
+	assert.True(t, reintroduced.AcceptingNew, "deliberate reintroduction after retirement must accept new snapshots")
+	require.NoError(t, env.store.SnapshotAttemptTools(context.Background(), "reactivated-attempt", env.poolID, []string{desc.Name}))
 }
 
 // TestGateway_FencingGenerationBinding (HOR-249 / DEC-041): the gateway binds
