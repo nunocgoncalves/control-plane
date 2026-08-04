@@ -8,6 +8,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
@@ -104,6 +105,68 @@ func TestArtifactRPCSupervisorScopeAndStreaming(t *testing.T) {
 	linked, err := env.artifacts.Store().LinkedToAttempt(ctx, ref.ArtifactId, run1, node1)
 	require.NoError(t, err)
 	assert.True(t, linked)
+}
+
+func TestArtifactRPCRunnerReadsCommittedInputAndCannotWriteWithoutDescriptorCapability(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	var runnerRead string
+	var runnerPutCode connect.Code
+	done := make(chan struct{}, 1)
+	desc := echoDescriptor()
+	desc.ArtifactCapabilities = &v1.ArtifactCapabilities{ReadsArtifacts: true, WritesArtifacts: false, AcceptedMimeTypes: []string{"text/plain"}}
+	runner := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		client := artifactClient(env, env.runner)
+		stream, err := client.GetArtifact(ctx, connect.NewRequest(&v1.GetArtifactRequest{
+			Context:    &v1.ArtifactCallerContext{InvocationId: inv.InvocationId},
+			ArtifactId: inv.ArtifactInputRefs[0].ArtifactId,
+		}))
+		if err == nil {
+			var body bytes.Buffer
+			for stream.Receive() {
+				body.Write(stream.Msg().GetChunk())
+			}
+			if stream.Err() == nil {
+				runnerRead = body.String()
+			}
+		}
+		put := client.PutArtifact(ctx)
+		_ = put.Send(&v1.PutArtifactRequest{Kind: &v1.PutArtifactRequest_Init{Init: &v1.PutArtifactInit{
+			Context: &v1.ArtifactCallerContext{InvocationId: inv.InvocationId}, MimeType: "text/plain",
+		}}})
+		_, putErr := put.CloseAndReceive()
+		runnerPutCode = connect.CodeOf(putErr)
+		done <- struct{}{}
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"ok":true}`)}, false
+	})
+	defer runner.close()
+
+	runID, turnID, workItemID, nodeID, creatorID := seedWorkAttempt(t, env)
+	_, err := env.pgpool.Exec(ctx, `UPDATE runtime.turn_assignments SET capability_request=$2 WHERE turn_id=$1`, turnID, []byte(`[{"tool":"echo","maxEffectClass":"read_only"}]`))
+	require.NoError(t, err)
+	require.NoError(t, env.store.SnapshotAttemptTools(ctx, runID, env.poolID, nil))
+	input, err := env.artifacts.Upload(ctx, artifactstore.UploadInput{
+		SourceType: artifactstore.SourceUserUpload, CreatedByIdentityID: creatorID, MIMEType: "text/plain",
+		Scope: &artifactstore.Scope{WorkItemID: workItemID, AttemptID: runID, NodeExecutionID: nodeID, Role: "input"},
+	}, bytes.NewBufferString("runner-readable"))
+	require.NoError(t, err)
+	ref, err := input.Ref()
+	require.NoError(t, err)
+
+	resp, err := gatewayClient(env, env.supervisor).InvokeTool(ctx, connect.NewRequest(&v1.InvokeRequest{
+		AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
+		ToolCallId: "artifact-read", ToolName: desc.Name, ToolVersionDigest: desc.Digest, ArgumentsJson: []byte(`{}`),
+		ArtifactInputRefs: []*v1.ArtifactRef{{ArtifactId: ref.ArtifactID, MimeType: ref.MIMEType, SizeBytes: ref.SizeBytes, Digest: ref.Digest}},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, resp.Msg.State)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not execute artifact read/write checks")
+	}
+	assert.Equal(t, "runner-readable", runnerRead, "runner can read the exact input committed on its live invocation")
+	assert.Equal(t, connect.CodePermissionDenied, runnerPutCode, "read-only descriptor cannot persist artifact outputs")
 }
 
 func seedWorkAttempt(t *testing.T, env *testEnv) (runID, turnID, workItemID, nodeID, identityID string) {

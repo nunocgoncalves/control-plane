@@ -83,8 +83,10 @@ func (s *Store) GetAssignmentContext(ctx context.Context, nodeExecutionID string
 		SELECT DISTINCT ar.id::text,ar.mime_type,ar.size_bytes,ar.digest
 		FROM work.artifact_links l
 		JOIN artifact.artifacts ar ON ar.id=l.artifact_id
-		WHERE l.attempt_id=$1 AND ar.state='available'
-		ORDER BY ar.id::text`, out.AttemptID)
+		WHERE l.node_execution_id=$1
+		  AND l.role IN ('source','input')
+		  AND ar.state='available'
+		ORDER BY ar.id::text`, nodeExecutionID)
 	if err != nil {
 		return AssignmentContext{}, err
 	}

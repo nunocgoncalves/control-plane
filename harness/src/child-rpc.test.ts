@@ -63,12 +63,13 @@ describe("ChildRpc", () => {
   it("resolves invokeTool from a toolResult frame", async () => {
     const { rpc, sent } = makeRpc();
     const p = rpc.invokeTool(
-      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: "{}", idempotencyKey: "tc-1" },
+      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: "{}", artifactInputRefs: [{ artifactId: "a1", mimeType: "text/plain", sizeBytes: "4", digest: "sha256:test" }], idempotencyKey: "tc-1" },
       undefined,
     );
-    const req = decodeSent(sent[0] as Buffer) as { type: string; requestId: string; toolName: string };
+    const req = decodeSent(sent[0] as Buffer) as { type: string; requestId: string; toolName: string; artifactInputRefs: Array<{artifactId:string}> };
     expect(req.type).toBe("toolCall");
     expect(req.toolName).toBe("graph.read_mail");
+    expect(req.artifactInputRefs.map((ref) => ref.artifactId)).toEqual(["a1"]);
     feed(rpc, { type: "toolResult", requestId: req.requestId, isError: false, resultJson: '{"ok":true}' });
     const res = await p;
     expect(res.isError).toBe(false);
@@ -134,7 +135,7 @@ describe("ChildRpc", () => {
     const ac = new AbortController();
     ac.abort();
     const res = await rpc.invokeTool(
-      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: "{}" },
+      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: "{}", artifactInputRefs: [] },
       ac.signal,
     );
     expect(sent).toHaveLength(0);

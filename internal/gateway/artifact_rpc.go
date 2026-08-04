@@ -131,6 +131,15 @@ func (s *Service) authorizeArtifactCaller(ctx context.Context, id spiffe.Identit
 		if err != nil || inv.State != InvocationRunning {
 			return auth, artifactstore.ErrUnauthorized
 		}
+		if artifactID == "" {
+			// PutArtifact is an output capability of the exact immutable tool
+			// descriptor pinned on this live invocation, not merely a property of
+			// runner ownership.
+			tv, err := s.store.GetToolVersion(ctx, inv.ToolName, inv.ToolVersionDigest)
+			if err != nil || !toolWritesArtifacts(tv) {
+				return auth, artifactstore.ErrUnauthorized
+			}
+		}
 		if artifactID != "" && !containsArtifactRef(inv.ArtifactInputRefs, artifactID) {
 			return auth, artifactstore.ErrUnauthorized
 		}
@@ -171,6 +180,13 @@ func (s *Service) authorizeArtifactCaller(ctx context.Context, id spiffe.Identit
 		source = artifactstore.SourceSandboxPublish
 	}
 	return artifactAuthorization{scope: scope, creatorIdentityID: creator, sourceType: source, sourceRef: res.CallerScopeID}, nil
+}
+
+func toolWritesArtifacts(tv ToolVersion) bool {
+	var capabilities struct {
+		Writes bool `json:"writes"`
+	}
+	return json.Unmarshal(tv.ArtifactCapabs, &capabilities) == nil && capabilities.Writes
 }
 
 func containsArtifactRef(raw []byte, id string) bool {

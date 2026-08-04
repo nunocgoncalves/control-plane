@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { materializeArtifacts, publishWorkspaceArtifact } from "./artifact-files.js";
+import { materializeArtifacts, publishWorkspaceArtifact, writeAllSync } from "./artifact-files.js";
 import type { GatewayClient } from "./gateway-client.js";
 import { SandboxError } from "./sandbox.js";
 
@@ -43,6 +43,20 @@ describe("artifact materialization", () => {
       relativePath: "inputs/a1",
     }], workspace, uid, gid);
     expect(readFileSync(join(workspace, "inputs/a1"), "utf8")).toBe("immutable input");
+  });
+
+  it("persists a complete chunk when the filesystem performs short writes", () => {
+    const path = join(workspace, "short-write");
+    const fd = openSync(path, "w");
+    try {
+      const body = new TextEncoder().encode("complete chunk");
+      writeAllSync(fd, body, (target, buffer, offset, length) =>
+        writeSync(target, buffer, offset, Math.min(length, 2)),
+      );
+    } finally {
+      closeSync(fd);
+    }
+    expect(readFileSync(path, "utf8")).toBe("complete chunk");
   });
 
   it("fails closed on digest/size mismatch", async () => {

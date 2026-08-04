@@ -29,7 +29,7 @@ import {
   type ArtifactMetadata,
 } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { HarnessConfig } from "./config.js";
-import type { GatewayToolDescriptor } from "./ipc.js";
+import type { ArtifactInputRefFrame, GatewayToolDescriptor } from "./ipc.js";
 
 export interface AssignmentScope {
   turnId: string;
@@ -66,7 +66,7 @@ export interface GatewayClient {
   /** Invoke a gateway tool (ARCH-014). Returns the committed result + state. */
   invokeTool(
     scope: AssignmentScope,
-    call: { toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
+    call: { toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; artifactInputRefs?: ArtifactInputRefFrame[]; idempotencyKey?: string },
     signal: AbortSignal | undefined,
   ): Promise<InvokeResponse>;
   /** Stream an authorized artifact for supervisor materialization. */
@@ -111,7 +111,7 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
 
     async invokeTool(
       scope: AssignmentScope,
-      call: { toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
+      call: { toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; artifactInputRefs?: ArtifactInputRefFrame[]; idempotencyKey?: string },
       signal: AbortSignal | undefined,
     ): Promise<InvokeResponse> {
       const client = createClient(GatewayService, getTransport());
@@ -123,6 +123,12 @@ export function createGatewayClient(cfg: HarnessConfig, transportFactory: () => 
         toolName: call.toolName,
         toolVersionDigest: call.toolVersionDigest,
         argumentsJson: new TextEncoder().encode(call.argumentsJson),
+        artifactInputRefs: (call.artifactInputRefs ?? []).map((ref) => ({
+          artifactId: ref.artifactId,
+          mimeType: ref.mimeType,
+          sizeBytes: BigInt(ref.sizeBytes),
+          digest: ref.digest,
+        })),
         fencingGeneration: scope.fencingGeneration,
         ...(call.idempotencyKey !== undefined ? { idempotencyKey: call.idempotencyKey } : {}),
       };
@@ -214,6 +220,8 @@ function descriptorToNonSecret(d: ToolDescriptor): GatewayToolDescriptor {
     description: d.description,
     inputSchema: d.inputSchema.length ? JSON.parse(new TextDecoder().decode(d.inputSchema)) : {},
     effectClass: effectClassToString(d.effectClass),
+    readsArtifacts: d.artifactCapabilities?.readsArtifacts === true,
+    acceptedArtifactMimeTypes: d.artifactCapabilities?.acceptedMimeTypes ?? [],
   };
   const timeoutMs = durToMs(d.timeout);
   if (Number.isFinite(timeoutMs)) desc.timeoutMs = timeoutMs;

@@ -115,7 +115,22 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 		VALUES($1,'turn',$2,'call-write','graph.excel.write','sha256:excel-v1','call-write','idempotent_write',$3,
 		       '{"en":"Add quotation ACME to workbook Quotations 2026","pt":"Adicionar cotação ACME ao livro Quotations 2026"}',
 		       'succeeded','{"row":184}',now()) RETURNING id::text`, attemptID, turn.ID, poolID).Scan(&invocationID))
-	require.NoError(t, store.RecordCompletionReport(ctx, turn.ID, workstore.CompletionReport{Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{"missing":"destination"}`)}))
+	selectedArtifactID := "22222222-2222-4222-8222-222222222222"
+	unselectedArtifactID := "33333333-3333-4333-8333-333333333333"
+	_, err = pool.Exec(ctx, `
+		INSERT INTO artifact.artifacts
+			(id,storage_key,source_type,created_by_identity_id,mime_type,size_bytes,digest,state,available_at)
+		VALUES ($1,'artifacts/selected','sandbox_publish',$3,'text/plain',8,'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','available',now()),
+		       ($2,'artifacts/unselected','sandbox_publish',$3,'text/plain',10,'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','available',now())`, selectedArtifactID, unselectedArtifactID, actorID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO work.artifact_links (artifact_id,work_item_id,attempt_id,node_execution_id,role)
+		VALUES ($1,$3,$4,$5,'output'),($2,$3,$4,$5,'output')`, selectedArtifactID, unselectedArtifactID, item.ID, attemptID, first.ID)
+	require.NoError(t, err)
+	require.NoError(t, store.RecordCompletionReport(ctx, turn.ID, workstore.CompletionReport{
+		Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{"missing":"destination"}`),
+		ArtifactRefs: []workstore.ArtifactRef{{ArtifactID: selectedArtifactID, Role: "output"}},
+	}))
 	state, err := store.CompleteTurn(ctx, turn.ID, "completed", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "running", state)
@@ -123,9 +138,15 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `
 		SELECT count(*) FROM work.artifact_links l
 		JOIN runtime.node_executions n ON n.id=l.node_execution_id
-		WHERE l.attempt_id=$1 AND l.artifact_id=$2 AND l.role='input' AND n.node_key='information'`,
-		attemptID, artifactID).Scan(&propagated))
-	assert.Equal(t, 1, propagated, "source artifacts become explicit inputs of the next node")
+		WHERE l.attempt_id=$1 AND l.artifact_id IN ($2,$3) AND l.role='input' AND n.node_key='information'`,
+		attemptID, artifactID, selectedArtifactID).Scan(&propagated))
+	assert.Equal(t, 2, propagated, "the current inputs and explicitly selected output propagate")
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM work.artifact_links l
+		JOIN runtime.node_executions n ON n.id=l.node_execution_id
+		WHERE l.attempt_id=$1 AND l.artifact_id=$2 AND n.node_key='information'`,
+		attemptID, unselectedArtifactID).Scan(&propagated))
+	assert.Zero(t, propagated, "an unselected published output must not widen the next node's artifact scope")
 
 	// The graph reaches a human node and remains Blocked across store restart.
 	_, _, dispatch, err = store.PrepareNode(ctx, attemptID)
@@ -161,6 +182,12 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, dispatch)
 	assert.Equal(t, 2, second.Visit)
+	assignment, err := restarted.GetAssignmentContext(ctx, second.ID)
+	require.NoError(t, err)
+	require.Len(t, assignment.Materializations, 2)
+	assert.ElementsMatch(t, []string{artifactID, selectedArtifactID}, []string{
+		assignment.Materializations[0].ArtifactID, assignment.Materializations[1].ArtifactID,
+	})
 	var handoff map[string]any
 	require.NoError(t, json.Unmarshal(second.Context, &handoff))
 	assert.NotEmpty(t, handoff["executionHistoryRef"])

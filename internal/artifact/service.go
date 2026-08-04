@@ -203,7 +203,12 @@ func (s *Service) sweep(ctx context.Context) {
 
 func (s *Service) cleanupPending(ctx context.Context, a Artifact) {
 	cleanupCtx := context.WithoutCancel(ctx)
-	_ = s.objects.Delete(cleanupCtx, a.StorageKey)
+	if err := s.objects.Delete(cleanupCtx, a.StorageKey); err != nil {
+		// Keep the pending row as the durable reconciliation handle. The stale
+		// pending sweeper retries object deletion after transient MinIO failure.
+		s.log.Warn("artifact pending cleanup deferred", "artifact", a.ID, "error", err)
+		return
+	}
 	s.store.DeletePending(cleanupCtx, a.ID)
 }
 

@@ -61,7 +61,7 @@ import {
   Outcome,
   type TurnEvent,
 } from "./gen/iterabase/harness/v1/harness_pb.js";
-import { FrameReader, encodeFrame, parseSupervisorFrame, type GatewayToolDescriptor } from "./ipc.js";
+import { FrameReader, encodeFrame, parseSupervisorFrame, type ArtifactInputRefFrame, type GatewayToolDescriptor } from "./ipc.js";
 import { ChildRpc } from "./child-rpc.js";
 import { buildOpenAIRequestBody } from "./openai-stream.js";
 
@@ -85,6 +85,7 @@ interface Assignment {
   completionOutcomes?: string[];
   completionOutputSchemaJson?: string;
   skills?: { name: string; version: string; digest: string }[];
+  artifactInputs: ArtifactInputRefFrame[];
   persona: string;
   model: { id: string; api: string; contextWindow: number; maxOutputTokens?: number; thinkingLevel?: string };
   workspaceTools: boolean;
@@ -472,8 +473,21 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
     persona: r.persona,
     model: { id: m.id, api: m.api, contextWindow: m.contextWindow },
     workspaceTools: r.workspaceTools,
+    artifactInputs: [],
     message: r.message,
   };
+  if (Array.isArray(r.artifactInputs)) {
+    for (const rawRef of r.artifactInputs) {
+      if (!rawRef || typeof rawRef !== "object") return undefined;
+      const ref = rawRef as Record<string, unknown>;
+      if (
+        typeof ref.artifactId !== "string" || typeof ref.mimeType !== "string" ||
+        typeof ref.sizeBytes !== "string" || !/^(0|[1-9][0-9]*)$/.test(ref.sizeBytes) ||
+        typeof ref.digest !== "string"
+      ) return undefined;
+      a.artifactInputs.push({ artifactId: ref.artifactId, mimeType: ref.mimeType, sizeBytes: ref.sizeBytes, digest: ref.digest });
+    }
+  }
   if (typeof r.runId === "string") a.runId = r.runId;
   if (typeof r.workItemId === "string") a.workItemId = r.workItemId;
   if (typeof r.nodeExecutionId === "string") a.nodeExecutionId = r.nodeExecutionId;
@@ -523,7 +537,7 @@ export function parseAssignment(raw: unknown): Assignment | undefined {
  * schema so the model sees the real tool contract; the gateway re-validates
  * arguments before the effect boundary (#7, ARCH-008).
  */
-function gatewayToolStub(rpc: ChildRpc, completion: StepCompletionState): (d: GatewayToolDescriptor) => ToolDefinition {
+function gatewayToolStub(rpc: ChildRpc, completion: StepCompletionState, artifactInputs: ArtifactInputRefFrame[]): (d: GatewayToolDescriptor) => ToolDefinition {
   return (d) =>
     defineTool({
       name: d.name,
@@ -538,6 +552,9 @@ function gatewayToolStub(rpc: ChildRpc, completion: StepCompletionState): (d: Ga
             toolName: d.name,
             toolVersionDigest: d.digest,
             argumentsJson: JSON.stringify(params),
+            artifactInputRefs: d.readsArtifacts
+              ? artifactInputs.filter((ref) => !d.acceptedArtifactMimeTypes?.length || d.acceptedArtifactMimeTypes.includes(ref.mimeType))
+              : [],
             idempotencyKey: toolCallId,
           },
           signal,
@@ -715,13 +732,15 @@ export async function createSession(
   // `allowedToolNames`, so passing only the four built-ins (or `noTools:"all"`)
   // would strip every gateway stub from the agent (HOR-395/ARCH-006).
   const gatewayToolNames = descriptors.map((d) => d.name);
-  const controlToolNames = completion.required ? ["complete_step"] : [];
-  if (a.workspaceTools) controlToolNames.push("publish_artifact");
+  // Reserved platform controls are independent of ARCH-016's AgentPool
+  // workspace-tool switch. publish_artifact crosses supervisor IPC and is not
+  // one of the local read/write/edit/bash tools.
+  const controlToolNames = ["publish_artifact", ...(completion.required ? ["complete_step"] : [])];
   const toolOpts = a.workspaceTools
     ? { tools: [...gatewayToolNames, ...controlToolNames, "read", "write", "edit", "bash"] as string[] }
     : { tools: [...gatewayToolNames, ...controlToolNames] };
-  const customTools = descriptors.map(gatewayToolStub(rpc, completion));
-  if (a.workspaceTools) customTools.push(new ArtifactPublicationState(rpc).tool());
+  const customTools = descriptors.map(gatewayToolStub(rpc, completion, a.artifactInputs));
+  customTools.push(new ArtifactPublicationState(rpc).tool());
   if (completion.required) customTools.push(completion.tool());
 
   // The runtime factory closes over the assignment-specific inputs (provider,

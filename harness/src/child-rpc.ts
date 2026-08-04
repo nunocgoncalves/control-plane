@@ -19,6 +19,7 @@ import {
   FrameReader,
   parseSupervisorRpcFrame,
   encodeFrame,
+  type ArtifactInputRefFrame,
   type GatewayToolDescriptor,
   type ToolResultFrame,
 } from "./ipc.js";
@@ -35,6 +36,7 @@ export interface ToolCallRequest {
   toolName: string;
   toolVersionDigest: string;
   argumentsJson: string;
+  artifactInputRefs: ArtifactInputRefFrame[];
   idempotencyKey?: string;
 }
 export interface ToolCallResult {
@@ -181,6 +183,7 @@ export class ChildRpc {
         toolName: call.toolName,
         toolVersionDigest: call.toolVersionDigest,
         argumentsJson: call.argumentsJson,
+        artifactInputRefs: call.artifactInputRefs,
         ...(call.idempotencyKey !== undefined ? { idempotencyKey: call.idempotencyKey } : {}),
       });
     });

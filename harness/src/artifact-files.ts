@@ -68,7 +68,7 @@ export async function materializeArtifacts(
         }
         if (response.kind.case !== "chunk" || !canonicalSeen) throw new SandboxError("artifact stream did not begin with metadata");
         const chunk = response.kind.value;
-        writeSync(fd, chunk);
+        writeAllSync(fd, chunk);
         hash.update(chunk);
         count += BigInt(chunk.byteLength);
       }
@@ -78,6 +78,9 @@ export async function materializeArtifacts(
         throw new SandboxError(`artifact digest/size mismatch: expected ${ref.digest}/${ref.sizeBytes}, got ${digest}/${count}`);
       }
       fsyncSync(fd);
+      if (fstatSync(fd, { bigint: true }).size !== count) {
+        throw new SandboxError("materialized file size differs from verified stream size");
+      }
       fchmodSync(fd, 0o600);
       fchownSync(fd, uid, gid);
       closeSync(fd);
@@ -89,6 +92,19 @@ export async function materializeArtifacts(
       try { unlinkSync(temp); } catch { /* absent */ }
       throw err instanceof SandboxError ? err : new SandboxError(`materialize artifact ${ref.artifactId}: ${String(err)}`);
     }
+  }
+}
+
+type SyncWriter = (fd: number, buffer: Uint8Array, offset: number, length: number) => number;
+
+/** Node may legally perform a short synchronous write. Keep writing until the
+ * complete verified chunk is persisted or fail closed on no progress. */
+export function writeAllSync(fd: number, chunk: Uint8Array, writer: SyncWriter = writeSync): void {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const written = writer(fd, chunk, offset, chunk.byteLength - offset);
+    if (!Number.isInteger(written) || written <= 0) throw new SandboxError("artifact materialization write made no progress");
+    offset += written;
   }
 }
 

@@ -59,17 +59,22 @@ describe("createGatewayClient", () => {
       description: "read mail",
       inputSchema: { type: "object" },
       effectClass: "read_only",
+      readsArtifacts: false,
+      acceptedArtifactMimeTypes: [],
       timeoutMs: 30_000,
     });
   });
 
   it("invokeTool stamps attempt_id=runId + caller_scope_id=turnId and decodes the result", async () => {
-    let seen: { attemptId: string; callerScope: number; callerScopeId: string; toolCallId: string } | undefined;
+    let seen: { attemptId: string; callerScope: number; callerScopeId: string; toolCallId: string; artifactIds: string[] } | undefined;
     const transport = createRouterTransport((router) => {
       router.service(GatewayService, {
         discoverEffectiveTools: async () => ({ descriptors: [] }),
         invokeTool: async (req) => {
-          seen = { attemptId: req.attemptId, callerScope: req.callerScope, callerScopeId: req.callerScopeId, toolCallId: req.toolCallId };
+          seen = {
+            attemptId: req.attemptId, callerScope: req.callerScope, callerScopeId: req.callerScopeId,
+            toolCallId: req.toolCallId, artifactIds: req.artifactInputRefs.map((ref) => ref.artifactId),
+          };
           return { invocationId: "inv-2", state: InvokeState.SUCCEEDED, resultJson: new TextEncoder().encode('{"ok":true}'), artifactOutputRefs: [], error: undefined, existingInvocationId: "" };
         },
         cancelInvocation: async () => ({ state: InvokeState.FAILED }),
@@ -78,12 +83,16 @@ describe("createGatewayClient", () => {
     const client = createGatewayClient(cfg(), () => transport as Transport);
     const resp = await client.invokeTool(
       { turnId: "turn-1", runId: "run-1" },
-      { toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: '{"limit":5}', idempotencyKey: "tc-1" },
+      {
+        toolCallId: "tc-1", toolName: "graph.read_mail", toolVersionDigest: "sha256:abc", argumentsJson: '{"limit":5}',
+        artifactInputRefs: [{ artifactId: "artifact-1", mimeType: "text/plain", sizeBytes: "4", digest: "sha256:test" }],
+        idempotencyKey: "tc-1",
+      },
       undefined,
     );
     expect(resp.state).toBe(InvokeState.SUCCEEDED);
     expect(new TextDecoder().decode(resp.resultJson)).toBe('{"ok":true}');
-    expect(seen).toEqual({ attemptId: "run-1", callerScope: CallerScope.TURN, callerScopeId: "turn-1", toolCallId: "tc-1" });
+    expect(seen).toEqual({ attemptId: "run-1", callerScope: CallerScope.TURN, callerScopeId: "turn-1", toolCallId: "tc-1", artifactIds: ["artifact-1"] });
   });
 
   it("streams artifact bytes with authenticated turn context", async () => {

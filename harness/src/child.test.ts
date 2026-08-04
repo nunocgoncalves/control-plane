@@ -341,8 +341,10 @@ describe("createSession credentialless custom provider (HOR-395)", { timeout: 30
       const runtime = await createSession(a, sessionDir, tmp, [], 1, rpc, descriptors);
       const active = runtime.session.getActiveToolNames();
       expect(active).toContain("graph.read_mail");
-      // workspaceTools=false → no local bash/read/write/edit.
+      // workspaceTools=false → no local bash/read/write/edit, while reserved
+      // platform controls remain available independently of that switch.
       expect(active).not.toContain("bash");
+      expect(active).toContain("publish_artifact");
       await runtime.dispose();
     } finally {
       rmSync(tmp, { recursive: true, force: true });

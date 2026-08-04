@@ -76,6 +76,13 @@ export interface ModelRequestFrame {
   /** The OpenAI chat-completions request body (model/messages/tools/reasoning/max_tokens/stream:true). */
   body: unknown;
 }
+export interface ArtifactInputRefFrame {
+  artifactId: string;
+  mimeType: string;
+  /** Decimal int64. A string avoids precision loss and JSON BigInt failures. */
+  sizeBytes: string;
+  digest: string;
+}
 export interface ToolCallFrame {
   type: "toolCall";
   requestId: string;
@@ -83,6 +90,7 @@ export interface ToolCallFrame {
   toolName: string;
   toolVersionDigest: string;
   argumentsJson: string;
+  artifactInputRefs: ArtifactInputRefFrame[];
   idempotencyKey?: string;
 }
 export interface PublishArtifactRpcFrame {
@@ -123,6 +131,8 @@ export interface GatewayToolDescriptor {
   /** JSON Schema for arguments (parsed JSON object). */
   inputSchema: unknown;
   effectClass: "read_only" | "idempotent_write" | "non_idempotent_write";
+  readsArtifacts?: boolean;
+  acceptedArtifactMimeTypes?: string[];
   timeoutMs?: number;
 }
 export interface GatewayToolsFrame {
@@ -261,6 +271,20 @@ export function parseChildRpcFrame(raw: unknown): ChildRpcFrame | null {
         typeof r.argumentsJson !== "string"
       )
         return null;
+      if (!Array.isArray(r.artifactInputRefs)) return null;
+      const artifactInputRefs: ArtifactInputRefFrame[] = [];
+      for (const rawRef of r.artifactInputRefs) {
+        if (!rawRef || typeof rawRef !== "object") return null;
+        const ref = rawRef as Record<string, unknown>;
+        if (
+          typeof ref.artifactId !== "string" ||
+          typeof ref.mimeType !== "string" ||
+          typeof ref.sizeBytes !== "string" ||
+          !/^(0|[1-9][0-9]*)$/.test(ref.sizeBytes) ||
+          typeof ref.digest !== "string"
+        ) return null;
+        artifactInputRefs.push({ artifactId: ref.artifactId, mimeType: ref.mimeType, sizeBytes: ref.sizeBytes, digest: ref.digest });
+      }
       const f: ToolCallFrame = {
         type: "toolCall",
         requestId: r.requestId,
@@ -268,6 +292,7 @@ export function parseChildRpcFrame(raw: unknown): ChildRpcFrame | null {
         toolName: r.toolName,
         toolVersionDigest: r.toolVersionDigest,
         argumentsJson: r.argumentsJson,
+        artifactInputRefs,
       };
       if (typeof r.idempotencyKey === "string") f.idempotencyKey = r.idempotencyKey;
       return f;
@@ -310,7 +335,10 @@ export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null
           typeof dd.digest !== "string" ||
           typeof dd.description !== "string" ||
           dd.inputSchema === undefined ||
-          typeof dd.effectClass !== "string"
+          typeof dd.effectClass !== "string" ||
+          (dd.readsArtifacts !== undefined && typeof dd.readsArtifacts !== "boolean") ||
+          (dd.acceptedArtifactMimeTypes !== undefined &&
+            (!Array.isArray(dd.acceptedArtifactMimeTypes) || !dd.acceptedArtifactMimeTypes.every((mime) => typeof mime === "string")))
         )
           return null;
         if (dd.effectClass !== "read_only" && dd.effectClass !== "idempotent_write" && dd.effectClass !== "non_idempotent_write")
@@ -323,6 +351,8 @@ export function parseSupervisorRpcFrame(raw: unknown): SupervisorRpcFrame | null
           inputSchema: dd.inputSchema,
           effectClass: dd.effectClass,
         };
+        if (typeof dd.readsArtifacts === "boolean") desc.readsArtifacts = dd.readsArtifacts;
+        if (Array.isArray(dd.acceptedArtifactMimeTypes)) desc.acceptedArtifactMimeTypes = dd.acceptedArtifactMimeTypes as string[];
         if (typeof dd.timeoutMs === "number") desc.timeoutMs = dd.timeoutMs;
         descriptors.push(desc);
       }

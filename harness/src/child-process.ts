@@ -307,6 +307,12 @@ function assignmentToJson(at: AssignTurn): unknown {
     completionOutcomes: at.completionOutcomes,
     completionOutputSchemaJson: at.completionOutputSchemaJson,
     skills: at.skills.map((skill) => ({ name: skill.name, version: skill.version, digest: skill.digest })),
+    artifactInputs: at.materializations.flatMap((materialization) => materialization.ref ? [{
+      artifactId: materialization.ref.artifactId,
+      mimeType: materialization.ref.mimeType,
+      sizeBytes: materialization.ref.sizeBytes.toString(),
+      digest: materialization.ref.digest,
+    }] : []),
     message: at.message,
     images: at.images.map((img) => ({ data: Buffer.from(img.data).toString("base64"), mimeType: img.mimeType })),
   };

@@ -20,10 +20,12 @@ describe("parseChildRpcFrame (fd 4)", () => {
       toolName: "graph.read_mail",
       toolVersionDigest: "sha256:abc",
       argumentsJson: "{}",
+      artifactInputRefs: [{ artifactId: "a1", mimeType: "text/plain", sizeBytes: "4", digest: "sha256:test" }],
       idempotencyKey: "tc1",
     });
     expect(f?.type).toBe("toolCall");
     expect(f && f.type === "toolCall" && f.idempotencyKey).toBe("tc1");
+    expect(f && f.type === "toolCall" && f.artifactInputRefs[0]?.artifactId).toBe("a1");
   });
   it("parses a structured stepCompletion report", () => {
     const f = parseChildRpcFrame({ type: "stepCompletion", requestId: "r3", outcome: "approved", summary: "done", outputJson: "{}", artifactRefs: [] });

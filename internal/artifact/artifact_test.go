@@ -3,8 +3,11 @@ package artifact_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +64,83 @@ func TestArtifactMinIORoundTripImmutabilityAndDeletion(t *testing.T) {
 	stat, err := svc.Stat(ctx, a.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, stat.Digest, "metadata tombstone retains digest")
+}
+
+type retryableDeleteStore struct {
+	mu         sync.Mutex
+	objects    map[string][]byte
+	failDelete bool
+}
+
+func (s *retryableDeleteStore) Ready(context.Context) error { return nil }
+func (s *retryableDeleteStore) Put(_ context.Context, key string, r io.Reader, _ string) error {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[key] = body
+	return nil
+}
+func (s *retryableDeleteStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	body, ok := s.objects[key]
+	if !ok {
+		return nil, errors.New("missing")
+	}
+	return io.NopCloser(bytes.NewReader(append([]byte(nil), body...))), nil
+}
+func (s *retryableDeleteStore) Delete(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failDelete {
+		return errors.New("transient object-store deletion failure")
+	}
+	delete(s.objects, key)
+	return nil
+}
+func (s *retryableDeleteStore) objectCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.objects)
+}
+func (s *retryableDeleteStore) allowDelete() {
+	s.mu.Lock()
+	s.failDelete = false
+	s.mu.Unlock()
+}
+
+func TestArtifactFailedPendingCleanupRemainsRetryable(t *testing.T) {
+	pool := testutil.NewPostgresPool(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var creator string
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO identity.identities (key,kind,source) VALUES ('retry-user','user','local') RETURNING id::text`).Scan(&creator))
+	objects := &retryableDeleteStore{objects: map[string][]byte{}, failDelete: true}
+	svc := artifactstore.NewService(artifactstore.NewStore(pool), objects, artifactstore.Config{
+		MaxSize: 1024, PendingTTL: time.Nanosecond, SweepInterval: 10 * time.Millisecond,
+	}, nil)
+
+	_, err := svc.Upload(ctx, artifactstore.UploadInput{
+		SourceType: artifactstore.SourceUserUpload, CreatedByIdentityID: creator, MIMEType: "text/plain",
+		ExpectedDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	}, bytes.NewBufferString("bytes that fail integrity"))
+	assert.ErrorIs(t, err, artifactstore.ErrDigest)
+	var pending int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artifact.artifacts WHERE state='pending'`).Scan(&pending))
+	assert.Equal(t, 1, pending, "failed object deletion keeps the only reconciliation handle")
+	assert.Equal(t, 1, objects.objectCount())
+
+	objects.allowDelete()
+	svc.StartSweeper(ctx)
+	require.Eventually(t, func() bool {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact.artifacts WHERE state='pending'`).Scan(&pending); err != nil {
+			return false
+		}
+		return pending == 0 && objects.objectCount() == 0
+	}, time.Second, 10*time.Millisecond, "stale pending cleanup should retry object deletion and then remove metadata")
 }
 
 func TestArtifactRejectsDigestAndSizeMismatch(t *testing.T) {

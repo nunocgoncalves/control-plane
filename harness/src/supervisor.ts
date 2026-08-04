@@ -50,7 +50,7 @@ import { EventOutbox, OutboxOverflow, AckError } from "./event-outbox.js";
 import { createGatewayClient, type GatewayClient, type AssignmentScope } from "./gateway-client.js";
 import { streamModel } from "./model-bridge.js";
 import { InvokeState } from "./gen/iterabase/gateway/v1/gateway_pb.js";
-import type { GatewayToolDescriptor } from "./ipc.js";
+import type { ArtifactInputRefFrame, GatewayToolDescriptor } from "./ipc.js";
 import { materializeArtifacts, publishWorkspaceArtifact } from "./artifact-files.js";
 
 /** A durable TurnEvent payload (the oneof) the supervisor sequences + sends. */
@@ -67,7 +67,7 @@ export interface ChildResult {
 /** A child→supervisor RPC request (fd 4) — model/tool/cancel (HOR-395). */
 export type ChildRpcRequest =
   | { type: "modelRequest"; requestId: string; body: unknown }
-  | { type: "toolCall"; requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string }
+  | { type: "toolCall"; requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; artifactInputRefs?: ArtifactInputRefFrame[]; idempotencyKey?: string }
   | { type: "publishArtifact"; requestId: string; relativePath: string; mimeType: string }
   | { type: "stepCompletion"; requestId: string; outcome: string; summary: string; outputJson: string; artifactRefs: Array<{artifactId:string;role:string;metadataJson:string}> }
   | { type: "cancel"; requestId: string };
@@ -463,9 +463,11 @@ export class Supervisor {
         continue;
       }
       if (req.type === "publishArtifact") {
-        if (!at.workspaceTools || this.turn?.completionReported) {
+        // Reserved platform control: unlike read/write/edit/bash, publication
+        // is not gated by the AgentPool workspace-tools switch.
+        if (this.turn?.completionReported) {
           done();
-          child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: "artifact publication is not permitted" });
+          child.rpcSend({ type: "artifactPublished", requestId: req.requestId, errorMessage: "artifact publication is not permitted after complete_step" });
           continue;
         }
         void this.handlePublishArtifact(child, req, scope, at, sandbox, controllers, done);
@@ -477,7 +479,7 @@ export class Supervisor {
           child.rpcSend({ type: "toolResult", requestId: req.requestId, isError: true, errorMessage: "customer-system tools are disabled after complete_step" });
           continue;
         }
-        void this.handleToolCall(child, req, scope, discovered, controllers, done);
+        void this.handleToolCall(child, req, scope, at, discovered, controllers, done);
         continue;
       }
     }
@@ -522,8 +524,9 @@ export class Supervisor {
    * fail-closed before calling the gateway (acceptance criterion). */
   private async handleToolCall(
     child: Child,
-    req: { requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; idempotencyKey?: string },
+    req: { requestId: string; toolCallId: string; toolName: string; toolVersionDigest: string; argumentsJson: string; artifactInputRefs?: ArtifactInputRefFrame[]; idempotencyKey?: string },
     scope: AssignmentScope,
+    at: AssignTurn,
     discovered: Map<string, GatewayToolDescriptor>,
     controllers: Map<string, AbortController>,
     onDone: () => void,
@@ -537,6 +540,7 @@ export class Supervisor {
     const ac = new AbortController();
     controllers.set(req.requestId, ac);
     try {
+      const canonicalRefs = canonicalToolArtifactInputs(at, req.artifactInputRefs ?? []);
       const resp = await this.gatewayClient.invokeTool(
         scope,
         {
@@ -546,6 +550,7 @@ export class Supervisor {
           // a caller-supplied digest that differs.
           toolVersionDigest: pinned.digest,
           argumentsJson: req.argumentsJson,
+          artifactInputRefs: canonicalRefs,
           ...(req.idempotencyKey !== undefined ? { idempotencyKey: req.idempotencyKey } : {}),
         },
         ac.signal,
@@ -845,6 +850,24 @@ class TokenDeltaForwarder {
     this.pending = [];
     this.bytes = 0;
   }
+}
+
+/** Revalidate child-supplied tool refs against the immutable assignment. The
+ * child may narrow the set for one invocation but can never add or alter a ref. */
+function canonicalToolArtifactInputs(at: AssignTurn, requested: ArtifactInputRefFrame[]): ArtifactInputRefFrame[] {
+  const assigned = new Map(at.materializations.flatMap((m) => m.ref ? [[m.ref.artifactId, m.ref] as const] : []));
+  const seen = new Set<string>();
+  for (const ref of requested) {
+    const canonical = assigned.get(ref.artifactId);
+    if (
+      !canonical || seen.has(ref.artifactId) || canonical.mimeType !== ref.mimeType ||
+      canonical.sizeBytes.toString() !== ref.sizeBytes || canonical.digest !== ref.digest
+    ) {
+      throw new SupervisorError(`tool artifact input is not canonical for this assignment: ${ref.artifactId}`);
+    }
+    seen.add(ref.artifactId);
+  }
+  return requested;
 }
 
 /** Wrap a TurnEvent in a WorkerMessage (no re-sequencing — preserves the WAL'd sequence for dedup). */
