@@ -403,7 +403,9 @@ func (s *Store) GetToolVersion(ctx context.Context, name, digest string) (ToolVe
 // UpsertRunnerRegistration fences any previous active registration for the same
 // (runner_id, tool_name, tool_version) and inserts a fresh active one. Called
 // on Register over a new stream; the fencing generation distinguishes
-// reconnects (ARCH-015).
+// reconnects (ARCH-015). A reconnect preserves the latest registration's
+// accepting_new state so a draining version never becomes snapshot-eligible
+// during the Register -> BeginDrain replay window.
 func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistration) (RunnerRegistration, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -411,6 +413,14 @@ func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistrati
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	acceptingNew := true
+	if err := tx.QueryRow(ctx, `
+		SELECT accepting_new FROM toolgateway.runner_registrations
+		WHERE runner_id = $1 AND tool_name = $2 AND tool_version = $3
+		ORDER BY registered_at DESC LIMIT 1`,
+		r.RunnerID, r.ToolName, r.ToolVersion).Scan(&acceptingNew); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return RunnerRegistration{}, fmt.Errorf("read previous drain state: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE toolgateway.runner_registrations SET active = false
 		WHERE runner_id = $1 AND tool_name = $2 AND tool_version = $3 AND active`,
@@ -420,11 +430,11 @@ func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistrati
 
 	row := tx.QueryRow(ctx, `
 		INSERT INTO toolgateway.runner_registrations
-			(runner_id, spiffe_id, namespace, tool_name, tool_version, tool_digest, fencing_generation)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			(runner_id, spiffe_id, namespace, tool_name, tool_version, tool_digest, fencing_generation, accepting_new)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, runner_id, spiffe_id, namespace, tool_name, tool_version, tool_digest,
 		          fencing_generation, last_heartbeat_at, active, accepting_new, registered_at`,
-		r.RunnerID, r.SpiffeID, r.Namespace, r.ToolName, r.ToolVersion, r.ToolDigest, r.FencingGeneration)
+		r.RunnerID, r.SpiffeID, r.Namespace, r.ToolName, r.ToolVersion, r.ToolDigest, r.FencingGeneration, acceptingNew)
 	out, err := scanRunnerRegistration(row)
 	if err != nil {
 		return RunnerRegistration{}, fmt.Errorf("insert registration: %w", err)

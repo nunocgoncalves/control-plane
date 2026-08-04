@@ -5,6 +5,7 @@ import { toolDigest } from "./canonical.js";
 import { loadGeneration } from "./manifest.js";
 import { MaterializerMetrics, RunnerMetrics, startMetricsServer } from "./metrics.js";
 import { ToolRunner, type RunnerConfig } from "./runner.js";
+import { sleep } from "./sleep.js";
 
 const abort = new AbortController();
 process.on("SIGTERM", () => abort.abort());
@@ -28,6 +29,7 @@ async function run(): Promise<void> {
     runnerID: env("TOOL_RUNNER_ID", "overlay-tools"), concurrency: positiveInt("TOOL_RUNNER_CONCURRENCY", 8),
     maxGenerations: positiveInt("TOOL_RUNNER_MAX_GENERATIONS", 8), maxLoadedBytes: positiveInt("TOOL_RUNNER_MAX_LOADED_BYTES", 512 * 1024 * 1024),
     drainMaxAgeMs: durationMs("TOOL_RUNNER_DRAIN_MAX_AGE", 24 * 60 * 60 * 1000), stateFile: `${controlRoot}/runner-state.json`,
+    readinessFile: `${controlRoot}/runner-ready`,
   };
   const metrics = new RunnerMetrics();
   await startMetricsServer(metrics.registry, tcpPort("TOOL_RUNNER_METRICS_PORT", 9092), abort.signal);
@@ -42,8 +44,6 @@ async function run(): Promise<void> {
         await runner.activate(generation);
         last = current.artifactDigest;
         metrics.generationActivations.labels("success").inc();
-        metrics.generationReady.set(1);
-        await writeFile(`${controlRoot}/runner-ready`, current.artifactDigest);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -110,6 +110,4 @@ function durationMs(name: string, fallback: number): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be positive and cannot be disabled`);
   return value;
 }
-function sleep(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); }); }
-
 main().catch((error) => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; });

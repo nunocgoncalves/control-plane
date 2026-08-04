@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { create } from "@bufbuild/protobuf";
-import { createClient } from "@connectrpc/connect";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createGrpcTransport } from "@connectrpc/connect-node";
 import {
   ArtifactService, CredentialScheme, EffectClass, InvokeState, Retryability, RunnerService,
@@ -11,6 +11,7 @@ import {
 import type { LoadedGeneration, LoadedTool, ToolManifest } from "./manifest.js";
 import type { RunnerMetrics } from "./metrics.js";
 import { AsyncQueue } from "./queue.js";
+import { sleep } from "./sleep.js";
 import { ToolError, type ToolArtifactAPI, type ToolErrorShape, type ToolInvocationContext } from "./types.js";
 
 export interface RunnerConfig {
@@ -25,9 +26,22 @@ export interface RunnerConfig {
   maxLoadedBytes: number;
   drainMaxAgeMs: number;
   stateFile?: string;
+  readinessFile?: string;
 }
 
 interface ActiveTool { tool: LoadedTool; generation: string; drainingAt?: number }
+interface RunnerSnapshot {
+  active: Map<string, ActiveTool>;
+  generations: Map<string, LoadedGeneration>;
+  currentGeneration: string;
+}
+interface PendingActivation {
+  generation: LoadedGeneration;
+  requiredKeys: Set<string>;
+  snapshot: RunnerSnapshot;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
 const keyOf = (ref: { name: string; digest: string }) => `${ref.name}\0${ref.digest}`;
 
 class Semaphore {
@@ -49,38 +63,76 @@ export class ToolRunner {
   private heartbeatMs = 10_000;
   private semaphore: Semaphore;
   private currentGeneration = "";
+  private acceptedKeys = new Set<string>();
+  private registrationPending: Array<{ key: string; name: string }> = [];
+  private pendingActivation: PendingActivation | null = null;
+  private serving = false;
 
-  constructor(private readonly cfg: RunnerConfig, private readonly metrics?: RunnerMetrics) { this.semaphore = new Semaphore(cfg.concurrency); }
+  constructor(private readonly cfg: RunnerConfig, private readonly metrics?: RunnerMetrics) {
+    this.semaphore = new Semaphore(cfg.concurrency);
+    this.metrics?.generationReady.set(0);
+    if (cfg.readinessFile) rmSync(cfg.readinessFile, { force: true });
+  }
 
   async activate(generation: LoadedGeneration): Promise<void> {
     if (this.generations.has(generation.artifactDigest)) return;
-    const nextKeys = new Set(generation.tools.map((tool) => keyOf(tool.manifest)));
-    const newBytes = [...this.generations.values()].reduce((n, g) => n + g.sizeBytes, 0) + generation.sizeBytes;
-    if (this.generations.size + 1 > this.cfg.maxGenerations || newBytes > this.cfg.maxLoadedBytes) {
-      throw new Error(`generation capacity exceeded (${this.generations.size + 1}/${this.cfg.maxGenerations}, ${newBytes}/${this.cfg.maxLoadedBytes} bytes)`);
-    }
-    // Complete validation happened in loadGeneration. Only now publish any
-    // registration, preserving atomic invalid-revision behavior.
-    for (const tool of generation.tools) {
-      const key = keyOf(tool.manifest);
-      const existing = this.active.get(key);
-      if (existing) { existing.generation = generation.artifactDigest; continue; }
-      this.active.set(key, { tool, generation: generation.artifactDigest });
-      this.send(registerMessage(this.cfg.runnerID, tool.manifest));
-    }
-    const draining: ToolVersionRef[] = [];
-    for (const [key, current] of this.active) {
-      if (!nextKeys.has(key) && current.drainingAt === undefined) {
-        current.drainingAt = Date.now();
-        draining.push(refFor(current.tool));
+    if (this.pendingActivation) throw new Error("another generation activation is still awaiting gateway acceptance");
+
+    // Immutable versions are process-lifetime identities, not just identities
+    // within one overlay layer. Reject a conflicting revision before changing
+    // serving state or sending any registration to the gateway.
+    for (const candidate of generation.tools) {
+      for (const current of this.active.values()) {
+        if (current.tool.manifest.name === candidate.manifest.name &&
+            current.tool.manifest.version === candidate.manifest.version &&
+            current.tool.manifest.digest !== candidate.manifest.digest) {
+          throw new Error(`${candidate.manifest.name}: immutable version ${candidate.manifest.version} is already retained with digest ${current.tool.manifest.digest}`);
+        }
       }
     }
-    this.generations.set(generation.artifactDigest, generation);
-    this.currentGeneration = generation.artifactDigest;
-    this.persistState();
-    this.updateStateMetrics();
-    if (draining.length) this.send(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
-    console.info(JSON.stringify({ event: "generation_activated", revision: generation.revision, digest: generation.artifactDigest, tools: generation.tools.length }));
+
+    // Drop generations no active/draining tool references before applying the
+    // incoming capacity limit. Identical-tool and add-only revisions otherwise
+    // consume slots forever despite having no pins.
+    this.reapUnusedGenerations();
+    const snapshot: RunnerSnapshot = {
+      active: new Map([...this.active].map(([key, value]) => [key, { ...value }])),
+      generations: new Map(this.generations),
+      currentGeneration: this.currentGeneration,
+    };
+    const nextKeys = new Set(generation.tools.map((tool) => keyOf(tool.manifest)));
+    const projected = new Map([...this.active].map(([key, value]) => [key, { ...value }]));
+    for (const tool of generation.tools) {
+      const key = keyOf(tool.manifest);
+      const existing = projected.get(key);
+      if (existing) existing.generation = generation.artifactDigest;
+      else projected.set(key, { tool, generation: generation.artifactDigest });
+    }
+    for (const [key, current] of projected) {
+      if (!nextKeys.has(key) && current.drainingAt === undefined) current.drainingAt = Date.now();
+    }
+    const projectedGenerations = new Map(this.generations).set(generation.artifactDigest, generation);
+    const used = new Set([...projected.values()].map((active) => active.generation));
+    used.add(generation.artifactDigest);
+    for (const digest of projectedGenerations.keys()) if (!used.has(digest)) projectedGenerations.delete(digest);
+    const projectedBytes = [...projectedGenerations.values()].reduce((n, g) => n + g.sizeBytes, 0);
+    if (projectedGenerations.size > this.cfg.maxGenerations || projectedBytes > this.cfg.maxLoadedBytes) {
+      throw new Error(`generation capacity exceeded (${projectedGenerations.size}/${this.cfg.maxGenerations}, ${projectedBytes}/${this.cfg.maxLoadedBytes} bytes)`);
+    }
+
+    this.active = projected;
+    this.generations = projectedGenerations;
+    const accepted = new Promise<void>((resolve, reject) => {
+      this.pendingActivation = { generation, requiredKeys: nextKeys, snapshot, resolve, reject };
+    });
+    if (this.queue) {
+      for (const tool of generation.tools) {
+        const key = keyOf(tool.manifest);
+        if (!this.acceptedKeys.has(key) && !this.registrationPending.some((pending) => pending.key === key)) this.sendRegistration(tool);
+      }
+    }
+    this.checkActivationAccepted();
+    return accepted;
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -91,6 +143,7 @@ export class ToolRunner {
         delay = 500;
       } catch (error) {
         if (signal.aborted) return;
+        if (permanentRegistrationError(error)) this.rejectPendingActivation(error);
         this.metrics?.gatewayStreamErrors.inc();
         console.error(JSON.stringify({ event: "runner_stream_error", message: safeMessage(error) }));
         await sleep(delay, signal);
@@ -111,11 +164,12 @@ export class ToolRunner {
     const tools = [...this.active.values()];
     if (!tools.length) throw new Error("no valid generation is loaded");
     this.queue = new AsyncQueue<RunnerMessage>();
-    // The first message must be Register; re-register every retained version on
-    // reconnect so pinned attempts remain routable where possible.
-    for (const active of tools) this.queue.push(registerMessage(this.cfg.runnerID, active.tool.manifest));
-    const draining = tools.filter((active) => active.drainingAt !== undefined).map((active) => refFor(active.tool));
-    if (draining.length) this.queue.push(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
+    this.acceptedKeys.clear();
+    this.registrationPending = [];
+    // Re-register every retained version on reconnect so pinned attempts remain
+    // routable. Registrations are tracked in send order because Welcome accepts
+    // the first item and subsequent Ack messages identify only the tool name.
+    for (const active of tools) this.sendRegistration(active.tool);
     const responses = client.registerRunner(this.queue, { signal });
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -123,8 +177,12 @@ export class ToolRunner {
         switch (control.kind.case) {
           case "welcome":
             this.metrics?.gatewayConnected.set(1);
+            this.acceptRegistration();
             this.heartbeatMs = Math.max(1000, control.kind.value.heartbeatIntervalMs);
             if (!timer) { this.heartbeat(); timer = setInterval(() => this.heartbeat(), this.heartbeatMs); }
+            break;
+          case "ack":
+            if (control.kind.value.kind.case === "registered") this.acceptRegistration(control.kind.value.kind.value);
             break;
           case "invoke": void this.execute(control.kind.value); break;
           case "cancel": this.invocationAborts.get(control.kind.value.invocationId)?.abort(control.kind.value.reason); break;
@@ -133,11 +191,76 @@ export class ToolRunner {
       }
       throw new Error("gateway closed runner stream");
     } finally {
+      this.setServing(false);
       this.metrics?.gatewayConnected.set(0);
       if (timer) clearInterval(timer);
       this.queue.close();
       this.queue = null;
+      this.acceptedKeys.clear();
+      this.registrationPending = [];
     }
+  }
+
+  private sendRegistration(tool: LoadedTool): void {
+    const key = keyOf(tool.manifest);
+    this.registrationPending.push({ key, name: tool.manifest.name });
+    this.send(registerMessage(this.cfg.runnerID, tool.manifest));
+  }
+
+  private acceptRegistration(name?: string): void {
+    const accepted = this.registrationPending.shift();
+    if (!accepted) throw new Error("gateway accepted an unexpected runner registration");
+    if (name !== undefined && name !== accepted.name) throw new Error(`gateway acknowledged ${name} while ${accepted.name} was pending`);
+    this.acceptedKeys.add(accepted.key);
+    this.checkActivationAccepted();
+    this.checkServing();
+  }
+
+  private checkActivationAccepted(): void {
+    const pending = this.pendingActivation;
+    if (!pending || [...pending.requiredKeys].some((key) => !this.acceptedKeys.has(key))) return;
+    this.currentGeneration = pending.generation.artifactDigest;
+    this.pendingActivation = null;
+    this.reapUnusedGenerations();
+    const draining = [...this.active.values()].filter((active) => active.drainingAt !== undefined).map((active) => refFor(active.tool));
+    if (draining.length) this.send(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
+    console.info(JSON.stringify({ event: "generation_activated", revision: pending.generation.revision, digest: pending.generation.artifactDigest, tools: pending.generation.tools.length }));
+    pending.resolve();
+    this.checkServing();
+  }
+
+  private checkServing(): void {
+    if (!this.currentGeneration || !this.queue) return;
+    const current = this.generations.get(this.currentGeneration);
+    if (!current || current.tools.some((tool) => !this.acceptedKeys.has(keyOf(tool.manifest)))) return;
+    this.setServing(true);
+  }
+
+  private rejectPendingActivation(error: unknown): void {
+    const pending = this.pendingActivation;
+    if (!pending) return;
+    this.pendingActivation = null;
+    this.active = pending.snapshot.active;
+    this.generations = pending.snapshot.generations;
+    this.currentGeneration = pending.snapshot.currentGeneration;
+    this.persistState();
+    this.updateStateMetrics();
+    pending.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  private setServing(serving: boolean): void {
+    if (this.serving === serving) return;
+    this.serving = serving;
+    this.metrics?.generationReady.set(serving ? 1 : 0);
+    if (!this.cfg.readinessFile) return;
+    if (!serving) {
+      rmSync(this.cfg.readinessFile, { force: true });
+      return;
+    }
+    mkdirSync(dirname(this.cfg.readinessFile), { recursive: true });
+    const tmp = `${this.cfg.readinessFile}.tmp`;
+    writeFileSync(tmp, this.currentGeneration);
+    renameSync(tmp, this.cfg.readinessFile);
   }
 
   private heartbeat(): void {
@@ -323,4 +446,7 @@ function descriptorTimeoutMs(value: ToolDescriptor | undefined): number {
   return Math.max(1, Number(value.timeout.seconds) * 1000 + Math.floor(value.timeout.nanos / 1_000_000));
 }
 function safeMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function sleep(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); }); }
+function permanentRegistrationError(error: unknown): boolean {
+  const code = ConnectError.from(error).code;
+  return code === Code.InvalidArgument || code === Code.PermissionDenied || code === Code.FailedPrecondition;
+}

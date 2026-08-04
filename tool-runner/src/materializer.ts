@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import * as k8s from "@kubernetes/client-node";
 import * as tar from "tar";
 import type { MaterializerMetrics } from "./metrics.js";
+import { sleep } from "./sleep.js";
 
 export interface MaterializerConfig {
   namespace: string;
@@ -201,4 +202,3 @@ async function totalGenerationBytes(root: string): Promise<number> {
   for (const dir of await generationDirs(root)) total += await directoryBytes(dir);
   return total;
 }
-function sleep(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); }); }

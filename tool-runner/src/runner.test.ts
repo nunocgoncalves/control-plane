@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,9 +26,17 @@ function generation(module: ToolModule): LoadedGeneration {
     tools: [{ manifest, module, directory: "/readonly/tools/product/echo", sizeBytes: 10, layer: "product" }] };
 }
 
+async function acceptWithoutGateway(runner: ToolRunner, loaded: LoadedGeneration): Promise<void> {
+  const activation = runner.activate(loaded);
+  const internal = runner as unknown as { acceptedKeys: Set<string>; checkActivationAccepted: () => void };
+  for (const tool of loaded.tools) internal.acceptedKeys.add(`${tool.manifest.name}\0${tool.manifest.digest}`);
+  internal.checkActivationAccepted();
+  await activation;
+}
+
 async function invoke(module: ToolModule) {
   const runner = new ToolRunner(config);
-  await runner.activate(generation(module));
+  await acceptWithoutGateway(runner, generation(module));
   const queue = new AsyncQueue<ReturnType<typeof create<typeof RunnerMessageSchema>>>();
   const internal = runner as unknown as {
     queue: typeof queue;
@@ -43,6 +54,51 @@ async function invoke(module: ToolModule) {
   await response;
   return message.value;
 }
+
+describe("generation lifecycle", () => {
+  it("rejects immutable version reuse before replacing the valid generation", async () => {
+    const runner = new ToolRunner(config);
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    await acceptWithoutGateway(runner, generation(module));
+    const conflictManifest = { ...manifest, digest: `sha256:${"2".repeat(64)}` };
+    const conflict: LoadedGeneration = {
+      ...generation(module), artifactDigest: "sha256:conflict",
+      tools: [{ ...generation(module).tools[0], manifest: conflictManifest }],
+    };
+    await expect(runner.activate(conflict)).rejects.toThrow("immutable version 1.0.0 is already retained");
+    const internal = runner as unknown as { currentGeneration: string; active: Map<string, unknown> };
+    expect(internal.currentGeneration).toBe("sha256:artifact");
+    expect(internal.active.size).toBe(1);
+  });
+
+  it("reclaims unreferenced identical-tool generations before capacity checks", async () => {
+    const runner = new ToolRunner({ ...config, maxGenerations: 1 });
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    await acceptWithoutGateway(runner, generation(module));
+    await acceptWithoutGateway(runner, { ...generation(module), revision: "main@sha1:next", artifactDigest: "sha256:next" });
+    const internal = runner as unknown as { generations: Map<string, LoadedGeneration> };
+    expect([...internal.generations.keys()]).toEqual(["sha256:next"]);
+  });
+
+  it("clears stale readiness and publishes it only while a generation is serving", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "runner-ready-"));
+    const readinessFile = join(directory, "runner-ready");
+    writeFileSync(readinessFile, "stale");
+    const runner = new ToolRunner({ ...config, readinessFile });
+    expect(existsSync(readinessFile)).toBe(false);
+    const internal = runner as unknown as {
+      queue: AsyncQueue<ReturnType<typeof create<typeof RunnerMessageSchema>>>;
+      setServing: (serving: boolean) => void;
+    };
+    internal.queue = new AsyncQueue();
+    const module: ToolModule = { identity: { name: manifest.name, version: manifest.version }, async invoke() { return { result: {} }; } };
+    await acceptWithoutGateway(runner, generation(module));
+    expect(readFileSync(readinessFile, "utf8")).toBe("sha256:artifact");
+    internal.setServing(false);
+    expect(existsSync(readinessFile)).toBe(false);
+    rmSync(directory, { recursive: true, force: true });
+  });
+});
 
 describe("trusted tool execution", () => {
   it("supplies parsed arguments and a deeply frozen invocation context", async () => {

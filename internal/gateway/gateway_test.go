@@ -403,6 +403,26 @@ func TestGateway_GenerationDrainPreservesPinsAndStopsNewSnapshots(t *testing.T) 
 	require.NoError(t, env.store.RetireVersions(context.Background(), "runner-1", gen, releasable))
 }
 
+func TestGateway_ReconnectPreservesDrainingRegistrationState(t *testing.T) {
+	env := newTestEnv(t, nil)
+	desc := echoDescriptor()
+	runner := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer runner.close()
+	runner.mu.Lock()
+	gen := int64(runner.welcome.FencingGeneration) //nolint:gosec // test generation is tiny
+	runner.mu.Unlock()
+	require.NoError(t, env.store.BeginDrain(context.Background(), "runner-1", gen, []gateway.ToolRef{{Name: desc.Name, Digest: desc.Digest}}))
+
+	reconnected, err := env.store.UpsertRunnerRegistration(context.Background(), gateway.RunnerRegistration{
+		RunnerID: "runner-1", SpiffeID: runnerSpiffe, Namespace: "ns-1", ToolName: desc.Name,
+		ToolVersion: desc.Version, ToolDigest: desc.Digest, FencingGeneration: gen + 1,
+	})
+	require.NoError(t, err)
+	assert.False(t, reconnected.AcceptingNew, "reconnect must not expose a draining version to new snapshots")
+}
+
 // TestGateway_FencingGenerationBinding (HOR-249 / DEC-041): the gateway binds
 // authorization to the verified worker AND the current fencing generation. A
 // request carrying a stale/wrong generation is denied even with a valid
