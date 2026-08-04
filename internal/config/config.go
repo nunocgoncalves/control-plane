@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -24,6 +25,7 @@ type Config struct {
 	Logging  LoggingConfig  `yaml:"logging"`
 	JWT      JWTConfig      `yaml:"jwt"`
 	Identity IdentityConfig `yaml:"identity"`
+	Artifact ArtifactConfig `yaml:"artifact"`
 }
 
 // APIConfig configures the HTTP API server (cmd/api).
@@ -102,6 +104,22 @@ type IdentityConfig struct {
 	Mode string `yaml:"mode"` // enrolled (default) | open (deferred, HOR-313)
 }
 
+// ArtifactConfig configures the shared Postgres + MinIO artifact domain used
+// by cmd/api and cmd/gateway. The dedicated access key is bucket-scoped and is
+// never mounted into supervisors, runners, or sandbox children.
+type ArtifactConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	Endpoint         string `yaml:"endpoint"`
+	AccessKey        string `yaml:"access_key"`
+	SecretKey        string `yaml:"secret_key"`
+	Bucket           string `yaml:"bucket"`
+	Secure           bool   `yaml:"secure"`
+	MaxSizeBytes     int64  `yaml:"max_size_bytes"`
+	DefaultRetention string `yaml:"default_retention"` // empty = indefinite
+	PendingTTL       string `yaml:"pending_ttl"`
+	SweepInterval    string `yaml:"sweep_interval"`
+}
+
 // Load reads configuration from a YAML file (if path is non-empty), expands
 // environment variables in the file, applies env overrides, and validates.
 // If path is empty, only defaults and env vars are used.
@@ -155,6 +173,7 @@ func defaults() *Config {
 		Logging:  LoggingConfig{Level: "info", Format: "json"},
 		JWT:      JWTConfig{TTL: "15m"},
 		Identity: IdentityConfig{Mode: "enrolled"},
+		Artifact: ArtifactConfig{Bucket: "iterabase-artifacts", MaxSizeBytes: 1 << 30, PendingTTL: "1h", SweepInterval: "1m"},
 	}
 }
 
@@ -229,6 +248,42 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("DISPATCH_DEFAULT_MODEL_API"); v != "" {
 		cfg.Dispatch.DefaultModelAPI = v
 	}
+	if v := os.Getenv("ARTIFACT_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Artifact.Enabled = parsed
+		}
+	}
+	if v := os.Getenv("ARTIFACT_ENDPOINT"); v != "" {
+		cfg.Artifact.Endpoint = v
+	}
+	if v := os.Getenv("ARTIFACT_ACCESS_KEY"); v != "" {
+		cfg.Artifact.AccessKey = v
+	}
+	if v := os.Getenv("ARTIFACT_SECRET_KEY"); v != "" {
+		cfg.Artifact.SecretKey = v
+	}
+	if v := os.Getenv("ARTIFACT_BUCKET"); v != "" {
+		cfg.Artifact.Bucket = v
+	}
+	if v := os.Getenv("ARTIFACT_DEFAULT_RETENTION"); v != "" {
+		cfg.Artifact.DefaultRetention = v
+	}
+	if v := os.Getenv("ARTIFACT_PENDING_TTL"); v != "" {
+		cfg.Artifact.PendingTTL = v
+	}
+	if v := os.Getenv("ARTIFACT_SWEEP_INTERVAL"); v != "" {
+		cfg.Artifact.SweepInterval = v
+	}
+	if v := os.Getenv("ARTIFACT_SECURE"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Artifact.Secure = parsed
+		}
+	}
+	if v := os.Getenv("ARTIFACT_MAX_SIZE_BYTES"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Artifact.MaxSizeBytes = parsed
+		}
+	}
 }
 
 func validate(cfg *Config) error {
@@ -251,6 +306,20 @@ func validate(cfg *Config) error {
 		if _, err := time.ParseDuration(cfg.JWT.TTL); err != nil {
 			return fmt.Errorf("jwt.ttl is not a valid duration: %w", err)
 		}
+	}
+	for name, value := range map[string]string{
+		"artifact.default_retention": cfg.Artifact.DefaultRetention,
+		"artifact.pending_ttl":       cfg.Artifact.PendingTTL,
+		"artifact.sweep_interval":    cfg.Artifact.SweepInterval,
+	} {
+		if value != "" {
+			if d, err := time.ParseDuration(value); err != nil || d <= 0 {
+				return fmt.Errorf("%s must be a positive Go duration", name)
+			}
+		}
+	}
+	if cfg.Artifact.MaxSizeBytes < 0 {
+		return fmt.Errorf("artifact.max_size_bytes cannot be negative")
 	}
 
 	return nil
@@ -276,6 +345,27 @@ func ValidateServe(cfg *Config) error {
 // ValidateGatewayServe checks gateway-serve requirements (cmd/gateway). mTLS is
 // required: server cert + key + the client CA bundle that verifies workload
 // identities. KubeNamespace scopes Secret-read RBAC (ARCH-008).
+// ValidateArtifactServe checks the shared artifact backend. Both serving
+// processes fail closed when the dedicated bucket credential is absent.
+func ValidateArtifactServe(cfg *Config) error {
+	a := cfg.Artifact
+	if !a.Enabled {
+		return nil
+	}
+	if a.Endpoint == "" || a.AccessKey == "" || a.SecretKey == "" || a.Bucket == "" {
+		return fmt.Errorf("artifact endpoint, access_key, secret_key, and bucket are required")
+	}
+	return nil
+}
+
+// ArtifactDurations parses the already-validated duration strings.
+func ArtifactDurations(cfg *Config) (defaultRetention, pendingTTL, sweepInterval time.Duration) {
+	defaultRetention, _ = time.ParseDuration(cfg.Artifact.DefaultRetention)
+	pendingTTL, _ = time.ParseDuration(cfg.Artifact.PendingTTL)
+	sweepInterval, _ = time.ParseDuration(cfg.Artifact.SweepInterval)
+	return
+}
+
 func ValidateGatewayServe(cfg *Config) error {
 	g := cfg.Gateway
 	if g.Addr == "" {
