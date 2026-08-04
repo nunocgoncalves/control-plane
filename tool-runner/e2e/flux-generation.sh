@@ -2,14 +2,14 @@
 # HOR-397 real-cluster contract: exact Flux artifact -> registration -> new
 # generation -> pinned old drain -> release. Destructive only to its kind cluster.
 set -euo pipefail
-for bin in kind kubectl helm flux docker node; do command -v "$bin" >/dev/null || { echo "missing $bin" >&2; exit 1; }; done
+for bin in kind kubectl helm flux docker node curl; do command -v "$bin" >/dev/null || { echo "missing $bin" >&2; exit 1; }; done
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 CHART_DIR=${ITERABASE_CHART_DIR:-"$ROOT/../iterabase-charts/charts/control-plane"}
 CLUSTER=${HOR397_KIND_CLUSTER:-hor397-tool-runner}
 CP_IMAGE=hor397-control-plane:dev
 RUNNER_IMAGE=hor397-tool-runner:dev
 GIT_IMAGE=hor397-git-server:dev
-cleanup() { kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; rm -rf "${TMP:-}"; }
+cleanup() { [[ -n "${PF_PID:-}" ]] && kill "$PF_PID" >/dev/null 2>&1 || true; kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; rm -rf "${TMP:-}"; }
 trap cleanup EXIT
 TMP=$(mktemp -d)
 
@@ -161,6 +161,21 @@ wait_sql() {
 }
 wait_sql "SELECT count(*) FROM toolgateway.runner_registrations WHERE tool_name='platform.echo' AND tool_digest='$D1' AND active AND accepting_new" 1
 
+# Metrics follow the inference-gateway pattern: an unauthenticated metrics-only
+# Service + ServiceMonitor, with no inbound tool execution API.
+kubectl -n iterabase-system port-forward deployment/hor397-tool-runner 19091:9091 19092:9092 >"$TMP/port-forward.log" 2>&1 &
+PF_PID=$!
+for _ in $(seq 1 30); do
+  curl -fsS http://127.0.0.1:19091/metrics >"$TMP/materializer.prom" 2>/dev/null && \
+    curl -fsS http://127.0.0.1:19092/metrics >"$TMP/runner.prom" 2>/dev/null && break
+  sleep 1
+done
+grep -q 'tool_runner_materializations_total{result="success"}' "$TMP/materializer.prom"
+grep -q 'tool_runner_generation_ready 1' "$TMP/runner.prom"
+kill "$PF_PID" >/dev/null 2>&1 || true
+wait "$PF_PID" 2>/dev/null || true
+PF_PID=
+
 # Pin v1 before publishing v2. A missing work.attempt row is conservatively
 # unfinished, exactly the restart/legacy-safe drain behavior.
 psqlq "INSERT INTO toolgateway.attempt_tool_pins(attempt_id,tool_name,tool_version_digest) VALUES('cluster-pin','platform.echo','$D1')"
@@ -175,4 +190,4 @@ wait_sql "SELECT count(*) FROM toolgateway.runner_registrations WHERE tool_name=
 psqlq "DELETE FROM toolgateway.attempt_tool_pins WHERE attempt_id='cluster-pin'"
 wait_sql "SELECT count(*) FROM toolgateway.runner_registrations WHERE tool_name='platform.echo' AND tool_digest='$D1' AND active" 0
 
-echo "PASS: exact Flux revisions registered immutable v1/v2; v1 stayed routable while pinned and retired after release"
+echo "PASS: metrics scraped; exact Flux revisions registered immutable v1/v2; v1 stayed routable while pinned and retired after release"

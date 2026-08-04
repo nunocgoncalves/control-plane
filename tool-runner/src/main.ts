@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { FluxMaterializer } from "./materializer.js";
 import { toolDigest } from "./canonical.js";
 import { loadGeneration } from "./manifest.js";
+import { MaterializerMetrics, RunnerMetrics, startMetricsServer } from "./metrics.js";
 import { ToolRunner, type RunnerConfig } from "./runner.js";
 
 const abort = new AbortController();
@@ -28,7 +29,9 @@ async function run(): Promise<void> {
     maxGenerations: positiveInt("TOOL_RUNNER_MAX_GENERATIONS", 8), maxLoadedBytes: positiveInt("TOOL_RUNNER_MAX_LOADED_BYTES", 512 * 1024 * 1024),
     drainMaxAgeMs: durationMs("TOOL_RUNNER_DRAIN_MAX_AGE", 24 * 60 * 60 * 1000), stateFile: `${controlRoot}/runner-state.json`,
   };
-  const runner = new ToolRunner(cfg);
+  const metrics = new RunnerMetrics();
+  await startMetricsServer(metrics.registry, tcpPort("TOOL_RUNNER_METRICS_PORT", 9092), abort.signal);
+  const runner = new ToolRunner(cfg, metrics);
   const stream = runner.run(abort.signal);
   let last = "";
   while (!abort.signal.aborted) {
@@ -38,10 +41,15 @@ async function run(): Promise<void> {
         const generation = await loadGeneration(current.directory, current);
         await runner.activate(generation);
         last = current.artifactDigest;
+        metrics.generationActivations.labels("success").inc();
+        metrics.generationReady.set(1);
         await writeFile(`${controlRoot}/runner-ready`, current.artifactDigest);
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(JSON.stringify({ event: "generation_rejected", message: error instanceof Error ? error.message : String(error) }));
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        metrics.generationActivations.labels("failure").inc();
+        console.error(JSON.stringify({ event: "generation_rejected", message: error instanceof Error ? error.message : String(error) }));
+      }
     }
     await sleep(1000, abort.signal);
   }
@@ -49,12 +57,14 @@ async function run(): Promise<void> {
 }
 
 async function materialize(): Promise<void> {
+  const metrics = new MaterializerMetrics();
+  await startMetricsServer(metrics.registry, tcpPort("MATERIALIZER_METRICS_PORT", 9091), abort.signal);
   const instance = new FluxMaterializer({
     namespace: env("FLUX_SOURCE_NAMESPACE", "flux-system"), sourceName: env("FLUX_SOURCE_NAME", "overlay"),
     artifactsRoot: env("ARTIFACTS_ROOT", "/artifacts"), controlRoot: env("CONTROL_ROOT", "/control"),
     pollMs: positiveInt("FLUX_POLL_MS", 5000), maxArchiveBytes: positiveInt("FLUX_MAX_ARCHIVE_BYTES", 512 * 1024 * 1024),
     maxExtractedBytes: positiveInt("TOOL_RUNNER_MAX_LOADED_BYTES", 512 * 1024 * 1024), maxGenerations: positiveInt("TOOL_RUNNER_MAX_GENERATIONS", 8),
-  });
+  }, undefined, metrics);
   await writeFile(`${env("CONTROL_ROOT", "/control")}/materializer-ready`, "starting");
   await instance.run(abort.signal);
 }
@@ -83,6 +93,11 @@ function env(name: string, fallback?: string): string {
 function positiveInt(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer and cannot be disabled`);
+  return value;
+}
+function tcpPort(name: string, fallback: number): number {
+  const value = positiveInt(name, fallback);
+  if (value > 65535) throw new Error(`${name} must be a valid TCP port`);
   return value;
 }
 function durationMs(name: string, fallback: number): number {

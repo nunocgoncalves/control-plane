@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import * as k8s from "@kubernetes/client-node";
 import * as tar from "tar";
+import type { MaterializerMetrics } from "./metrics.js";
 
 export interface MaterializerConfig {
   namespace: string;
@@ -24,7 +25,7 @@ export class FluxMaterializer {
   private custom: k8s.CustomObjectsApi;
   private lastDigest = "";
 
-  constructor(private readonly cfg: MaterializerConfig, kubeConfig?: k8s.KubeConfig) {
+  constructor(private readonly cfg: MaterializerConfig, kubeConfig?: k8s.KubeConfig, private readonly metrics?: MaterializerMetrics) {
     const kc = kubeConfig ?? new k8s.KubeConfig();
     if (!kubeConfig) kc.loadFromCluster();
     this.custom = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -37,10 +38,12 @@ export class FluxMaterializer {
       try {
         const artifact = await this.currentArtifact();
         if (artifact && artifact.digest !== this.lastDigest) {
-          await this.materialize(artifact);
+          const bytes = await this.materialize(artifact);
           this.lastDigest = artifact.digest;
+          this.metrics?.success(artifact.revision, artifact.digest, bytes);
         }
       } catch (error) {
+        this.metrics?.failure();
         console.error(JSON.stringify({ event: "materialization_failed", message: error instanceof Error ? error.message : String(error) }));
       }
       await sleep(this.cfg.pollMs, signal);
@@ -64,11 +67,11 @@ export class FluxMaterializer {
     return artifact as FluxArtifact;
   }
 
-  async materialize(artifact: FluxArtifact): Promise<void> {
+  async materialize(artifact: FluxArtifact): Promise<number> {
     const generationName = artifact.digest.slice("sha256:".length);
     const finalDir = join(this.cfg.artifactsRoot, "generations", generationName);
     try {
-      if ((await stat(finalDir)).isDirectory()) { await this.publishCurrent(artifact, finalDir); return; }
+      if ((await stat(finalDir)).isDirectory()) { await this.publishCurrent(artifact, finalDir); return directoryBytes(finalDir); }
     } catch { /* absent */ }
     await this.reclaimReleased(generationName);
     const dirs = await generationDirs(this.cfg.artifactsRoot);
@@ -91,6 +94,7 @@ export class FluxMaterializer {
       await rename(staging, finalDir);
       await this.publishCurrent(artifact, finalDir);
       console.info(JSON.stringify({ event: "artifact_materialized", revision: artifact.revision, digest: artifact.digest, bytes: expanded }));
+      return expanded;
     } finally {
       await rm(archive, { force: true });
       await removeReadOnlyTree(staging);
@@ -186,10 +190,15 @@ async function generationDirs(root: string): Promise<string[]> {
   try { return (await readdir(parent, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => join(parent, entry.name)).sort(); }
   catch { return []; }
 }
-async function totalGenerationBytes(root: string): Promise<number> {
+async function directoryBytes(root: string): Promise<number> {
   let total = 0;
   async function walk(path: string): Promise<void> { for (const entry of await readdir(path, { withFileTypes: true })) { const child = join(path, entry.name); if (entry.isDirectory()) await walk(child); else if (entry.isFile()) total += (await stat(child)).size; } }
-  for (const dir of await generationDirs(root)) await walk(dir);
+  await walk(root);
+  return total;
+}
+async function totalGenerationBytes(root: string): Promise<number> {
+  let total = 0;
+  for (const dir of await generationDirs(root)) total += await directoryBytes(dir);
   return total;
 }
 function sleep(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); }); }

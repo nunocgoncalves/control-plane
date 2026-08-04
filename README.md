@@ -225,7 +225,9 @@ Flux `GitRepository`, verifies the exact artifact digest, safely extracts only
 `tools/product` and `tools/client`, and atomically publishes immutable generation
 directories. The runner mounts those files read-only, validates the complete
 manifest/bundle set, and registers over outbound mTLS. It receives no Kubernetes
-or Git credential; the materializer receives no runner private key.
+or Git credential; the materializer receives no runner private key. Both
+processes expose unauthenticated, metrics-only `/metrics` listeners for the
+chart's opt-in Prometheus `ServiceMonitor`; no invocation API is exposed.
 
 A client bundle shadows a product bundle by logical name only with a new
 immutable version. The digest binds canonical manifest metadata and exact ESM

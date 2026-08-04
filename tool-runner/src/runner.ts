@@ -9,6 +9,7 @@ import {
   type ArtifactRef, type Credential, type Invoke, type RunnerMessage, type ToolDescriptor, type ToolVersionRef,
 } from "./gen/iterabase/gateway/v1/gateway_pb.js";
 import type { LoadedGeneration, LoadedTool, ToolManifest } from "./manifest.js";
+import type { RunnerMetrics } from "./metrics.js";
 import { AsyncQueue } from "./queue.js";
 import { ToolError, type ToolArtifactAPI, type ToolErrorShape, type ToolInvocationContext } from "./types.js";
 
@@ -49,7 +50,7 @@ export class ToolRunner {
   private semaphore: Semaphore;
   private currentGeneration = "";
 
-  constructor(private readonly cfg: RunnerConfig) { this.semaphore = new Semaphore(cfg.concurrency); }
+  constructor(private readonly cfg: RunnerConfig, private readonly metrics?: RunnerMetrics) { this.semaphore = new Semaphore(cfg.concurrency); }
 
   async activate(generation: LoadedGeneration): Promise<void> {
     if (this.generations.has(generation.artifactDigest)) return;
@@ -77,6 +78,7 @@ export class ToolRunner {
     this.generations.set(generation.artifactDigest, generation);
     this.currentGeneration = generation.artifactDigest;
     this.persistState();
+    this.updateStateMetrics();
     if (draining.length) this.send(create(RunnerMessageSchema, { kind: { case: "beginDrain", value: { versions: draining } } }));
     console.info(JSON.stringify({ event: "generation_activated", revision: generation.revision, digest: generation.artifactDigest, tools: generation.tools.length }));
   }
@@ -89,6 +91,7 @@ export class ToolRunner {
         delay = 500;
       } catch (error) {
         if (signal.aborted) return;
+        this.metrics?.gatewayStreamErrors.inc();
         console.error(JSON.stringify({ event: "runner_stream_error", message: safeMessage(error) }));
         await sleep(delay, signal);
         delay = Math.min(delay * 2, 10_000);
@@ -105,9 +108,9 @@ export class ToolRunner {
       } as Record<string, unknown>,
     });
     const client = createClient(RunnerService, transport);
-    this.queue = new AsyncQueue<RunnerMessage>();
     const tools = [...this.active.values()];
     if (!tools.length) throw new Error("no valid generation is loaded");
+    this.queue = new AsyncQueue<RunnerMessage>();
     // The first message must be Register; re-register every retained version on
     // reconnect so pinned attempts remain routable where possible.
     for (const active of tools) this.queue.push(registerMessage(this.cfg.runnerID, active.tool.manifest));
@@ -119,6 +122,7 @@ export class ToolRunner {
       for await (const control of responses) {
         switch (control.kind.case) {
           case "welcome":
+            this.metrics?.gatewayConnected.set(1);
             this.heartbeatMs = Math.max(1000, control.kind.value.heartbeatIntervalMs);
             if (!timer) { this.heartbeat(); timer = setInterval(() => this.heartbeat(), this.heartbeatMs); }
             break;
@@ -129,6 +133,7 @@ export class ToolRunner {
       }
       throw new Error("gateway closed runner stream");
     } finally {
+      this.metrics?.gatewayConnected.set(0);
       if (timer) clearInterval(timer);
       this.queue.close();
       this.queue = null;
@@ -167,6 +172,15 @@ export class ToolRunner {
     used.add(this.currentGeneration);
     for (const digest of this.generations.keys()) if (!used.has(digest)) this.generations.delete(digest);
     this.persistState();
+    this.updateStateMetrics();
+  }
+
+  private updateStateMetrics(): void {
+    if (!this.metrics) return;
+    this.metrics.loadedGenerations.set(this.generations.size);
+    this.metrics.loadedBytes.set([...this.generations.values()].reduce((total, generation) => total + generation.sizeBytes, 0));
+    this.metrics.registeredTools.set(this.active.size);
+    this.metrics.drainingTools.set([...this.active.values()].filter((active) => active.drainingAt !== undefined).length);
   }
 
   private persistState(): void {
@@ -178,6 +192,7 @@ export class ToolRunner {
   }
 
   private async execute(invoke: Invoke): Promise<void> {
+    this.metrics?.invocationsInFlight.inc();
     const abort = new AbortController();
     this.invocationAborts.set(invoke.invocationId, abort);
     let release: (() => void) | undefined;
@@ -202,13 +217,16 @@ export class ToolRunner {
       });
       const output = await active.tool.module.invoke(context, argumentsValue);
       const resultJSON = new TextEncoder().encode(JSON.stringify(output.result ?? null));
+      this.metrics?.invocations.labels("succeeded").inc();
       this.send(create(RunnerMessageSchema, { kind: { case: "invokeResult", value: {
         invocationId: invoke.invocationId, state: InvokeState.SUCCEEDED, resultJson: resultJSON,
         artifactOutputRefs: output.artifactRefs ?? [], timestampMs: BigInt(Date.now()),
       } } }));
     } catch (error) {
-      const detail = typedToolError(error) ?? (timedOut ? { code: "timeout", message: "tool invocation timed out" } :
+      const typed = typedToolError(error);
+      const detail = typed ?? (timedOut ? { code: "timeout", message: "tool invocation timed out" } :
         { code: abort.signal.aborted ? "canceled" : "internal", message: abort.signal.aborted ? "tool invocation canceled" : "trusted tool failed" });
+      this.metrics?.invocations.labels(typed ? "tool_error" : timedOut ? "timeout" : abort.signal.aborted ? "canceled" : "internal").inc();
       this.send(create(RunnerMessageSchema, { kind: { case: "invokeResult", value: {
         invocationId: invoke.invocationId, state: InvokeState.FAILED, resultJson: new Uint8Array(), artifactOutputRefs: [],
         error: { code: detail.code, message: detail.message, retryability: detail.retryable ? Retryability.RETRYABLE : Retryability.NON_RETRYABLE,
@@ -218,6 +236,7 @@ export class ToolRunner {
       if (timer) clearTimeout(timer);
       this.invocationAborts.delete(invoke.invocationId);
       release?.();
+      this.metrics?.invocationsInFlight.dec();
     }
   }
 
