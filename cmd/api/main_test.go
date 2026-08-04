@@ -91,6 +91,7 @@ func TestServe_TLS(t *testing.T) {
 func baseServeConfig(t *testing.T) *config.Config {
 	t.Helper()
 	_, connStr := testutil.NewPostgres(t)
+	minio := testutil.NewMinIO(t)
 	return &config.Config{
 		API: config.APIConfig{Addr: freePortAddr(t)},
 		Database: config.DatabaseConfig{
@@ -106,6 +107,7 @@ func baseServeConfig(t *testing.T) *config.Config {
 			TTL:            "15m",
 		},
 		Identity: config.IdentityConfig{Mode: "enrolled"},
+		Artifact: config.ArtifactConfig{Enabled: true, Endpoint: minio.Endpoint, AccessKey: minio.AccessKey, SecretKey: minio.SecretKey, Bucket: minio.Bucket, MaxSizeBytes: 1 << 20, PendingTTL: "1h", SweepInterval: "1m"},
 	}
 }
 

@@ -215,6 +215,28 @@ func (p *runnerPool) dispatchToRunner(ctx context.Context, tool, digest string, 
 // toolAvailable reports whether a tool version has any live healthy runner.
 func (p *runnerPool) toolAvailable(tool, digest string) bool { return p.hasRunner(tool, digest) }
 
+// runnerOwnsInvocation proves the authenticated runner connection currently
+// owns the live invocation. The pending map is populated before Invoke is sent
+// and removed at terminal/stream loss, so a runner cannot use a learned id from
+// another connection or after execution ends.
+func (p *runnerPool) runnerOwnsInvocation(runnerID, invocationID string) bool {
+	p.mu.Lock()
+	conns := append([]*runnerConn(nil), p.conns...)
+	p.mu.Unlock()
+	for _, rc := range conns {
+		if rc.runnerID != runnerID {
+			continue
+		}
+		rc.mu.Lock()
+		_, ok := rc.pending[invocationID]
+		rc.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
 // propagateCancel sends a Cancel to the runner serving an in-flight invocation
 // (best-effort). It cannot undo an effect already started (ARCH-014).
 func (p *runnerPool) propagateCancel(ctx context.Context, invocationID, reason string) {

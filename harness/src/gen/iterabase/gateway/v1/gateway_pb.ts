@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file iterabase/gateway/v1/gateway.proto.
  */
 export const file_iterabase_gateway_v1_gateway: GenFile = /*@__PURE__*/
-  fileDesc("CiJpdGVyYWJhc2UvZ2F0ZXdheS92MS9nYXRld2F5LnByb3RvEhRpdGVyYWJhc2UuZ2F0ZXdheS52MSL5AQoNUnVubmVyTWVzc2FnZRIyCghyZWdpc3RlchgBIAEoCzIeLml0ZXJhYmFzZS5nYXRld2F5LnYxLlJlZ2lzdGVySAASNAoJaGVhcnRiZWF0GAIgASgLMh8uaXRlcmFiYXNlLmdhdGV3YXkudjEuSGVhcnRiZWF0SAASOwoNaW52b2tlX3Jlc3VsdBgDIAEoCzIiLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZVJlc3VsdEgAEjkKDGludm9rZV9lcnJvchgEIAEoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZUVycm9ySABCBgoEa2luZCJXCghSZWdpc3RlchI4CgpkZXNjcmlwdG9yGAEgASgLMiQuaXRlcmFiYXNlLmdhdGV3YXkudjEuVG9vbERlc2NyaXB0b3ISEQoJcnVubmVyX2lkGAIgASgJIiEKCUhlYXJ0YmVhdBIUCgx0aW1lc3RhbXBfbXMYASABKAMi9QEKDEludm9rZVJlc3VsdBIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjAKBXN0YXRlGAIgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlU3RhdGUSEwoLcmVzdWx0X2pzb24YAyABKAwSPwoUYXJ0aWZhY3Rfb3V0cHV0X3JlZnMYBCADKAsyIS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdFJlZhIwCgVlcnJvchgFIAEoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkVycm9yRGV0YWlsEhQKDHRpbWVzdGFtcF9tcxgGIAEoAyJWCgtJbnZva2VFcnJvchIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjAKBWVycm9yGAIgASgLMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuRXJyb3JEZXRhaWwi0wEKDVJ1bm5lckNvbnRyb2wSMAoHd2VsY29tZRgBIAEoCzIdLml0ZXJhYmFzZS5nYXRld2F5LnYxLldlbGNvbWVIABIuCgZpbnZva2UYAiABKAsyHC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5JbnZva2VIABIuCgZjYW5jZWwYAyABKAsyHC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DYW5jZWxIABIoCgNhY2sYBCABKAsyGS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BY2tIAEIGCgRraW5kIngKB1dlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YAiABKAQSHQoVaGVhcnRiZWF0X2ludGVydmFsX21zGAMgASgFEhgKEGxlYXNlX3RpbWVvdXRfbXMYBCABKAUijwIKBkludm9rZRIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjgKCmRlc2NyaXB0b3IYAiABKAsyJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5Ub29sRGVzY3JpcHRvchIWCg5hcmd1bWVudHNfanNvbhgDIAEoDBIXCg9pZGVtcG90ZW5jeV9rZXkYBCABKAkSPgoTYXJ0aWZhY3RfaW5wdXRfcmVmcxgFIAMoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkFydGlmYWN0UmVmEkMKEmNyZWRlbnRpYWxfY29udGV4dBgGIAEoCzInLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxDb250ZXh0Ii8KBkNhbmNlbBIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSI4CgNBY2sSFAoKcmVnaXN0ZXJlZBgBIAEoCUgAEhMKCWhlYXJ0YmVhdBgCIAEoCEgAQgYKBGtpbmQikwEKD0Rpc2NvdmVyUmVxdWVzdBISCgphdHRlbXB0X2lkGAEgASgJEjcKDGNhbGxlcl9zY29wZRgCIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNhbGxlclNjb3BlEhcKD2NhbGxlcl9zY29wZV9pZBgDIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YBCABKAQiTQoQRGlzY292ZXJSZXNwb25zZRI5CgtkZXNjcmlwdG9ycxgBIAMoCzIkLml0ZXJhYmFzZS5nYXRld2F5LnYxLlRvb2xEZXNjcmlwdG9yIsgCCg1JbnZva2VSZXF1ZXN0EhIKCmF0dGVtcHRfaWQYASABKAkSNwoMY2FsbGVyX3Njb3BlGAIgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ2FsbGVyU2NvcGUSFwoPY2FsbGVyX3Njb3BlX2lkGAMgASgJEhQKDHRvb2xfY2FsbF9pZBgEIAEoCRIRCgl0b29sX25hbWUYBSABKAkSGwoTdG9vbF92ZXJzaW9uX2RpZ2VzdBgGIAEoCRIWCg5hcmd1bWVudHNfanNvbhgHIAEoDBIXCg9pZGVtcG90ZW5jeV9rZXkYCCABKAkSPgoTYXJ0aWZhY3RfaW5wdXRfcmVmcxgJIAMoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkFydGlmYWN0UmVmEhoKEmZlbmNpbmdfZ2VuZXJhdGlvbhgKIAEoBCKBAgoOSW52b2tlUmVzcG9uc2USFQoNaW52b2NhdGlvbl9pZBgBIAEoCRIwCgVzdGF0ZRgCIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZVN0YXRlEhMKC3Jlc3VsdF9qc29uGAMgASgMEj8KFGFydGlmYWN0X291dHB1dF9yZWZzGAQgAygLMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuQXJ0aWZhY3RSZWYSMAoFZXJyb3IYBSABKAsyIS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5FcnJvckRldGFpbBIeChZleGlzdGluZ19pbnZvY2F0aW9uX2lkGAYgASgJIlIKDUNhbmNlbFJlcXVlc3QSFQoNaW52b2NhdGlvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkSGgoSZmVuY2luZ19nZW5lcmF0aW9uGAMgASgEIkIKDkNhbmNlbFJlc3BvbnNlEjAKBXN0YXRlGAEgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlU3RhdGUi9QMKDlRvb2xEZXNjcmlwdG9yEgwKBG5hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIOCgZkaWdlc3QYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSFAoMaW5wdXRfc2NoZW1hGAUgASgMEjcKDGVmZmVjdF9jbGFzcxgGIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkVmZmVjdENsYXNzEj4KEGNyZWRlbnRpYWxfc2xvdHMYByADKAsyJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DcmVkZW50aWFsU2xvdBJJChVhcnRpZmFjdF9jYXBhYmlsaXRpZXMYCCABKAsyKi5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdENhcGFiaWxpdGllcxIqCgd0aW1lb3V0GAkgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uEkEKEWlkZW1wb3RlbmN5X3Byb29mGAogASgLMiYuaXRlcmFiYXNlLmdhdGV3YXkudjEuSWRlbXBvdGVuY3lQcm9vZhJWChxjb25zZXF1ZW5jZV9zdW1tYXJ5X3RlbXBsYXRlGAsgASgLMjAuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ29uc2VxdWVuY2VTdW1tYXJ5VGVtcGxhdGUi0QIKGkNvbnNlcXVlbmNlU3VtbWFyeVRlbXBsYXRlEmUKE2xvY2FsaXplZF90ZW1wbGF0ZXMYASADKAsySC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5Db25zZXF1ZW5jZVN1bW1hcnlUZW1wbGF0ZS5Mb2NhbGl6ZWRUZW1wbGF0ZXNFbnRyeRJbCg5hcmd1bWVudF9wYXRocxgCIAMoCzJDLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNvbnNlcXVlbmNlU3VtbWFyeVRlbXBsYXRlLkFyZ3VtZW50UGF0aHNFbnRyeRo5ChdMb2NhbGl6ZWRUZW1wbGF0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBGjQKEkFyZ3VtZW50UGF0aHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIoABCg5DcmVkZW50aWFsU2xvdBIMCgRuYW1lGAEgASgJEjYKBnNjaGVtZRgCIAEoDjImLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxTY2hlbWUSFgoOYmluZGluZ19zY2hlbWEYAyABKAwSEAoIcmVxdWlyZWQYBCABKAgiZgoUQXJ0aWZhY3RDYXBhYmlsaXRpZXMSFwoPcmVhZHNfYXJ0aWZhY3RzGAEgASgIEhgKEHdyaXRlc19hcnRpZmFjdHMYAiABKAgSGwoTYWNjZXB0ZWRfbWltZV90eXBlcxgDIAMoCSJWChBJZGVtcG90ZW5jeVByb29mEhAKCHN0cmF0ZWd5GAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhsKE3Vwc3RyZWFtX2tleV9oZWFkZXIYAyABKAkipgEKEUNyZWRlbnRpYWxDb250ZXh0EkEKBXNsb3RzGAEgAygLMjIuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ3JlZGVudGlhbENvbnRleHQuU2xvdHNFbnRyeRpOCgpTbG90c0VudHJ5EgsKA2tleRgBIAEoCRIvCgV2YWx1ZRgCIAEoCzIgLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWw6AjgBIuEBCgpDcmVkZW50aWFsEjYKBnNjaGVtZRgBIAEoDjImLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxTY2hlbWUSFAoMYmVhcmVyX3ZhbHVlGAIgASgJEhcKD29hdXRoX2NsaWVudF9pZBgDIAEoCRIbChNvYXV0aF9jbGllbnRfc2VjcmV0GAQgASgJEhcKD29hdXRoX3Rva2VuX3VybBgFIAEoCRITCgtvYXV0aF9zY29wZRgGIAEoCRIhChlyZXNvdXJjZV9jb25zdHJhaW50c19qc29uGAcgASgMIlkKC0FydGlmYWN0UmVmEhMKC2FydGlmYWN0X2lkGAEgASgJEhEKCW1pbWVfdHlwZRgCIAEoCRISCgpzaXplX2J5dGVzGAMgASgDEg4KBmRpZ2VzdBgEIAEoCSJ8CgtFcnJvckRldGFpbBIMCgRjb2RlGAEgASgJEg8KB21lc3NhZ2UYAiABKAkSOAoMcmV0cnlhYmlsaXR5GAMgASgOMiIuaXRlcmFiYXNlLmdhdGV3YXkudjEuUmV0cnlhYmlsaXR5EhQKDGRldGFpbHNfanNvbhgEIAEoCSpiCgtDYWxsZXJTY29wZRIcChhDQUxMRVJfU0NPUEVfVU5TUEVDSUZJRUQQABIVChFDQUxMRVJfU0NPUEVfVFVSThABEh4KGkNBTExFUl9TQ09QRV9XT1JLRkxPV19TVEVQEAIqkQEKC0VmZmVjdENsYXNzEhwKGEVGRkVDVF9DTEFTU19VTlNQRUNJRklFRBAAEhoKFkVGRkVDVF9DTEFTU19SRUFEX09OTFkQARIhCh1FRkZFQ1RfQ0xBU1NfSURFTVBPVEVOVF9XUklURRACEiUKIUVGRkVDVF9DTEFTU19OT05fSURFTVBPVEVOVF9XUklURRADKoMBChBDcmVkZW50aWFsU2NoZW1lEiEKHUNSRURFTlRJQUxfU0NIRU1FX1VOU1BFQ0lGSUVEEAASHAoYQ1JFREVOVElBTF9TQ0hFTUVfQkVBUkVSEAESLgoqQ1JFREVOVElBTF9TQ0hFTUVfT0FVVEhfQ0xJRU5UX0NSRURFTlRJQUxTEAIq2AEKC0ludm9rZVN0YXRlEhwKGElOVk9LRV9TVEFURV9VTlNQRUNJRklFRBAAEhwKGElOVk9LRV9TVEFURV9ESVNQQVRDSElORxABEhgKFElOVk9LRV9TVEFURV9SVU5OSU5HEAISGgoWSU5WT0tFX1NUQVRFX1NVQ0NFRURFRBADEhcKE0lOVk9LRV9TVEFURV9GQUlMRUQQBBIgChxJTlZPS0VfU1RBVEVfT1VUQ09NRV9VTktOT1dOEAUSHAoYSU5WT0tFX1NUQVRFX0lOX1BST0dSRVNTEAYqggEKDFJldHJ5YWJpbGl0eRIcChhSRVRSWUFCSUxJVFlfVU5TUEVDSUZJRUQQABIaChZSRVRSWUFCSUxJVFlfUkVUUllBQkxFEAESHgoaUkVUUllBQklMSVRZX05PTl9SRVRSWUFCTEUQAhIYChRSRVRSWUFCSUxJVFlfVU5LTk9XThADMm8KDVJ1bm5lclNlcnZpY2USXgoOUmVnaXN0ZXJSdW5uZXISIy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5SdW5uZXJNZXNzYWdlGiMuaXRlcmFiYXNlLmdhdGV3YXkudjEuUnVubmVyQ29udHJvbCgBMAEysQIKDkdhdGV3YXlTZXJ2aWNlEmcKFkRpc2NvdmVyRWZmZWN0aXZlVG9vbHMSJS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5EaXNjb3ZlclJlcXVlc3QaJi5pdGVyYWJhc2UuZ2F0ZXdheS52MS5EaXNjb3ZlclJlc3BvbnNlElcKCkludm9rZVRvb2wSIy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5JbnZva2VSZXF1ZXN0GiQuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlUmVzcG9uc2USXQoQQ2FuY2VsSW52b2NhdGlvbhIjLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNhbmNlbFJlcXVlc3QaJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DYW5jZWxSZXNwb25zZUL2AQoYY29tLml0ZXJhYmFzZS5nYXRld2F5LnYxQgxHYXRld2F5UHJvdG9QAVpaZ2l0aHViLmNvbS9udW5vY2dvbmNhbHZlcy9jb250cm9sLXBsYW5lL2ludGVybmFsL2dhdGV3YXlycGMvaXRlcmFiYXNlL2dhdGV3YXkvdjE7Z2F0ZXdheXYxogIDSUdYqgIUSXRlcmFiYXNlLkdhdGV3YXkuVjHKAhRJdGVyYWJhc2VcR2F0ZXdheVxWMeICIEl0ZXJhYmFzZVxHYXRld2F5XFYxXEdQQk1ldGFkYXRh6gIWSXRlcmFiYXNlOjpHYXRld2F5OjpWMWIGcHJvdG8z", [file_google_protobuf_duration]);
+  fileDesc("CiJpdGVyYWJhc2UvZ2F0ZXdheS92MS9nYXRld2F5LnByb3RvEhRpdGVyYWJhc2UuZ2F0ZXdheS52MSL5AQoNUnVubmVyTWVzc2FnZRIyCghyZWdpc3RlchgBIAEoCzIeLml0ZXJhYmFzZS5nYXRld2F5LnYxLlJlZ2lzdGVySAASNAoJaGVhcnRiZWF0GAIgASgLMh8uaXRlcmFiYXNlLmdhdGV3YXkudjEuSGVhcnRiZWF0SAASOwoNaW52b2tlX3Jlc3VsdBgDIAEoCzIiLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZVJlc3VsdEgAEjkKDGludm9rZV9lcnJvchgEIAEoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZUVycm9ySABCBgoEa2luZCJXCghSZWdpc3RlchI4CgpkZXNjcmlwdG9yGAEgASgLMiQuaXRlcmFiYXNlLmdhdGV3YXkudjEuVG9vbERlc2NyaXB0b3ISEQoJcnVubmVyX2lkGAIgASgJIiEKCUhlYXJ0YmVhdBIUCgx0aW1lc3RhbXBfbXMYASABKAMi9QEKDEludm9rZVJlc3VsdBIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjAKBXN0YXRlGAIgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlU3RhdGUSEwoLcmVzdWx0X2pzb24YAyABKAwSPwoUYXJ0aWZhY3Rfb3V0cHV0X3JlZnMYBCADKAsyIS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdFJlZhIwCgVlcnJvchgFIAEoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkVycm9yRGV0YWlsEhQKDHRpbWVzdGFtcF9tcxgGIAEoAyJWCgtJbnZva2VFcnJvchIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjAKBWVycm9yGAIgASgLMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuRXJyb3JEZXRhaWwi0wEKDVJ1bm5lckNvbnRyb2wSMAoHd2VsY29tZRgBIAEoCzIdLml0ZXJhYmFzZS5nYXRld2F5LnYxLldlbGNvbWVIABIuCgZpbnZva2UYAiABKAsyHC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5JbnZva2VIABIuCgZjYW5jZWwYAyABKAsyHC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DYW5jZWxIABIoCgNhY2sYBCABKAsyGS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BY2tIAEIGCgRraW5kIngKB1dlbGNvbWUSGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YAiABKAQSHQoVaGVhcnRiZWF0X2ludGVydmFsX21zGAMgASgFEhgKEGxlYXNlX3RpbWVvdXRfbXMYBCABKAUijwIKBkludm9rZRIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEjgKCmRlc2NyaXB0b3IYAiABKAsyJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5Ub29sRGVzY3JpcHRvchIWCg5hcmd1bWVudHNfanNvbhgDIAEoDBIXCg9pZGVtcG90ZW5jeV9rZXkYBCABKAkSPgoTYXJ0aWZhY3RfaW5wdXRfcmVmcxgFIAMoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkFydGlmYWN0UmVmEkMKEmNyZWRlbnRpYWxfY29udGV4dBgGIAEoCzInLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxDb250ZXh0Ii8KBkNhbmNlbBIVCg1pbnZvY2F0aW9uX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSI4CgNBY2sSFAoKcmVnaXN0ZXJlZBgBIAEoCUgAEhMKCWhlYXJ0YmVhdBgCIAEoCEgAQgYKBGtpbmQikwEKD0Rpc2NvdmVyUmVxdWVzdBISCgphdHRlbXB0X2lkGAEgASgJEjcKDGNhbGxlcl9zY29wZRgCIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNhbGxlclNjb3BlEhcKD2NhbGxlcl9zY29wZV9pZBgDIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YBCABKAQiTQoQRGlzY292ZXJSZXNwb25zZRI5CgtkZXNjcmlwdG9ycxgBIAMoCzIkLml0ZXJhYmFzZS5nYXRld2F5LnYxLlRvb2xEZXNjcmlwdG9yIsgCCg1JbnZva2VSZXF1ZXN0EhIKCmF0dGVtcHRfaWQYASABKAkSNwoMY2FsbGVyX3Njb3BlGAIgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ2FsbGVyU2NvcGUSFwoPY2FsbGVyX3Njb3BlX2lkGAMgASgJEhQKDHRvb2xfY2FsbF9pZBgEIAEoCRIRCgl0b29sX25hbWUYBSABKAkSGwoTdG9vbF92ZXJzaW9uX2RpZ2VzdBgGIAEoCRIWCg5hcmd1bWVudHNfanNvbhgHIAEoDBIXCg9pZGVtcG90ZW5jeV9rZXkYCCABKAkSPgoTYXJ0aWZhY3RfaW5wdXRfcmVmcxgJIAMoCzIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkFydGlmYWN0UmVmEhoKEmZlbmNpbmdfZ2VuZXJhdGlvbhgKIAEoBCKBAgoOSW52b2tlUmVzcG9uc2USFQoNaW52b2NhdGlvbl9pZBgBIAEoCRIwCgVzdGF0ZRgCIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkludm9rZVN0YXRlEhMKC3Jlc3VsdF9qc29uGAMgASgMEj8KFGFydGlmYWN0X291dHB1dF9yZWZzGAQgAygLMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuQXJ0aWZhY3RSZWYSMAoFZXJyb3IYBSABKAsyIS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5FcnJvckRldGFpbBIeChZleGlzdGluZ19pbnZvY2F0aW9uX2lkGAYgASgJIlIKDUNhbmNlbFJlcXVlc3QSFQoNaW52b2NhdGlvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkSGgoSZmVuY2luZ19nZW5lcmF0aW9uGAMgASgEIkIKDkNhbmNlbFJlc3BvbnNlEjAKBXN0YXRlGAEgASgOMiEuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlU3RhdGUisAEKFUFydGlmYWN0Q2FsbGVyQ29udGV4dBISCgphdHRlbXB0X2lkGAEgASgJEjcKDGNhbGxlcl9zY29wZRgCIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNhbGxlclNjb3BlEhcKD2NhbGxlcl9zY29wZV9pZBgDIAEoCRIaChJmZW5jaW5nX2dlbmVyYXRpb24YBCABKAQSFQoNaW52b2NhdGlvbl9pZBgFIAEoCSJkChJQdXRBcnRpZmFjdFJlcXVlc3QSNQoEaW5pdBgBIAEoCzIlLml0ZXJhYmFzZS5nYXRld2F5LnYxLlB1dEFydGlmYWN0SW5pdEgAEg8KBWNodW5rGAIgASgMSABCBgoEa2luZCK1AQoPUHV0QXJ0aWZhY3RJbml0EjwKB2NvbnRleHQYASABKAsyKy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdENhbGxlckNvbnRleHQSEQoJbWltZV90eXBlGAIgASgJEiAKE2V4cGVjdGVkX3NpemVfYnl0ZXMYAyABKANIAIgBARIXCg9leHBlY3RlZF9kaWdlc3QYBCABKAlCFgoUX2V4cGVjdGVkX3NpemVfYnl0ZXMiTwoTUHV0QXJ0aWZhY3RSZXNwb25zZRI4CghtZXRhZGF0YRgBIAEoCzImLml0ZXJhYmFzZS5nYXRld2F5LnYxLkFydGlmYWN0TWV0YWRhdGEiZwoSR2V0QXJ0aWZhY3RSZXF1ZXN0EjwKB2NvbnRleHQYASABKAsyKy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdENhbGxlckNvbnRleHQSEwoLYXJ0aWZhY3RfaWQYAiABKAkiaAoTU3RhdEFydGlmYWN0UmVxdWVzdBI8Cgdjb250ZXh0GAEgASgLMisuaXRlcmFiYXNlLmdhdGV3YXkudjEuQXJ0aWZhY3RDYWxsZXJDb250ZXh0EhMKC2FydGlmYWN0X2lkGAIgASgJIlAKFFN0YXRBcnRpZmFjdFJlc3BvbnNlEjgKCG1ldGFkYXRhGAEgASgLMiYuaXRlcmFiYXNlLmdhdGV3YXkudjEuQXJ0aWZhY3RNZXRhZGF0YSJqChNHZXRBcnRpZmFjdFJlc3BvbnNlEjoKCG1ldGFkYXRhGAEgASgLMiYuaXRlcmFiYXNlLmdhdGV3YXkudjEuQXJ0aWZhY3RNZXRhZGF0YUgAEg8KBWNodW5rGAIgASgMSABCBgoEa2luZCL3AQoQQXJ0aWZhY3RNZXRhZGF0YRIuCgNyZWYYASABKAsyIS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdFJlZhIOCgZzb3VyY2UYAiABKAkSDQoFc3RhdGUYAyABKAkSGgoSY3JlYXRlZF9hdF91bml4X21zGAQgASgDEiQKF3JldGVudGlvbl91bnRpbF91bml4X21zGAUgASgDSACIAQESHwoSZGVsZXRlZF9hdF91bml4X21zGAYgASgDSAGIAQFCGgoYX3JldGVudGlvbl91bnRpbF91bml4X21zQhUKE19kZWxldGVkX2F0X3VuaXhfbXMi9QMKDlRvb2xEZXNjcmlwdG9yEgwKBG5hbWUYASABKAkSDwoHdmVyc2lvbhgCIAEoCRIOCgZkaWdlc3QYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSFAoMaW5wdXRfc2NoZW1hGAUgASgMEjcKDGVmZmVjdF9jbGFzcxgGIAEoDjIhLml0ZXJhYmFzZS5nYXRld2F5LnYxLkVmZmVjdENsYXNzEj4KEGNyZWRlbnRpYWxfc2xvdHMYByADKAsyJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DcmVkZW50aWFsU2xvdBJJChVhcnRpZmFjdF9jYXBhYmlsaXRpZXMYCCABKAsyKi5pdGVyYWJhc2UuZ2F0ZXdheS52MS5BcnRpZmFjdENhcGFiaWxpdGllcxIqCgd0aW1lb3V0GAkgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uEkEKEWlkZW1wb3RlbmN5X3Byb29mGAogASgLMiYuaXRlcmFiYXNlLmdhdGV3YXkudjEuSWRlbXBvdGVuY3lQcm9vZhJWChxjb25zZXF1ZW5jZV9zdW1tYXJ5X3RlbXBsYXRlGAsgASgLMjAuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ29uc2VxdWVuY2VTdW1tYXJ5VGVtcGxhdGUi0QIKGkNvbnNlcXVlbmNlU3VtbWFyeVRlbXBsYXRlEmUKE2xvY2FsaXplZF90ZW1wbGF0ZXMYASADKAsySC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5Db25zZXF1ZW5jZVN1bW1hcnlUZW1wbGF0ZS5Mb2NhbGl6ZWRUZW1wbGF0ZXNFbnRyeRJbCg5hcmd1bWVudF9wYXRocxgCIAMoCzJDLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNvbnNlcXVlbmNlU3VtbWFyeVRlbXBsYXRlLkFyZ3VtZW50UGF0aHNFbnRyeRo5ChdMb2NhbGl6ZWRUZW1wbGF0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBGjQKEkFyZ3VtZW50UGF0aHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIoABCg5DcmVkZW50aWFsU2xvdBIMCgRuYW1lGAEgASgJEjYKBnNjaGVtZRgCIAEoDjImLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxTY2hlbWUSFgoOYmluZGluZ19zY2hlbWEYAyABKAwSEAoIcmVxdWlyZWQYBCABKAgiZgoUQXJ0aWZhY3RDYXBhYmlsaXRpZXMSFwoPcmVhZHNfYXJ0aWZhY3RzGAEgASgIEhgKEHdyaXRlc19hcnRpZmFjdHMYAiABKAgSGwoTYWNjZXB0ZWRfbWltZV90eXBlcxgDIAMoCSJWChBJZGVtcG90ZW5jeVByb29mEhAKCHN0cmF0ZWd5GAEgASgJEhMKC2Rlc2NyaXB0aW9uGAIgASgJEhsKE3Vwc3RyZWFtX2tleV9oZWFkZXIYAyABKAkipgEKEUNyZWRlbnRpYWxDb250ZXh0EkEKBXNsb3RzGAEgAygLMjIuaXRlcmFiYXNlLmdhdGV3YXkudjEuQ3JlZGVudGlhbENvbnRleHQuU2xvdHNFbnRyeRpOCgpTbG90c0VudHJ5EgsKA2tleRgBIAEoCRIvCgV2YWx1ZRgCIAEoCzIgLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWw6AjgBIuEBCgpDcmVkZW50aWFsEjYKBnNjaGVtZRgBIAEoDjImLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNyZWRlbnRpYWxTY2hlbWUSFAoMYmVhcmVyX3ZhbHVlGAIgASgJEhcKD29hdXRoX2NsaWVudF9pZBgDIAEoCRIbChNvYXV0aF9jbGllbnRfc2VjcmV0GAQgASgJEhcKD29hdXRoX3Rva2VuX3VybBgFIAEoCRITCgtvYXV0aF9zY29wZRgGIAEoCRIhChlyZXNvdXJjZV9jb25zdHJhaW50c19qc29uGAcgASgMIlkKC0FydGlmYWN0UmVmEhMKC2FydGlmYWN0X2lkGAEgASgJEhEKCW1pbWVfdHlwZRgCIAEoCRISCgpzaXplX2J5dGVzGAMgASgDEg4KBmRpZ2VzdBgEIAEoCSJ8CgtFcnJvckRldGFpbBIMCgRjb2RlGAEgASgJEg8KB21lc3NhZ2UYAiABKAkSOAoMcmV0cnlhYmlsaXR5GAMgASgOMiIuaXRlcmFiYXNlLmdhdGV3YXkudjEuUmV0cnlhYmlsaXR5EhQKDGRldGFpbHNfanNvbhgEIAEoCSpiCgtDYWxsZXJTY29wZRIcChhDQUxMRVJfU0NPUEVfVU5TUEVDSUZJRUQQABIVChFDQUxMRVJfU0NPUEVfVFVSThABEh4KGkNBTExFUl9TQ09QRV9XT1JLRkxPV19TVEVQEAIqkQEKC0VmZmVjdENsYXNzEhwKGEVGRkVDVF9DTEFTU19VTlNQRUNJRklFRBAAEhoKFkVGRkVDVF9DTEFTU19SRUFEX09OTFkQARIhCh1FRkZFQ1RfQ0xBU1NfSURFTVBPVEVOVF9XUklURRACEiUKIUVGRkVDVF9DTEFTU19OT05fSURFTVBPVEVOVF9XUklURRADKoMBChBDcmVkZW50aWFsU2NoZW1lEiEKHUNSRURFTlRJQUxfU0NIRU1FX1VOU1BFQ0lGSUVEEAASHAoYQ1JFREVOVElBTF9TQ0hFTUVfQkVBUkVSEAESLgoqQ1JFREVOVElBTF9TQ0hFTUVfT0FVVEhfQ0xJRU5UX0NSRURFTlRJQUxTEAIq2AEKC0ludm9rZVN0YXRlEhwKGElOVk9LRV9TVEFURV9VTlNQRUNJRklFRBAAEhwKGElOVk9LRV9TVEFURV9ESVNQQVRDSElORxABEhgKFElOVk9LRV9TVEFURV9SVU5OSU5HEAISGgoWSU5WT0tFX1NUQVRFX1NVQ0NFRURFRBADEhcKE0lOVk9LRV9TVEFURV9GQUlMRUQQBBIgChxJTlZPS0VfU1RBVEVfT1VUQ09NRV9VTktOT1dOEAUSHAoYSU5WT0tFX1NUQVRFX0lOX1BST0dSRVNTEAYqggEKDFJldHJ5YWJpbGl0eRIcChhSRVRSWUFCSUxJVFlfVU5TUEVDSUZJRUQQABIaChZSRVRSWUFCSUxJVFlfUkVUUllBQkxFEAESHgoaUkVUUllBQklMSVRZX05PTl9SRVRSWUFCTEUQAhIYChRSRVRSWUFCSUxJVFlfVU5LTk9XThADMm8KDVJ1bm5lclNlcnZpY2USXgoOUmVnaXN0ZXJSdW5uZXISIy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5SdW5uZXJNZXNzYWdlGiMuaXRlcmFiYXNlLmdhdGV3YXkudjEuUnVubmVyQ29udHJvbCgBMAEysQIKDkdhdGV3YXlTZXJ2aWNlEmcKFkRpc2NvdmVyRWZmZWN0aXZlVG9vbHMSJS5pdGVyYWJhc2UuZ2F0ZXdheS52MS5EaXNjb3ZlclJlcXVlc3QaJi5pdGVyYWJhc2UuZ2F0ZXdheS52MS5EaXNjb3ZlclJlc3BvbnNlElcKCkludm9rZVRvb2wSIy5pdGVyYWJhc2UuZ2F0ZXdheS52MS5JbnZva2VSZXF1ZXN0GiQuaXRlcmFiYXNlLmdhdGV3YXkudjEuSW52b2tlUmVzcG9uc2USXQoQQ2FuY2VsSW52b2NhdGlvbhIjLml0ZXJhYmFzZS5nYXRld2F5LnYxLkNhbmNlbFJlcXVlc3QaJC5pdGVyYWJhc2UuZ2F0ZXdheS52MS5DYW5jZWxSZXNwb25zZTLEAgoPQXJ0aWZhY3RTZXJ2aWNlEmQKC1B1dEFydGlmYWN0EiguaXRlcmFiYXNlLmdhdGV3YXkudjEuUHV0QXJ0aWZhY3RSZXF1ZXN0GikuaXRlcmFiYXNlLmdhdGV3YXkudjEuUHV0QXJ0aWZhY3RSZXNwb25zZSgBEmQKC0dldEFydGlmYWN0EiguaXRlcmFiYXNlLmdhdGV3YXkudjEuR2V0QXJ0aWZhY3RSZXF1ZXN0GikuaXRlcmFiYXNlLmdhdGV3YXkudjEuR2V0QXJ0aWZhY3RSZXNwb25zZTABEmUKDFN0YXRBcnRpZmFjdBIpLml0ZXJhYmFzZS5nYXRld2F5LnYxLlN0YXRBcnRpZmFjdFJlcXVlc3QaKi5pdGVyYWJhc2UuZ2F0ZXdheS52MS5TdGF0QXJ0aWZhY3RSZXNwb25zZUL2AQoYY29tLml0ZXJhYmFzZS5nYXRld2F5LnYxQgxHYXRld2F5UHJvdG9QAVpaZ2l0aHViLmNvbS9udW5vY2dvbmNhbHZlcy9jb250cm9sLXBsYW5lL2ludGVybmFsL2dhdGV3YXlycGMvaXRlcmFiYXNlL2dhdGV3YXkvdjE7Z2F0ZXdheXYxogIDSUdYqgIUSXRlcmFiYXNlLkdhdGV3YXkuVjHKAhRJdGVyYWJhc2VcR2F0ZXdheVxWMeICIEl0ZXJhYmFzZVxHYXRld2F5XFYxXEdQQk1ldGFkYXRh6gIWSXRlcmFiYXNlOjpHYXRld2F5OjpWMWIGcHJvdG8z", [file_google_protobuf_duration]);
 
 /**
  * @generated from message iterabase.gateway.v1.RunnerMessage
@@ -638,6 +638,266 @@ export const CancelResponseSchema: GenMessage<CancelResponse> = /*@__PURE__*/
   messageDesc(file_iterabase_gateway_v1_gateway, 15);
 
 /**
+ * @generated from message iterabase.gateway.v1.ArtifactCallerContext
+ */
+export type ArtifactCallerContext = Message<"iterabase.gateway.v1.ArtifactCallerContext"> & {
+  /**
+   * @generated from field: string attempt_id = 1;
+   */
+  attemptId: string;
+
+  /**
+   * @generated from field: iterabase.gateway.v1.CallerScope caller_scope = 2;
+   */
+  callerScope: CallerScope;
+
+  /**
+   * @generated from field: string caller_scope_id = 3;
+   */
+  callerScopeId: string;
+
+  /**
+   * @generated from field: uint64 fencing_generation = 4;
+   */
+  fencingGeneration: bigint;
+
+  /**
+   * Required for a tool runner. The gateway verifies that the authenticated
+   * runner owns this live invocation and derives attempt/node scope from it.
+   *
+   * @generated from field: string invocation_id = 5;
+   */
+  invocationId: string;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.ArtifactCallerContext.
+ * Use `create(ArtifactCallerContextSchema)` to create a new message.
+ */
+export const ArtifactCallerContextSchema: GenMessage<ArtifactCallerContext> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 16);
+
+/**
+ * @generated from message iterabase.gateway.v1.PutArtifactRequest
+ */
+export type PutArtifactRequest = Message<"iterabase.gateway.v1.PutArtifactRequest"> & {
+  /**
+   * @generated from oneof iterabase.gateway.v1.PutArtifactRequest.kind
+   */
+  kind: {
+    /**
+     * exactly one, first
+     *
+     * @generated from field: iterabase.gateway.v1.PutArtifactInit init = 1;
+     */
+    value: PutArtifactInit;
+    case: "init";
+  } | {
+    /**
+     * bounded transport chunk; total is service-bounded
+     *
+     * @generated from field: bytes chunk = 2;
+     */
+    value: Uint8Array;
+    case: "chunk";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.PutArtifactRequest.
+ * Use `create(PutArtifactRequestSchema)` to create a new message.
+ */
+export const PutArtifactRequestSchema: GenMessage<PutArtifactRequest> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 17);
+
+/**
+ * @generated from message iterabase.gateway.v1.PutArtifactInit
+ */
+export type PutArtifactInit = Message<"iterabase.gateway.v1.PutArtifactInit"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactCallerContext context = 1;
+   */
+  context?: ArtifactCallerContext | undefined;
+
+  /**
+   * @generated from field: string mime_type = 2;
+   */
+  mimeType: string;
+
+  /**
+   * @generated from field: optional int64 expected_size_bytes = 3;
+   */
+  expectedSizeBytes?: bigint | undefined;
+
+  /**
+   * optional canonical sha256:<hex>
+   *
+   * @generated from field: string expected_digest = 4;
+   */
+  expectedDigest: string;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.PutArtifactInit.
+ * Use `create(PutArtifactInitSchema)` to create a new message.
+ */
+export const PutArtifactInitSchema: GenMessage<PutArtifactInit> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 18);
+
+/**
+ * @generated from message iterabase.gateway.v1.PutArtifactResponse
+ */
+export type PutArtifactResponse = Message<"iterabase.gateway.v1.PutArtifactResponse"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactMetadata metadata = 1;
+   */
+  metadata?: ArtifactMetadata | undefined;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.PutArtifactResponse.
+ * Use `create(PutArtifactResponseSchema)` to create a new message.
+ */
+export const PutArtifactResponseSchema: GenMessage<PutArtifactResponse> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 19);
+
+/**
+ * @generated from message iterabase.gateway.v1.GetArtifactRequest
+ */
+export type GetArtifactRequest = Message<"iterabase.gateway.v1.GetArtifactRequest"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactCallerContext context = 1;
+   */
+  context?: ArtifactCallerContext | undefined;
+
+  /**
+   * @generated from field: string artifact_id = 2;
+   */
+  artifactId: string;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.GetArtifactRequest.
+ * Use `create(GetArtifactRequestSchema)` to create a new message.
+ */
+export const GetArtifactRequestSchema: GenMessage<GetArtifactRequest> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 20);
+
+/**
+ * @generated from message iterabase.gateway.v1.StatArtifactRequest
+ */
+export type StatArtifactRequest = Message<"iterabase.gateway.v1.StatArtifactRequest"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactCallerContext context = 1;
+   */
+  context?: ArtifactCallerContext | undefined;
+
+  /**
+   * @generated from field: string artifact_id = 2;
+   */
+  artifactId: string;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.StatArtifactRequest.
+ * Use `create(StatArtifactRequestSchema)` to create a new message.
+ */
+export const StatArtifactRequestSchema: GenMessage<StatArtifactRequest> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 21);
+
+/**
+ * @generated from message iterabase.gateway.v1.StatArtifactResponse
+ */
+export type StatArtifactResponse = Message<"iterabase.gateway.v1.StatArtifactResponse"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactMetadata metadata = 1;
+   */
+  metadata?: ArtifactMetadata | undefined;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.StatArtifactResponse.
+ * Use `create(StatArtifactResponseSchema)` to create a new message.
+ */
+export const StatArtifactResponseSchema: GenMessage<StatArtifactResponse> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 22);
+
+/**
+ * @generated from message iterabase.gateway.v1.GetArtifactResponse
+ */
+export type GetArtifactResponse = Message<"iterabase.gateway.v1.GetArtifactResponse"> & {
+  /**
+   * @generated from oneof iterabase.gateway.v1.GetArtifactResponse.kind
+   */
+  kind: {
+    /**
+     * exactly one, first
+     *
+     * @generated from field: iterabase.gateway.v1.ArtifactMetadata metadata = 1;
+     */
+    value: ArtifactMetadata;
+    case: "metadata";
+  } | {
+    /**
+     * @generated from field: bytes chunk = 2;
+     */
+    value: Uint8Array;
+    case: "chunk";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.GetArtifactResponse.
+ * Use `create(GetArtifactResponseSchema)` to create a new message.
+ */
+export const GetArtifactResponseSchema: GenMessage<GetArtifactResponse> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 23);
+
+/**
+ * @generated from message iterabase.gateway.v1.ArtifactMetadata
+ */
+export type ArtifactMetadata = Message<"iterabase.gateway.v1.ArtifactMetadata"> & {
+  /**
+   * @generated from field: iterabase.gateway.v1.ArtifactRef ref = 1;
+   */
+  ref?: ArtifactRef | undefined;
+
+  /**
+   * @generated from field: string source = 2;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: int64 created_at_unix_ms = 4;
+   */
+  createdAtUnixMs: bigint;
+
+  /**
+   * absent = indefinite
+   *
+   * @generated from field: optional int64 retention_until_unix_ms = 5;
+   */
+  retentionUntilUnixMs?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 deleted_at_unix_ms = 6;
+   */
+  deletedAtUnixMs?: bigint | undefined;
+};
+
+/**
+ * Describes the message iterabase.gateway.v1.ArtifactMetadata.
+ * Use `create(ArtifactMetadataSchema)` to create a new message.
+ */
+export const ArtifactMetadataSchema: GenMessage<ArtifactMetadata> = /*@__PURE__*/
+  messageDesc(file_iterabase_gateway_v1_gateway, 24);
+
+/**
  * ToolDescriptor is the dynamic description of one immutable tool version
  * (ARCH-006). A logical tool name may have multiple immutable versions
  * coexisting for pinned attempts (ARCH-007); the digest is the exact
@@ -725,7 +985,7 @@ export type ToolDescriptor = Message<"iterabase.gateway.v1.ToolDescriptor"> & {
  * Use `create(ToolDescriptorSchema)` to create a new message.
  */
 export const ToolDescriptorSchema: GenMessage<ToolDescriptor> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 16);
+  messageDesc(file_iterabase_gateway_v1_gateway, 25);
 
 /**
  * ConsequenceSummaryTemplate lets a trusted, immutable tool descriptor define
@@ -759,7 +1019,7 @@ export type ConsequenceSummaryTemplate = Message<"iterabase.gateway.v1.Consequen
  * Use `create(ConsequenceSummaryTemplateSchema)` to create a new message.
  */
 export const ConsequenceSummaryTemplateSchema: GenMessage<ConsequenceSummaryTemplate> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 17);
+  messageDesc(file_iterabase_gateway_v1_gateway, 26);
 
 /**
  * CredentialSlot is a logical credential declaration in a tool manifest. The
@@ -802,7 +1062,7 @@ export type CredentialSlot = Message<"iterabase.gateway.v1.CredentialSlot"> & {
  * Use `create(CredentialSlotSchema)` to create a new message.
  */
 export const CredentialSlotSchema: GenMessage<CredentialSlot> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 18);
+  messageDesc(file_iterabase_gateway_v1_gateway, 27);
 
 /**
  * ArtifactCapabilities declares what the tool can read/produce as artifacts
@@ -836,7 +1096,7 @@ export type ArtifactCapabilities = Message<"iterabase.gateway.v1.ArtifactCapabil
  * Use `create(ArtifactCapabilitiesSchema)` to create a new message.
  */
 export const ArtifactCapabilitiesSchema: GenMessage<ArtifactCapabilities> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 19);
+  messageDesc(file_iterabase_gateway_v1_gateway, 28);
 
 /**
  * IdempotencyProof is required for effect_class = idempotent_write. It declares
@@ -875,7 +1135,7 @@ export type IdempotencyProof = Message<"iterabase.gateway.v1.IdempotencyProof"> 
  * Use `create(IdempotencyProofSchema)` to create a new message.
  */
 export const IdempotencyProofSchema: GenMessage<IdempotencyProof> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 20);
+  messageDesc(file_iterabase_gateway_v1_gateway, 29);
 
 /**
  * CredentialContext is the resolved credential-aware invocation context handed
@@ -899,7 +1159,7 @@ export type CredentialContext = Message<"iterabase.gateway.v1.CredentialContext"
  * Use `create(CredentialContextSchema)` to create a new message.
  */
 export const CredentialContextSchema: GenMessage<CredentialContext> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 21);
+  messageDesc(file_iterabase_gateway_v1_gateway, 30);
 
 /**
  * Credential is one resolved credential value. The scheme selects which fields
@@ -962,7 +1222,7 @@ export type Credential = Message<"iterabase.gateway.v1.Credential"> & {
  * Use `create(CredentialSchema)` to create a new message.
  */
 export const CredentialSchema: GenMessage<Credential> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 22);
+  messageDesc(file_iterabase_gateway_v1_gateway, 31);
 
 /**
  * ArtifactRef references an immutable artifact owned by the artifact service
@@ -1002,7 +1262,7 @@ export type ArtifactRef = Message<"iterabase.gateway.v1.ArtifactRef"> & {
  * Use `create(ArtifactRefSchema)` to create a new message.
  */
 export const ArtifactRefSchema: GenMessage<ArtifactRef> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 23);
+  messageDesc(file_iterabase_gateway_v1_gateway, 32);
 
 /**
  * A stable error envelope (mirrors the harness ErrorDetail). details_json
@@ -1037,7 +1297,7 @@ export type ErrorDetail = Message<"iterabase.gateway.v1.ErrorDetail"> & {
  * Use `create(ErrorDetailSchema)` to create a new message.
  */
 export const ErrorDetailSchema: GenMessage<ErrorDetail> = /*@__PURE__*/
-  messageDesc(file_iterabase_gateway_v1_gateway, 24);
+  messageDesc(file_iterabase_gateway_v1_gateway, 33);
 
 /**
  * CallerScope identifies whether this call originates from an active turn
@@ -1298,4 +1558,40 @@ export const GatewayService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_iterabase_gateway_v1_gateway, 1);
+
+/**
+ * ArtifactService shares the gateway mTLS listener but is a separate logical
+ * contract (HOR-399). Supervisors are authorized from active assignment state;
+ * runners are authorized from the exact live invocation they own. The caller
+ * never receives MinIO credentials, URLs, or endpoints.
+ *
+ * @generated from service iterabase.gateway.v1.ArtifactService
+ */
+export const ArtifactService: GenService<{
+  /**
+   * @generated from rpc iterabase.gateway.v1.ArtifactService.PutArtifact
+   */
+  putArtifact: {
+    methodKind: "client_streaming";
+    input: typeof PutArtifactRequestSchema;
+    output: typeof PutArtifactResponseSchema;
+  },
+  /**
+   * @generated from rpc iterabase.gateway.v1.ArtifactService.GetArtifact
+   */
+  getArtifact: {
+    methodKind: "server_streaming";
+    input: typeof GetArtifactRequestSchema;
+    output: typeof GetArtifactResponseSchema;
+  },
+  /**
+   * @generated from rpc iterabase.gateway.v1.ArtifactService.StatArtifact
+   */
+  statArtifact: {
+    methodKind: "unary";
+    input: typeof StatArtifactRequestSchema;
+    output: typeof StatArtifactResponseSchema;
+  },
+}> = /*@__PURE__*/
+  serviceDesc(file_iterabase_gateway_v1_gateway, 2);
 

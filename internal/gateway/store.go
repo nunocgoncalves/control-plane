@@ -214,6 +214,7 @@ type Invocation struct {
 	PoolID                 *string
 	RunnerID               *string
 	ArgumentsJSON          []byte
+	ArtifactInputRefs      []byte // JSONB exact authorized inputs committed before dispatch
 	ConsequenceSummary     []byte // JSONB localized customer-safe text, persisted before dispatch
 	State                  InvocationState
 	ResultJSON             []byte
@@ -879,19 +880,19 @@ type InvocationKey struct {
 // side-effect boundary, with a crash-recovery lease. On a unique-key conflict
 // (duplicate caller) it returns the existing invocation with inserted=false so
 // the caller can report in-progress or replay the committed result (ARCH-014).
-func (s *Store) BeginInvocation(ctx context.Context, key InvocationKey, tv ToolVersion, poolID *string, args, consequenceSummary []byte, leaseExpiresAt time.Time, gatewayInstanceID string) (inv Invocation, inserted bool, err error) {
+func (s *Store) BeginInvocation(ctx context.Context, key InvocationKey, tv ToolVersion, poolID *string, args, artifactInputRefs, consequenceSummary []byte, leaseExpiresAt time.Time, gatewayInstanceID string) (inv Invocation, inserted bool, err error) {
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO toolgateway.invocations
 			(attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
 			 tool_version_digest, idempotency_key, effect_class, pool_id, arguments_json,
-			 consequence_summary, state, dispatch_lease_expires_at, gateway_instance_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'dispatching', $12, $13)
+			 artifact_input_refs, consequence_summary, state, dispatch_lease_expires_at, gateway_instance_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'dispatching', $13, $14)
 		ON CONFLICT (attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_version_digest, idempotency_key)
 		DO NOTHING
 		RETURNING id`,
 		key.AttemptID, key.CallerScope, key.CallerScopeID, key.ToolCallID, tv.Name,
 		key.ToolVersionDigest, key.IdempotencyKey, tv.EffectClass, poolID, args,
-		nullableJSONBytes(consequenceSummary), leaseExpiresAt, gatewayInstanceID)
+		artifactInputRefs, nullableJSONBytes(consequenceSummary), leaseExpiresAt, gatewayInstanceID)
 	var id string
 	if err := row.Scan(&id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1425,7 +1426,7 @@ func (s *Store) UpsertApprovedRunner(ctx context.Context, namespace, runnerID, s
 const invocationSelect = `
 	SELECT id, attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
 	       tool_version_digest, idempotency_key, effect_class, pool_id, runner_id,
-	       arguments_json, consequence_summary, state, result_json, artifact_output_refs, error,
+	       arguments_json, artifact_input_refs, consequence_summary, state, result_json, artifact_output_refs, error,
 	       dispatch_lease_expires_at, gateway_instance_id,
 	       dispatching_at, running_at, finished_at, created_at, updated_at
 	FROM toolgateway.invocations`
@@ -1450,7 +1451,7 @@ func scanInvocation(row pgx.Row) (Invocation, error) {
 	var inv Invocation
 	err := row.Scan(&inv.ID, &inv.AttemptID, &inv.CallerScope, &inv.CallerScopeID,
 		&inv.ToolCallID, &inv.ToolName, &inv.ToolVersionDigest, &inv.IdempotencyKey,
-		&inv.EffectClass, &inv.PoolID, &inv.RunnerID, &inv.ArgumentsJSON, &inv.ConsequenceSummary, &inv.State,
+		&inv.EffectClass, &inv.PoolID, &inv.RunnerID, &inv.ArgumentsJSON, &inv.ArtifactInputRefs, &inv.ConsequenceSummary, &inv.State,
 		&inv.ResultJSON, &inv.ArtifactOutputRefs, &inv.Error,
 		&inv.DispatchLeaseExpiresAt, &inv.GatewayInstanceID,
 		&inv.DispatchingAt, &inv.RunningAt, &inv.FinishedAt, &inv.CreatedAt, &inv.UpdatedAt)

@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
@@ -101,6 +102,20 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	if err := config.ValidateServe(cfg); err != nil {
 		return err
 	}
+	if err := config.ValidateArtifactServe(cfg); err != nil {
+		return err
+	}
+	var artifacts *artifactstore.Service
+	if cfg.Artifact.Enabled {
+		artifacts, err = artifactstore.NewConfiguredService(cfg, pool, logger)
+		if err != nil {
+			return fmt.Errorf("configure artifact service: %w", err)
+		}
+		if err := artifacts.Ready(ctx); err != nil {
+			return fmt.Errorf("artifact service not ready: %w", err)
+		}
+		artifacts.StartSweeper(ctx)
+	}
 
 	issuer, err := identity.NewIssuer(cfg.JWT.SigningKeyPath, cfg.JWT.KeyID, cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.TTL)
 	if err != nil {
@@ -116,6 +131,7 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 			Issuer:      issuer,
 			Mode:        cfg.Identity.Mode,
 			Work:        workstore.NewStore(pool),
+			Artifacts:   artifacts,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

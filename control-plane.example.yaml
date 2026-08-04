@@ -31,6 +31,22 @@ gateway:
   # Scopes Secret-read RBAC for credential-slot resolution (ARCH-008). The
   # gateway reads only named K8s Secrets in this namespace.
   kube_namespace: "${GATEWAY_KUBE_NAMESPACE}"
+  # Bounded inline JSON/text. Larger tool inputs/results use artifact refs.
+  inline_limit: 65536
+
+# Immutable artifact service (HOR-399). API + gateway are the only MinIO
+# clients; supervisors/runners/sandboxes use the gateway ArtifactService.
+artifact:
+  enabled: true
+  endpoint: "${ARTIFACT_ENDPOINT}"       # e.g. iterabase-minio:9000
+  access_key: "${ARTIFACT_ACCESS_KEY}"   # dedicated bucket-scoped credential
+  secret_key: "${ARTIFACT_SECRET_KEY}"
+  bucket: "iterabase-artifacts"
+  secure: false                          # internal MinIO TLS when enabled
+  max_size_bytes: 1073741824             # 1 GiB
+  default_retention: ""                  # empty = indefinite
+  pending_ttl: "1h"
+  sweep_interval: "1m"
 
 # Dispatch Work server (cmd/dispatch, HOR-249). mTLS is REQUIRED. The dispatch
 # server serves the iterabase.harness.v1.Harness.Work bidi stream over HTTP/2,

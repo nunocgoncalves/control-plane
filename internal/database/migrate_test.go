@@ -85,9 +85,9 @@ func TestMigrations(t *testing.T) {
 	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
 
 	// HOR-254 must migrate an existing gateway ledger without requiring an
-	// unavailable customer-safe summary backfill. Roll back only HOR-254, seed a
-	// pre-existing write descriptor/invocation, and apply it again.
-	require.NoError(t, database.MigrateDown(connStr, 1))
+	// unavailable customer-safe summary backfill. Roll back HOR-399 and HOR-254,
+	// seed a pre-existing write descriptor/invocation, and apply both again.
+	require.NoError(t, database.MigrateDown(connStr, 2))
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.tool_versions
 		    (name,version,digest,description,input_schema,effect_class,credential_slots,artifact_capabilities,timeout_ms)
@@ -131,11 +131,15 @@ func TestMigrations(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='runtime' AND tablename='node_executions')").Scan(&nodeExecutions))
 	assert.True(t, nodeExecutions)
+	var artifacts bool
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='artifact' AND tablename='artifacts')").Scan(&artifacts))
+	assert.True(t, artifacts)
 
 	// Down: schemas should be gone.
 	require.NoError(t, database.MigrateDown(connStr, 0))
 
-	for _, schema := range []string{"identity", "permissions", "usage", "ai_data", "work"} {
+	for _, schema := range []string{"identity", "permissions", "usage", "ai_data", "work", "artifact"} {
 		var exists bool
 		err := pool.QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)", schema,

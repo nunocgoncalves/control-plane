@@ -257,6 +257,78 @@ message CancelResponse {
 }
 
 // =============================================================================
+// ArtifactService — streaming immutable bytes through the platform boundary.
+// =============================================================================
+
+// ArtifactService shares the gateway mTLS listener but is a separate logical
+// contract (HOR-399). Supervisors are authorized from active assignment state;
+// runners are authorized from the exact live invocation they own. The caller
+// never receives MinIO credentials, URLs, or endpoints.
+service ArtifactService {
+  rpc PutArtifact(stream PutArtifactRequest) returns (PutArtifactResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (stream GetArtifactResponse);
+  rpc StatArtifact(StatArtifactRequest) returns (StatArtifactResponse);
+}
+
+message ArtifactCallerContext {
+  string attempt_id = 1;
+  CallerScope caller_scope = 2;
+  string caller_scope_id = 3;
+  uint64 fencing_generation = 4;
+  // Required for a tool runner. The gateway verifies that the authenticated
+  // runner owns this live invocation and derives attempt/node scope from it.
+  string invocation_id = 5;
+}
+
+message PutArtifactRequest {
+  oneof kind {
+    PutArtifactInit init = 1;  // exactly one, first
+    bytes chunk = 2;           // bounded transport chunk; total is service-bounded
+  }
+}
+
+message PutArtifactInit {
+  ArtifactCallerContext context = 1;
+  string mime_type = 2;
+  optional int64 expected_size_bytes = 3;
+  string expected_digest = 4; // optional canonical sha256:<hex>
+}
+
+message PutArtifactResponse {
+  ArtifactMetadata metadata = 1;
+}
+
+message GetArtifactRequest {
+  ArtifactCallerContext context = 1;
+  string artifact_id = 2;
+}
+
+message StatArtifactRequest {
+  ArtifactCallerContext context = 1;
+  string artifact_id = 2;
+}
+
+message StatArtifactResponse {
+  ArtifactMetadata metadata = 1;
+}
+
+message GetArtifactResponse {
+  oneof kind {
+    ArtifactMetadata metadata = 1; // exactly one, first
+    bytes chunk = 2;
+  }
+}
+
+message ArtifactMetadata {
+  ArtifactRef ref = 1;
+  string source = 2;
+  string state = 3;
+  int64 created_at_unix_ms = 4;
+  optional int64 retention_until_unix_ms = 5; // absent = indefinite
+  optional int64 deleted_at_unix_ms = 6;
+}
+
+// =============================================================================
 // Shared types
 // =============================================================================
 

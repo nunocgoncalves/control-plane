@@ -242,6 +242,20 @@ func (s *Store) RecordCompletionReport(ctx context.Context, turnID string, repor
 		if len(ref.Metadata) > 0 && !json.Valid(ref.Metadata) {
 			return fmt.Errorf("%w: artifact metadata must be valid JSON", ErrInvalidInput)
 		}
+		var authorized bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM artifact.artifacts ar
+				JOIN work.artifact_links l ON l.artifact_id=ar.id
+				WHERE ar.id=$1 AND ar.state='available'
+				  AND ar.source_type IN ('sandbox_publish','tool_output','workflow')
+				  AND l.attempt_id=$2 AND l.node_execution_id=$3
+			)`, ref.ArtifactID, attemptID, nodeID).Scan(&authorized); err != nil {
+			return err
+		}
+		if !authorized {
+			return fmt.Errorf("%w: artifact is not an output published by this node", ErrInvalidInput)
+		}
 	}
 	refsJSON, _ := json.Marshal(append([]ArtifactRef{}, report.ArtifactRefs...))
 	cmd, err := tx.Exec(ctx, `
@@ -259,7 +273,9 @@ func (s *Store) RecordCompletionReport(ctx context.Context, turnID string, repor
 	for _, ref := range report.ArtifactRefs {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO work.artifact_links (artifact_id, work_item_id, attempt_id, node_execution_id, role, metadata)
-			VALUES ($1,$2,$3,$4,$5,$6)`, ref.ArtifactID, itemID, attemptID, nodeID, ref.Role, jsonOrObject(ref.Metadata)); err != nil {
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (artifact_id,work_item_id,attempt_id,node_execution_id,role) DO NOTHING`,
+			ref.ArtifactID, itemID, attemptID, nodeID, ref.Role, jsonOrObject(ref.Metadata)); err != nil {
 			return err
 		}
 	}

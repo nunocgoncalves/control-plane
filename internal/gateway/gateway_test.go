@@ -14,6 +14,7 @@ import (
 
 	connect "connectrpc.com/connect"
 	"github.com/jackc/pgx/v5/pgxpool"
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	"github.com/nunocgoncalves/control-plane/internal/gateway"
 	v1 "github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1"
 	"github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1/gatewayv1connect"
@@ -39,6 +40,7 @@ type testEnv struct {
 	wfStep     tls.Certificate // spiffe://td/control-plane/workflow-runtime
 	caPool     *x509.CertPool
 	poolID     string // the seeded pool's uuid
+	artifacts  *artifactstore.Service
 	stop       func()
 }
 
@@ -102,13 +104,17 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	require.NoError(t, err)
 
 	svc := gateway.NewService(store, secrets, gateway.NewFakeOAuthAcquirer("oauth-token"), gateway.Config{TrustDomain: td, DispatchLease: 2 * time.Second}, nil)
+	artifacts := artifactstore.NewService(artifactstore.NewStore(pgpool), newMemoryObjectStore(), artifactstore.Config{MaxSize: 1 << 20}, nil)
+	svc.SetArtifactService(artifacts)
 
 	mux := http.NewServeMux()
 	idmw := gateway.IdentityMiddleware(td)
 	rp, rh := gatewayv1connect.NewRunnerServiceHandler(svc)
 	gp, gh := gatewayv1connect.NewGatewayServiceHandler(svc)
+	ap, ah := gatewayv1connect.NewArtifactServiceHandler(svc)
 	mux.Handle(rp, idmw(rh))
 	mux.Handle(gp, idmw(gh))
+	mux.Handle(ap, idmw(ah))
 
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
@@ -127,7 +133,7 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 
 	return &testEnv{
 		store: store, pgpool: pgpool, srvURL: fmt.Sprintf("https://localhost:%d", port),
-		supervisor: supervisor, runner: runner, wfStep: wfStep, caPool: ca.Pool, poolID: p.ID, stop: stop,
+		supervisor: supervisor, runner: runner, wfStep: wfStep, caPool: ca.Pool, poolID: p.ID, artifacts: artifacts, stop: stop,
 	}
 }
 

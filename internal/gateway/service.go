@@ -14,6 +14,7 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect"
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	v1 "github.com/nunocgoncalves/control-plane/internal/gatewayrpc/iterabase/gateway/v1"
 	"github.com/nunocgoncalves/control-plane/internal/spiffe"
 )
@@ -72,13 +73,14 @@ func randomInstanceID() string {
 // Service implements the tool-gateway gRPC handlers (RunnerService +
 // GatewayService). It is served by cmd/gateway over mTLS.
 type Service struct {
-	store   *Store
-	secrets SecretResolver
-	oauth   OAuthAcquirer
-	cfg     Config
-	pool    *runnerPool
-	gen     atomic.Uint64 // fencing generation counter
-	log     *slog.Logger
+	store     *Store
+	secrets   SecretResolver
+	oauth     OAuthAcquirer
+	cfg       Config
+	pool      *runnerPool
+	gen       atomic.Uint64 // fencing generation counter
+	log       *slog.Logger
+	artifacts *artifactstore.Service
 }
 
 // NewService builds a gateway Service. store/secrets/oauth are required; cfg is
@@ -97,6 +99,10 @@ func NewService(store *Store, secrets SecretResolver, oauth OAuthAcquirer, cfg C
 		log:     log,
 	}
 }
+
+// SetArtifactService attaches HOR-399's shared artifact domain without changing
+// the constructor used by tool-gateway-only tests.
+func (s *Service) SetArtifactService(artifacts *artifactstore.Service) { s.artifacts = artifacts }
 
 // StartReconciler runs the crash-recovery sweep once at start, then on a ticker
 // until ctx is done (SCN-008/ARCH-014). It classifies orphaned in-flight
@@ -259,6 +265,16 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 		}), nil
 	}
 
+	// 4a. Artifact inputs are canonical refs linked to this exact active
+	//     attempt/node and accepted by the immutable tool descriptor. A caller
+	//     cannot turn a learned cross-run artifact id into runner access.
+	if err := s.validateArtifactInputs(ctx, res, tv, msg.ArtifactInputRefs); err != nil {
+		return connect.NewResponse(&v1.InvokeResponse{
+			State: v1.InvokeState_INVOKE_STATE_FAILED,
+			Error: &v1.ErrorDetail{Code: "artifact_access_denied", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
+		}), nil
+	}
+
 	// 4b. Resource-scope policy (ARCH-008/018): credential-binding resource
 	//     constraints are asserted against the resource target derived from the
 	//     validated arguments, before the effect boundary. The pool-level
@@ -298,7 +314,7 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 		CallerScopeID: res.CallerScopeID, ToolCallID: msg.ToolCallId,
 		ToolVersionDigest: tv.Digest, IdempotencyKey: msg.IdempotencyKey,
 	}
-	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, consequenceSummary, leaseExpiresAt, s.cfg.GatewayInstanceID)
+	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, marshalArtifactRefs(msg.ArtifactInputRefs), consequenceSummary, leaseExpiresAt, s.cfg.GatewayInstanceID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -463,6 +479,9 @@ func (s *Service) finishFromResult(ctx context.Context, inv Invocation, tv ToolV
 	resultJSON := res.resultJSON
 	// Bound + validate runner output before committing.
 	if state == InvocationSucceeded {
+		if err := s.validateArtifactOutputs(ctx, inv, parseArtifactRefs(res.artifactRefs)); err != nil {
+			return s.classifyAmbiguous(ctx, inv, tv, "runner returned unauthorized or non-canonical artifact reference: "+err.Error())
+		}
 		if len(resultJSON) > s.cfg.InlineLimit {
 			// Oversized success: the effect may have happened but the result
 			// cannot be stored inline. Classify by effect class.
@@ -489,6 +508,78 @@ func (s *Service) finishFromResult(ctx context.Context, inv Invocation, tv ToolV
 	}
 	resp.ArtifactOutputRefs = parseArtifactRefs(res.artifactRefs)
 	return resp, nil
+}
+
+//nolint:gocyclo // Canonical metadata, execution scope, and descriptor MIME gates are deliberately checked together.
+func (s *Service) validateArtifactInputs(ctx context.Context, res CallerResolution, tv ToolVersion, refs []*v1.ArtifactRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if s.artifacts == nil {
+		return errors.New("artifact service not configured")
+	}
+	var capabilities struct {
+		Reads             bool     `json:"reads"`
+		AcceptedMIMETypes []string `json:"accepted_mime_types"`
+	}
+	if json.Unmarshal(tv.ArtifactCapabs, &capabilities) != nil || !capabilities.Reads {
+		return errors.New("tool descriptor does not permit artifact inputs")
+	}
+	scope, _, err := s.artifacts.Store().ExecutionScope(ctx, res.AttemptID, string(res.CallerScope), res.CallerScopeID)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		a, err := s.artifacts.Stat(ctx, ref.ArtifactId)
+		if err != nil || a.State != artifactstore.StateAvailable {
+			return artifactstore.ErrUnauthorized
+		}
+		canonical, err := a.Ref()
+		if err != nil || canonical.MIMEType != ref.MimeType || canonical.SizeBytes != ref.SizeBytes || canonical.Digest != ref.Digest {
+			return errors.New("artifact reference metadata mismatch")
+		}
+		linked, err := s.artifacts.Store().LinkedToAttempt(ctx, ref.ArtifactId, scope.AttemptID, scope.NodeExecutionID)
+		if err != nil || !linked {
+			return artifactstore.ErrUnauthorized
+		}
+		if len(capabilities.AcceptedMIMETypes) > 0 && !containsString(capabilities.AcceptedMIMETypes, canonical.MIMEType) {
+			return fmt.Errorf("artifact MIME type %s is not accepted by tool %s", canonical.MIMEType, tv.Name)
+		}
+	}
+	return nil
+}
+
+func (s *Service) validateArtifactOutputs(ctx context.Context, inv Invocation, refs []*v1.ArtifactRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if s.artifacts == nil {
+		return errors.New("artifact service not configured")
+	}
+	for _, ref := range refs {
+		a, err := s.artifacts.Stat(ctx, ref.ArtifactId)
+		if err != nil || a.State != artifactstore.StateAvailable || a.SourceType != artifactstore.SourceToolOutput || a.SourceRef == nil || *a.SourceRef != inv.ID {
+			return artifactstore.ErrUnauthorized
+		}
+		canonical, err := a.Ref()
+		if err != nil || canonical.MIMEType != ref.MimeType || canonical.SizeBytes != ref.SizeBytes || canonical.Digest != ref.Digest {
+			return errors.New("artifact reference metadata mismatch")
+		}
+		linked, err := s.artifacts.Store().LinkedToAttempt(ctx, ref.ArtifactId, inv.AttemptID, "")
+		if err != nil || !linked {
+			return artifactstore.ErrUnauthorized
+		}
+	}
+	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // CancelInvocation propagates cancellation to an in-flight invocation. The

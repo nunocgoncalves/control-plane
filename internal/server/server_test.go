@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,17 +9,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	"github.com/nunocgoncalves/control-plane/internal/server"
@@ -85,7 +89,8 @@ func TestAPI(t *testing.T) {
 	issuer := testIssuer(t)
 	ctx := context.Background()
 
-	router := server.New(server.Services{Pool: pool, Store: store, Permissions: permissions.NewStore(pool), Issuer: issuer, Mode: identity.ModeEnrolled, Work: workstore.NewStore(pool)})
+	artifacts := artifactstore.NewService(artifactstore.NewStore(pool), newMemoryObjects(), artifactstore.Config{MaxSize: 1 << 20}, nil)
+	router := server.New(server.Services{Pool: pool, Store: store, Permissions: permissions.NewStore(pool), Issuer: issuer, Mode: identity.ModeEnrolled, Work: workstore.NewStore(pool), Artifacts: artifacts})
 
 	// Seed: an admin local user + admin key, an agent-fleet SA + token key, and
 	// a CR-style linked identity (alice) with a teams binding.
@@ -108,6 +113,36 @@ func TestAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	authHeader := func(key string) string { return "Bearer " + key }
+
+	t.Run("artifact REST streams bytes and explicit deletion is admin-only", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/artifacts", strings.NewReader("artifact body"))
+		req.Header.Set("Authorization", authHeader(aliceWorkKey))
+		req.Header.Set("Content-Type", "text/plain")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+		var created artifactstore.Artifact
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &created))
+
+		get := httptest.NewRequest(http.MethodGet, "/v1/artifacts/"+created.ID, nil)
+		get.Header.Set("Authorization", authHeader(aliceWorkKey))
+		got := httptest.NewRecorder()
+		router.ServeHTTP(got, get)
+		assert.Equal(t, http.StatusOK, got.Code)
+		assert.Equal(t, "artifact body", got.Body.String())
+
+		denied := httptest.NewRequest(http.MethodDelete, "/v1/artifacts/"+created.ID, nil)
+		denied.Header.Set("Authorization", authHeader(aliceWorkKey))
+		deniedRR := httptest.NewRecorder()
+		router.ServeHTTP(deniedRR, denied)
+		assert.Equal(t, http.StatusForbidden, deniedRR.Code)
+
+		deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/artifacts/"+created.ID, nil)
+		deleteReq.Header.Set("Authorization", authHeader(adminKey))
+		deleteRR := httptest.NewRecorder()
+		router.ServeHTTP(deleteRR, deleteReq)
+		assert.Equal(t, http.StatusNoContent, deleteRR.Code)
+	})
 
 	t.Run("jwks", func(t *testing.T) {
 		rr := do(router, http.MethodGet, "/.well-known/jwks.json", "", nil)
@@ -253,6 +288,41 @@ func do(handler http.Handler, method, path, auth string, body io.Reader) *httpte
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, r)
 	return rr
+}
+
+type memoryObjects struct {
+	mu sync.Mutex
+	m  map[string][]byte
+}
+
+func newMemoryObjects() *memoryObjects               { return &memoryObjects{m: map[string][]byte{}} }
+func (m *memoryObjects) Ready(context.Context) error { return nil }
+func (m *memoryObjects) Put(_ context.Context, key string, r io.Reader, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.m[key]; ok {
+		return errors.New("overwrite")
+	}
+	b, err := io.ReadAll(r)
+	if err == nil {
+		m.m[key] = b
+	}
+	return err
+}
+func (m *memoryObjects) Get(_ context.Context, key string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.m[key]
+	if !ok {
+		return nil, errors.New("missing")
+	}
+	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
+}
+func (m *memoryObjects) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	delete(m.m, key)
+	m.mu.Unlock()
+	return nil
 }
 
 func base64urlDecode(s string) ([]byte, error) {

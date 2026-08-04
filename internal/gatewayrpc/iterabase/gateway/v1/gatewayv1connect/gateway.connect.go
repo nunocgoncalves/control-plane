@@ -25,6 +25,8 @@ const (
 	RunnerServiceName = "iterabase.gateway.v1.RunnerService"
 	// GatewayServiceName is the fully-qualified name of the GatewayService service.
 	GatewayServiceName = "iterabase.gateway.v1.GatewayService"
+	// ArtifactServiceName is the fully-qualified name of the ArtifactService service.
+	ArtifactServiceName = "iterabase.gateway.v1.ArtifactService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -47,6 +49,15 @@ const (
 	// GatewayServiceCancelInvocationProcedure is the fully-qualified name of the GatewayService's
 	// CancelInvocation RPC.
 	GatewayServiceCancelInvocationProcedure = "/iterabase.gateway.v1.GatewayService/CancelInvocation"
+	// ArtifactServicePutArtifactProcedure is the fully-qualified name of the ArtifactService's
+	// PutArtifact RPC.
+	ArtifactServicePutArtifactProcedure = "/iterabase.gateway.v1.ArtifactService/PutArtifact"
+	// ArtifactServiceGetArtifactProcedure is the fully-qualified name of the ArtifactService's
+	// GetArtifact RPC.
+	ArtifactServiceGetArtifactProcedure = "/iterabase.gateway.v1.ArtifactService/GetArtifact"
+	// ArtifactServiceStatArtifactProcedure is the fully-qualified name of the ArtifactService's
+	// StatArtifact RPC.
+	ArtifactServiceStatArtifactProcedure = "/iterabase.gateway.v1.ArtifactService/StatArtifact"
 )
 
 // RunnerServiceClient is a client for the iterabase.gateway.v1.RunnerService service.
@@ -281,4 +292,126 @@ func (UnimplementedGatewayServiceHandler) InvokeTool(context.Context, *connect.R
 
 func (UnimplementedGatewayServiceHandler) CancelInvocation(context.Context, *connect.Request[v1.CancelRequest]) (*connect.Response[v1.CancelResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.gateway.v1.GatewayService.CancelInvocation is not implemented"))
+}
+
+// ArtifactServiceClient is a client for the iterabase.gateway.v1.ArtifactService service.
+type ArtifactServiceClient interface {
+	PutArtifact(context.Context) *connect.ClientStreamForClient[v1.PutArtifactRequest, v1.PutArtifactResponse]
+	GetArtifact(context.Context, *connect.Request[v1.GetArtifactRequest]) (*connect.ServerStreamForClient[v1.GetArtifactResponse], error)
+	StatArtifact(context.Context, *connect.Request[v1.StatArtifactRequest]) (*connect.Response[v1.StatArtifactResponse], error)
+}
+
+// NewArtifactServiceClient constructs a client for the iterabase.gateway.v1.ArtifactService
+// service. By default, it uses the Connect protocol with the binary Protobuf Codec, asks for
+// gzipped responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply
+// the connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewArtifactServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) ArtifactServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	artifactServiceMethods := v1.File_iterabase_gateway_v1_gateway_proto.Services().ByName("ArtifactService").Methods()
+	return &artifactServiceClient{
+		putArtifact: connect.NewClient[v1.PutArtifactRequest, v1.PutArtifactResponse](
+			httpClient,
+			baseURL+ArtifactServicePutArtifactProcedure,
+			connect.WithSchema(artifactServiceMethods.ByName("PutArtifact")),
+			connect.WithClientOptions(opts...),
+		),
+		getArtifact: connect.NewClient[v1.GetArtifactRequest, v1.GetArtifactResponse](
+			httpClient,
+			baseURL+ArtifactServiceGetArtifactProcedure,
+			connect.WithSchema(artifactServiceMethods.ByName("GetArtifact")),
+			connect.WithClientOptions(opts...),
+		),
+		statArtifact: connect.NewClient[v1.StatArtifactRequest, v1.StatArtifactResponse](
+			httpClient,
+			baseURL+ArtifactServiceStatArtifactProcedure,
+			connect.WithSchema(artifactServiceMethods.ByName("StatArtifact")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// artifactServiceClient implements ArtifactServiceClient.
+type artifactServiceClient struct {
+	putArtifact  *connect.Client[v1.PutArtifactRequest, v1.PutArtifactResponse]
+	getArtifact  *connect.Client[v1.GetArtifactRequest, v1.GetArtifactResponse]
+	statArtifact *connect.Client[v1.StatArtifactRequest, v1.StatArtifactResponse]
+}
+
+// PutArtifact calls iterabase.gateway.v1.ArtifactService.PutArtifact.
+func (c *artifactServiceClient) PutArtifact(ctx context.Context) *connect.ClientStreamForClient[v1.PutArtifactRequest, v1.PutArtifactResponse] {
+	return c.putArtifact.CallClientStream(ctx)
+}
+
+// GetArtifact calls iterabase.gateway.v1.ArtifactService.GetArtifact.
+func (c *artifactServiceClient) GetArtifact(ctx context.Context, req *connect.Request[v1.GetArtifactRequest]) (*connect.ServerStreamForClient[v1.GetArtifactResponse], error) {
+	return c.getArtifact.CallServerStream(ctx, req)
+}
+
+// StatArtifact calls iterabase.gateway.v1.ArtifactService.StatArtifact.
+func (c *artifactServiceClient) StatArtifact(ctx context.Context, req *connect.Request[v1.StatArtifactRequest]) (*connect.Response[v1.StatArtifactResponse], error) {
+	return c.statArtifact.CallUnary(ctx, req)
+}
+
+// ArtifactServiceHandler is an implementation of the iterabase.gateway.v1.ArtifactService service.
+type ArtifactServiceHandler interface {
+	PutArtifact(context.Context, *connect.ClientStream[v1.PutArtifactRequest]) (*connect.Response[v1.PutArtifactResponse], error)
+	GetArtifact(context.Context, *connect.Request[v1.GetArtifactRequest], *connect.ServerStream[v1.GetArtifactResponse]) error
+	StatArtifact(context.Context, *connect.Request[v1.StatArtifactRequest]) (*connect.Response[v1.StatArtifactResponse], error)
+}
+
+// NewArtifactServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewArtifactServiceHandler(svc ArtifactServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	artifactServiceMethods := v1.File_iterabase_gateway_v1_gateway_proto.Services().ByName("ArtifactService").Methods()
+	artifactServicePutArtifactHandler := connect.NewClientStreamHandler(
+		ArtifactServicePutArtifactProcedure,
+		svc.PutArtifact,
+		connect.WithSchema(artifactServiceMethods.ByName("PutArtifact")),
+		connect.WithHandlerOptions(opts...),
+	)
+	artifactServiceGetArtifactHandler := connect.NewServerStreamHandler(
+		ArtifactServiceGetArtifactProcedure,
+		svc.GetArtifact,
+		connect.WithSchema(artifactServiceMethods.ByName("GetArtifact")),
+		connect.WithHandlerOptions(opts...),
+	)
+	artifactServiceStatArtifactHandler := connect.NewUnaryHandler(
+		ArtifactServiceStatArtifactProcedure,
+		svc.StatArtifact,
+		connect.WithSchema(artifactServiceMethods.ByName("StatArtifact")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/iterabase.gateway.v1.ArtifactService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case ArtifactServicePutArtifactProcedure:
+			artifactServicePutArtifactHandler.ServeHTTP(w, r)
+		case ArtifactServiceGetArtifactProcedure:
+			artifactServiceGetArtifactHandler.ServeHTTP(w, r)
+		case ArtifactServiceStatArtifactProcedure:
+			artifactServiceStatArtifactHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedArtifactServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedArtifactServiceHandler struct{}
+
+func (UnimplementedArtifactServiceHandler) PutArtifact(context.Context, *connect.ClientStream[v1.PutArtifactRequest]) (*connect.Response[v1.PutArtifactResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.gateway.v1.ArtifactService.PutArtifact is not implemented"))
+}
+
+func (UnimplementedArtifactServiceHandler) GetArtifact(context.Context, *connect.Request[v1.GetArtifactRequest], *connect.ServerStream[v1.GetArtifactResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.gateway.v1.ArtifactService.GetArtifact is not implemented"))
+}
+
+func (UnimplementedArtifactServiceHandler) StatArtifact(context.Context, *connect.Request[v1.StatArtifactRequest]) (*connect.Response[v1.StatArtifactResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("iterabase.gateway.v1.ArtifactService.StatArtifact is not implemented"))
 }

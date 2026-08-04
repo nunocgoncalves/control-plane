@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	workstore "github.com/nunocgoncalves/control-plane/internal/work"
@@ -27,6 +29,7 @@ type Services struct {
 	Issuer      *identity.Issuer
 	Mode        string // enrolled | open
 	Work        *workstore.Store
+	Artifacts   *artifactstore.Service
 }
 
 type contextKey string
@@ -38,11 +41,12 @@ const (
 
 // Handler holds the identity service dependencies used by the API handlers.
 type Handler struct {
-	store    *identity.Store
-	perms    *permissions.Store
-	issuer   *identity.Issuer
-	resolver *identity.Resolver
-	work     *workstore.Store
+	store     *identity.Store
+	perms     *permissions.Store
+	issuer    *identity.Issuer
+	resolver  *identity.Resolver
+	work      *workstore.Store
+	artifacts *artifactstore.Service
 }
 
 // New builds the HTTP API router.
@@ -67,7 +71,8 @@ func New(svc Services) http.Handler {
 		// bounded request timeout.
 		timed := middleware.Timeout(30 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == "/v1/work-events" {
+			if req.URL.Path == "/v1/work-events" || req.URL.Path == "/v1/artifacts" ||
+				strings.HasPrefix(req.URL.Path, "/v1/artifacts/") {
 				next.ServeHTTP(w, req)
 				return
 			}
@@ -76,14 +81,15 @@ func New(svc Services) http.Handler {
 	})
 
 	r.Get("/healthz", healthz)
-	r.Get("/readyz", readyz(svc.Pool))
+	r.Get("/readyz", readyz(svc.Pool, svc.Artifacts))
 
 	h := &Handler{
-		store:    svc.Store,
-		perms:    svc.Permissions,
-		issuer:   svc.Issuer,
-		resolver: identity.NewResolver(svc.Store, svc.Mode),
-		work:     svc.Work,
+		store:     svc.Store,
+		perms:     svc.Permissions,
+		issuer:    svc.Issuer,
+		resolver:  identity.NewResolver(svc.Store, svc.Mode),
+		work:      svc.Work,
+		artifacts: svc.Artifacts,
 	}
 
 	r.Get("/.well-known/jwks.json", h.jwks)
@@ -109,6 +115,9 @@ func New(svc Services) http.Handler {
 	r.With(h.auth(identity.ScopeWork)).Post("/v1/work-blockers/{id}/responses", h.respondWorkBlocker)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-dashboard", h.getWorkDashboard)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-events", h.streamWorkEvents)
+	r.With(h.auth(identity.ScopeWork)).Post("/v1/artifacts", h.uploadArtifact)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/artifacts/{id}", h.getArtifact)
+	r.With(h.auth(identity.ScopeWork)).Head("/v1/artifacts/{id}", h.headArtifact)
 
 	// Admin endpoints (scope=admin).
 	r.Route("/v1", func(r chi.Router) {
@@ -121,6 +130,7 @@ func New(svc Services) http.Handler {
 		r.Delete("/api-keys/{id}", h.deleteAPIKey)
 		r.Get("/permissions/identities/{id}", h.getCapabilities)
 		r.Post("/value-models", h.createValueModel)
+		r.Delete("/artifacts/{id}", h.deleteArtifact)
 	})
 
 	return r
@@ -131,7 +141,7 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-func readyz(pool *pgxpool.Pool) http.HandlerFunc {
+func readyz(pool *pgxpool.Pool, artifacts *artifactstore.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pool == nil {
 			http.Error(w, "database not ready", http.StatusServiceUnavailable)
@@ -142,6 +152,12 @@ func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 		if err := pool.Ping(ctx); err != nil {
 			http.Error(w, "database not ready", http.StatusServiceUnavailable)
 			return
+		}
+		if artifacts != nil {
+			if err := artifacts.Ready(ctx); err != nil {
+				http.Error(w, "artifact storage not ready", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready"))

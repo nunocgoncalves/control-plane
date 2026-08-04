@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	artifactstore "github.com/nunocgoncalves/control-plane/internal/artifact"
 	"github.com/nunocgoncalves/control-plane/internal/config"
 	"github.com/nunocgoncalves/control-plane/internal/database"
 	"github.com/nunocgoncalves/control-plane/internal/gateway"
@@ -80,6 +81,9 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	if err := config.ValidateGatewayServe(cfg); err != nil {
 		return err
 	}
+	if err := config.ValidateArtifactServe(cfg); err != nil {
+		return err
+	}
 
 	pool, err := database.Connect(ctx, cfg.Database)
 	if err != nil {
@@ -94,6 +98,18 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		return err
 	}
 
+	var artifacts *artifactstore.Service
+	if cfg.Artifact.Enabled {
+		artifacts, err = artifactstore.NewConfiguredService(cfg, pool, logger)
+		if err != nil {
+			return fmt.Errorf("configure artifact service: %w", err)
+		}
+		if err := artifacts.Ready(ctx); err != nil {
+			return fmt.Errorf("artifact service not ready: %w", err)
+		}
+		artifacts.StartSweeper(ctx)
+	}
+
 	svc := gateway.NewService(
 		gateway.NewStore(pool),
 		secretResolver,
@@ -104,6 +120,9 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		},
 		logger,
 	)
+	if artifacts != nil {
+		svc.SetArtifactService(artifacts)
+	}
 
 	// Crash-recovery reconciliation (SCN-008/ARCH-014): classify orphaned
 	// in-flight invocations before accepting traffic, then on a ticker.
@@ -115,8 +134,10 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	idmw := gateway.IdentityMiddleware(cfg.Gateway.TrustDomain)
 	runnerPath, runnerHandler := gatewayv1connect.NewRunnerServiceHandler(svc)
 	gwPath, gwHandler := gatewayv1connect.NewGatewayServiceHandler(svc)
+	artifactPath, artifactHandler := gatewayv1connect.NewArtifactServiceHandler(svc)
 	mux.Handle(runnerPath, idmw(runnerHandler))
 	mux.Handle(gwPath, idmw(gwHandler))
+	mux.Handle(artifactPath, idmw(artifactHandler))
 
 	tlsCfg, err := buildTLSConfig(cfg.Gateway)
 	if err != nil {
@@ -194,6 +215,7 @@ func printUsage() {
 
 // compile-time assertion that the handlers are wired correctly.
 var (
-	_ gatewayv1connect.RunnerServiceHandler  = (*gateway.Service)(nil)
-	_ gatewayv1connect.GatewayServiceHandler = (*gateway.Service)(nil)
+	_ gatewayv1connect.RunnerServiceHandler   = (*gateway.Service)(nil)
+	_ gatewayv1connect.GatewayServiceHandler  = (*gateway.Service)(nil)
+	_ gatewayv1connect.ArtifactServiceHandler = (*gateway.Service)(nil)
 )
