@@ -84,6 +84,40 @@ func TestMigrations(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
 
+	// HOR-254 must migrate an existing gateway ledger without requiring an
+	// unavailable customer-safe summary backfill. Roll back only HOR-254, seed a
+	// pre-existing write descriptor/invocation, and apply it again.
+	require.NoError(t, database.MigrateDown(connStr, 1))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO toolgateway.tool_versions
+		    (name,version,digest,description,input_schema,effect_class,credential_slots,artifact_capabilities,timeout_ms)
+		VALUES ('legacy.write','1.0.0','sha256:legacy-write','Legacy write','{}','non_idempotent_write','[]','{}',1000);
+		INSERT INTO toolgateway.runner_registrations
+		    (runner_id,spiffe_id,namespace,tool_name,tool_version,tool_digest,fencing_generation)
+		VALUES ('legacy-runner','spiffe://iterabase.local/tool-runners/legacy/runner','legacy','legacy.write','1.0.0','sha256:legacy-write',1);
+		INSERT INTO toolgateway.invocations
+		    (attempt_id,caller_scope,caller_scope_id,tool_call_id,tool_name,tool_version_digest,idempotency_key,effect_class)
+		VALUES ('legacy-attempt','turn','legacy-turn','legacy-call','legacy.write','sha256:legacy-write','legacy-key','non_idempotent_write')`)
+	require.NoError(t, err)
+	require.NoError(t, database.MigrateUp(connStr))
+
+	var legacySummaryMissing bool
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT consequence_summary IS NULL FROM toolgateway.invocations
+		WHERE tool_call_id='legacy-call'`).Scan(&legacySummaryMissing))
+	assert.True(t, legacySummaryMissing, "historical write invocation should survive without fabricated summary")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO toolgateway.invocations
+		    (attempt_id,caller_scope,caller_scope_id,tool_call_id,tool_name,tool_version_digest,idempotency_key,effect_class)
+		VALUES ('new-attempt','turn','new-turn','new-call','legacy.write','sha256:legacy-write','new-key','non_idempotent_write')`)
+	assert.Error(t, err, "new write invocations must include a consequence summary")
+
+	var legacyVersionAvailable bool
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM toolgateway.available_tool_versions WHERE name='legacy.write')`).Scan(&legacyVersionAvailable))
+	assert.False(t, legacyVersionAvailable, "legacy write descriptor without a template must not enter new snapshots")
+
 	// HOR-254 graph/work domain exists after migration.
 	for _, table := range []string{"work_items", "attempts", "blockers", "feedback", "timeline_events", "value_models", "value_ledger", "artifact_links"} {
 		var exists bool

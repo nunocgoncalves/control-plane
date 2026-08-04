@@ -658,6 +658,28 @@ func TestGateway_WriteWithoutConsequenceTemplateRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "consequence summary templates")
 }
 
+func TestGateway_MigratedWriteDigestRequiresRepublish(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	_, err := env.pgpool.Exec(ctx, `
+		INSERT INTO toolgateway.tool_versions
+		    (name,version,digest,description,input_schema,effect_class,credential_slots,
+		     artifact_capabilities,timeout_ms,consequence_summary_template)
+		VALUES ('legacy.write','1.0.0','sha256:legacy-write','Legacy write','{}',
+		        'non_idempotent_write','[]','{}',5000,'{}')`)
+	require.NoError(t, err)
+
+	_, err = env.store.RegisterToolVersion(ctx, gateway.ToolVersion{
+		Name: "legacy.write", Version: "1.0.0", Digest: "sha256:legacy-write",
+		Description: "Legacy write", InputSchema: []byte(`{}`),
+		EffectClass: gateway.EffectNonIdempotentWrite, CredentialSlots: []byte(`[]`),
+		ArtifactCapabs: []byte(`{}`), TimeoutMS: 5000,
+		ConsequenceTemplate: []byte(`{"localized_templates":{"en":"Update legacy record","pt":"Atualizar registo legado"},"argument_paths":{}}`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publish a new version and digest")
+}
+
 func TestGateway_EmptyEffectClassRejected(t *testing.T) {
 	env := newTestEnv(t, nil)
 	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())

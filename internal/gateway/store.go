@@ -279,6 +279,12 @@ func (s *Store) RegisterToolVersion(ctx context.Context, tv ToolVersion) (ToolVe
 	if err != nil {
 		return ToolVersion{}, err
 	}
+	// A write version published before consequence templates existed is immutable
+	// and cannot be repaired in place. Reject re-registration of that digest so
+	// the runner must publish a new descriptor/version identity (ARCH-007).
+	if err := validateToolVersion(out); err != nil {
+		return ToolVersion{}, fmt.Errorf("tool %s digest %s is incompatible with the current descriptor contract; publish a new version and digest: %w", tv.Name, tv.Digest, err)
+	}
 	// Immutability guard: same (name, version) must map to one digest.
 	var existingDigest string
 	err = s.pool.QueryRow(ctx, `

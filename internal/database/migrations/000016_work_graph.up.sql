@@ -16,10 +16,26 @@ ALTER TABLE toolgateway.tool_versions
     ADD COLUMN consequence_summary_template jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE toolgateway.invocations
     ADD COLUMN consequence_summary jsonb;
+-- Preserve pre-HOR-254 ledger rows, which cannot be backfilled safely, while
+-- enforcing summaries for every write inserted or updated after this migration.
 ALTER TABLE toolgateway.invocations
     ADD CONSTRAINT invocations_write_consequence_summary_check CHECK (
         effect_class = 'read_only' OR consequence_summary IS NOT NULL
-    );
+    ) NOT VALID;
+
+-- Existing immutable write descriptors have no consequence template. Exclude
+-- them from new attempt snapshots; runners must publish a new version and
+-- digest containing the approved template contract. Existing pins retain their exact digest and
+-- fail closed rather than silently substituting another version (ARCH-007).
+DROP VIEW toolgateway.available_tool_versions;
+CREATE VIEW toolgateway.available_tool_versions AS
+    SELECT DISTINCT tv.*
+    FROM toolgateway.tool_versions tv
+    JOIN toolgateway.runner_registrations rr
+      ON rr.tool_name = tv.name AND rr.tool_digest = tv.digest
+    WHERE rr.active
+      AND rr.last_heartbeat_at > now() - interval '30 seconds'
+      AND (tv.effect_class = 'read_only' OR tv.consequence_summary_template <> '{}'::jsonb);
 
 -- The pre-release run_steps workflow plan is superseded. The table remains only
 -- for chat's degenerate single agent task; graph workflows use node_executions.

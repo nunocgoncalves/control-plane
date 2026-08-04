@@ -1,6 +1,14 @@
+DROP VIEW IF EXISTS toolgateway.available_tool_versions;
 ALTER TABLE toolgateway.invocations DROP CONSTRAINT IF EXISTS invocations_write_consequence_summary_check;
 ALTER TABLE toolgateway.invocations DROP COLUMN IF EXISTS consequence_summary;
 ALTER TABLE toolgateway.tool_versions DROP COLUMN IF EXISTS consequence_summary_template;
+CREATE VIEW toolgateway.available_tool_versions AS
+    SELECT DISTINCT tv.*
+    FROM toolgateway.tool_versions tv
+    JOIN toolgateway.runner_registrations rr
+      ON rr.tool_name = tv.name AND rr.tool_digest = tv.digest
+    WHERE rr.active
+      AND rr.last_heartbeat_at > now() - interval '30 seconds';
 
 ALTER TABLE identity.api_keys DROP CONSTRAINT IF EXISTS api_keys_scope_check;
 ALTER TABLE identity.api_keys ADD CONSTRAINT api_keys_scope_check

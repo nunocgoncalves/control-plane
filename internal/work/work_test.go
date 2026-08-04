@@ -226,8 +226,13 @@ func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (stri
 	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.pool_grants(pool_id,tool_name,max_effect_class)VALUES($1,'graph.read','read_only'),($1,'graph.excel.write','idempotent_write')`, poolID)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
-		INSERT INTO toolgateway.tool_versions(name,version,digest,effect_class,timeout_ms)VALUES
-		('graph.read','1','sha256:read-v1','read_only',1000),('graph.excel.write','1','sha256:excel-v1','idempotent_write',1000)`)
+		INSERT INTO toolgateway.tool_versions
+		    (name,version,digest,effect_class,timeout_ms,idempotency_proof,consequence_summary_template)
+		VALUES
+		    ('graph.read','1','sha256:read-v1','read_only',1000,NULL,'{}'),
+		    ('graph.excel.write','1','sha256:excel-v1','idempotent_write',1000,
+		     '{"strategy":"upstream_key"}',
+		     '{"localized_templates":{"en":"Update the configured workbook","pt":"Atualizar o livro configurado"},"argument_paths":{}}')`)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.runner_registrations(runner_id,spiffe_id,namespace,tool_name,tool_version,tool_digest,fencing_generation)VALUES
