@@ -47,6 +47,14 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	store := workstore.NewStore(pool)
 	actorID, scopeID, poolID := seedFoundation(t, ctx, pool)
 	_ = poolID
+	artifactID := "11111111-1111-4111-8111-111111111111"
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO artifact.artifacts
+			(id,storage_key,source_type,created_by_identity_id,mime_type,size_bytes,digest,state,available_at)
+		VALUES ($1,$2,'user_upload',$3,'text/plain',4,$4,'available',now())
+		RETURNING id`, artifactID, "artifacts/11/"+artifactID, actorID,
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Scan(&artifactID))
+	sourceArtifacts := []workstore.ArtifactRef{{ArtifactID: artifactID, Role: "source"}}
 	valueInput := workstore.ValueModelInput{Ref: "quotation-value", Version: "1", Currency: "EUR", BaselineSeconds: 1200, LoadedHourlyCost: "30.00", Assumptions: json.RawMessage(`{"source":"customer"}`), Explanation: json.RawMessage(`{"en":"20 minutes at EUR 30/hour"}`)}
 	_, err := store.CreateValueModel(ctx, valueInput)
 	require.NoError(t, err)
@@ -56,7 +64,7 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, unreferenced.Value.Configured, "an unreferenced registry row is not Dashboard configuration")
 
-	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`)})
+	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), ArtifactRefs: sourceArtifacts})
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.Equal(t, workstore.StateTodo, item.State)
@@ -88,11 +96,11 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.workflow_pool_bindings(workflow_definition_key,pool_id,permitted_tools)VALUES($1,$2,$3)`, workflow.DefinitionKey(v2.Key, v2.Version), poolID, caps)
 	require.NoError(t, err)
 
-	same, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"tenant":"acme","messageId":"m-1"}`)})
+	same, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"tenant":"acme","messageId":"m-1"}`), ArtifactRefs: sourceArtifacts})
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.Equal(t, item.ID, same.ID)
-	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Different", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`)})
+	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Different", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), ArtifactRefs: sourceArtifacts})
 	assert.ErrorIs(t, err, workstore.ErrConflict)
 
 	first, turn, dispatch, err := store.PrepareNode(ctx, attemptID)
@@ -111,6 +119,13 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	state, err := store.CompleteTurn(ctx, turn.ID, "completed", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "running", state)
+	var propagated int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM work.artifact_links l
+		JOIN runtime.node_executions n ON n.id=l.node_execution_id
+		WHERE l.attempt_id=$1 AND l.artifact_id=$2 AND l.role='input' AND n.node_key='information'`,
+		attemptID, artifactID).Scan(&propagated))
+	assert.Equal(t, 1, propagated, "source artifacts become explicit inputs of the next node")
 
 	// The graph reaches a human node and remains Blocked across store restart.
 	_, _, dispatch, err = store.PrepareNode(ctx, attemptID)

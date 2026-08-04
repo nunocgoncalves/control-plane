@@ -470,6 +470,21 @@ func (s *Store) advanceGraphTx(ctx context.Context, tx pgx.Tx, in graphAdvanceIn
 	if err != nil {
 		return "", err
 	}
+	// Every artifact already admitted to this attempt becomes an explicit input
+	// of the next node. This preserves node-scoped authorization while allowing
+	// the supervisor to materialize source and prior-node output references that
+	// are present in the immutable execution context.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO work.artifact_links
+			(artifact_id,work_item_id,attempt_id,node_execution_id,role,metadata)
+		SELECT DISTINCT ON (artifact_id,work_item_id,attempt_id)
+			artifact_id,work_item_id,attempt_id,$2,'input',metadata
+		FROM work.artifact_links
+		WHERE attempt_id=$1
+		ORDER BY artifact_id,work_item_id,attempt_id,created_at
+		ON CONFLICT (artifact_id,work_item_id,attempt_id,node_execution_id,role) DO NOTHING`, in.AttemptID, nextID); err != nil {
+		return "", err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime.graph_transitions (attempt_id,from_execution_id,outcome,to_execution_id,terminal) VALUES ($1,$2,$3,$4,false)`, in.AttemptID, in.Node.ID, *in.Node.CompletionOutcome, nextID); err != nil {
 		return "", err
 	}
