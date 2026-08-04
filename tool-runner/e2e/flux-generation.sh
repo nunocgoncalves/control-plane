@@ -137,7 +137,7 @@ YAML
 helm install hor397 "$CHART_DIR" -n iterabase-system --create-namespace \
   --set postgresql.enabled=true \
   --set image.repository=hor397-control-plane --set image.tag=dev --set image.pullPolicy=Never \
-  --set gateway.enabled=true --set artifact.enabled=false \
+  --set gateway.enabled=true --set gateway.tls.clusterResourceNamespace=cert-manager --set artifact.enabled=false \
   --set toolRunner.enabled=true --set toolRunner.image.repository=hor397-tool-runner \
   --set toolRunner.image.tag=dev --set toolRunner.image.pullPolicy=Never \
   --set 'toolRunner.allowedToolNamespaces={platform}' --timeout=8m
