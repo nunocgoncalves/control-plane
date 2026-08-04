@@ -164,7 +164,7 @@ proto: proto-tools ## Generate Go+TS stubs from proto/: harness -> internal/harn
 
 .PHONY: proto-check
 proto-check: proto ## CI guard: proto lints clean and generated code is fresh (regenerate + diff).
-	@git diff --exit-code -- internal/harnessrpc internal/gatewayrpc harness/src/gen || { \
+	@git diff --exit-code -- internal/harnessrpc internal/gatewayrpc harness/src/gen tool-runner/src/gen || { \
 		echo "generated code is stale; run 'make proto' and commit"; exit 1; }
 
 .PHONY: harness-deps
@@ -199,6 +199,33 @@ harness-image: ## Build the harness container image.
 harness-isolation-test: ## Run the Linux sandbox isolation tests (setpriv launcher + per-session UID isolation) in a container. HOR-381 gate (bullets 1-5).
 	$(CONTAINER_TOOL) build -t $(HARNESS_ISOLATION_IMG) -f harness/isolation/Dockerfile harness/
 	$(CONTAINER_TOOL) run --rm $(HARNESS_ISOLATION_IMG)
+
+##@ Tool runner (Node 24 trusted gateway runner — HOR-397)
+
+.PHONY: tool-runner-deps
+tool-runner-deps: ## Install tool-runner dependencies.
+	cd tool-runner && npm install
+
+.PHONY: tool-runner-build
+tool-runner-build: ## Build the tool runner + Flux materializer.
+	cd tool-runner && npm run build
+
+.PHONY: tool-runner-lint
+tool-runner-lint: ## Typecheck the tool runner.
+	cd tool-runner && npm run lint
+
+.PHONY: tool-runner-test
+tool-runner-test: ## Run manifest/materializer/runner unit tests.
+	cd tool-runner && npm test
+
+TOOL_RUNNER_IMG ?= control-plane-tool-runner:latest
+.PHONY: tool-runner-image
+tool-runner-image: ## Build the generic Node 24 tool-runner image.
+	$(CONTAINER_TOOL) build -t $(TOOL_RUNNER_IMG) -f tool-runner/Dockerfile tool-runner/
+
+.PHONY: tool-runner-cluster-test
+tool-runner-cluster-test: ## Real kind+Flux generation/registration/pin/drain contract (destructive to its kind cluster).
+	./tool-runner/e2e/flux-generation.sh
 
 ##@ Tooling
 

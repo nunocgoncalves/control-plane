@@ -17,6 +17,9 @@ plugins:
   - local: protoc-gen-es
     out: ../harness/src/gen
     opt: target=ts
+  - local: protoc-gen-es
+    out: ../tool-runner/src/gen
+    opt: target=ts
   - local: protoc-gen-go
     out: ../internal/gatewayrpc
     opt: paths=source_relative

@@ -77,6 +77,7 @@ func runServeCmd(cfg *config.Config, logger *slog.Logger) error {
 	return runServe(ctx, cfg, logger)
 }
 
+//nolint:gocyclo // startup validation and dependency wiring are intentionally explicit.
 func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	if err := config.ValidateGatewayServe(cfg); err != nil {
 		return err
@@ -110,8 +111,20 @@ func runServe(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		artifacts.StartSweeper(ctx)
 	}
 
+	store := gateway.NewStore(pool)
+	approved := make([]gateway.ApprovedRunner, 0, len(cfg.Gateway.ApprovedRunners))
+	for _, a := range cfg.Gateway.ApprovedRunners {
+		approved = append(approved, gateway.ApprovedRunner{
+			Namespace: a.Namespace, RunnerID: a.RunnerID, SpiffeID: a.SpiffeID,
+			AllowedToolNamespaces: a.AllowedToolNamespaces,
+		})
+	}
+	if err := store.ReconcileStaticApprovedRunners(ctx, approved); err != nil {
+		return fmt.Errorf("reconcile approved runners: %w", err)
+	}
+
 	svc := gateway.NewService(
-		gateway.NewStore(pool),
+		store,
 		secretResolver,
 		gateway.NewHTTPOAuthAcquirer(nil),
 		gateway.Config{

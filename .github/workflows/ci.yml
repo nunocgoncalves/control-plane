@@ -60,6 +60,26 @@ jobs:
       - name: test
         run: make harness-test
 
+  # Trusted Node 24 gateway tool runner + Flux materializer (HOR-397).
+  tool-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tool-runner/package-lock.json
+      - name: install deps
+        run: npm ci
+        working-directory: tool-runner
+      - name: typecheck
+        run: make tool-runner-lint
+      - name: test
+        run: make tool-runner-test
+      - name: build
+        run: make tool-runner-build
+
   # Generated stubs are fresh: regenerate (buf + protoc plugins) + git diff.
   proto:
     runs-on: ubuntu-latest

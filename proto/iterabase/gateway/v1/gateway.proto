@@ -66,7 +66,32 @@ message RunnerMessage {
     Heartbeat heartbeat = 2;
     InvokeResult invoke_result = 3;   // successful or failed execution
     InvokeError invoke_error = 4;     // pre-execution / dispatch error
+    BeginDrain begin_drain = 5;       // stop selecting superseded versions for new attempts
+    Retired retired = 6;              // runner unloaded versions after drain/expiry
   }
+}
+
+// ToolVersionRef is the immutable registration identity used by generation
+// draining. Name+digest is sufficient: version is part of the immutable
+// descriptor bound to that digest.
+message ToolVersionRef {
+  string name = 1;
+  string digest = 2;
+}
+
+// BeginDrain atomically removes superseded versions from NEW-attempt
+// resolution. Existing attempt pins remain dispatchable over this stream until
+// DrainStatus reports them releasable. The runner may force retirement at its
+// configured hard retention deadline; pinned attempts then fail unavailable
+// rather than substitute (HOR-397 / ARCH-007).
+message BeginDrain {
+  repeated ToolVersionRef versions = 1;
+}
+
+// Retired confirms that versions are no longer loadable by this runner.
+message Retired {
+  repeated ToolVersionRef versions = 1;
+  bool forced = 2;
 }
 
 // Register is the first message and may be repeated to publish additional
@@ -122,7 +147,16 @@ message RunnerControl {
     Invoke invoke = 2;
     Cancel cancel = 3;
     Ack ack = 4;
+    DrainStatus drain_status = 5;
   }
+}
+
+// DrainStatus is returned after BeginDrain and refreshed on heartbeats while a
+// stream has draining versions. `pinned` must remain loaded; `releasable` has no
+// unfinished attempt pin and may be unloaded immediately.
+message DrainStatus {
+  repeated ToolVersionRef pinned = 1;
+  repeated ToolVersionRef releasable = 2;
 }
 
 // Welcome is sent once after Register auth succeeds. A reconnection for the

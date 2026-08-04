@@ -215,6 +215,31 @@ func TestValidateServe_TLSBothOrNeither(t *testing.T) {
 	})
 }
 
+func TestValidateGatewayServe_ApprovedRunners(t *testing.T) {
+	base := func() *config.Config {
+		return &config.Config{Gateway: config.GatewayConfig{
+			Addr: ":8090", TLSCertFile: "tls.crt", TLSKeyFile: "tls.key",
+			ClientCAFile: "ca.crt", KubeNamespace: "iterabase-system",
+			ApprovedRunners: []config.ApprovedRunnerConfig{{
+				Namespace: "iterabase-system", RunnerID: "overlay-tools",
+				SpiffeID:              "spiffe://iterabase.local/tool-runners/iterabase-system/overlay-tools",
+				AllowedToolNamespaces: []string{"platform"},
+			}},
+		}}
+	}
+	t.Run("exact identity accepted", func(t *testing.T) { assert.NoError(t, config.ValidateGatewayServe(base())) })
+	t.Run("wildcard rejected", func(t *testing.T) {
+		cfg := base()
+		cfg.Gateway.ApprovedRunners[0].AllowedToolNamespaces = []string{"*"}
+		require.ErrorContains(t, config.ValidateGatewayServe(cfg), "invalid allowed namespace")
+	})
+	t.Run("duplicate identity rejected", func(t *testing.T) {
+		cfg := base()
+		cfg.Gateway.ApprovedRunners = append(cfg.Gateway.ApprovedRunners, cfg.Gateway.ApprovedRunners[0])
+		require.ErrorContains(t, config.ValidateGatewayServe(cfg), "duplicates spiffe_id")
+	})
+}
+
 func TestDatabaseFromEnv(t *testing.T) {
 	t.Run("requires url", func(t *testing.T) {
 		t.Setenv("DATABASE_URL", "")

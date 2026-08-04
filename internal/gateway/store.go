@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -125,7 +126,14 @@ type RunnerRegistration struct {
 	FencingGeneration int64
 	LastHeartbeatAt   time.Time
 	Active            bool
+	AcceptingNew      bool
 	RegisteredAt      time.Time
+}
+
+// ToolRef is the immutable name+digest identity used by generation draining.
+type ToolRef struct {
+	Name   string
+	Digest string
 }
 
 // Pool is a row from toolgateway.pools (the AgentPool registry, ARCH-016/018).
@@ -286,6 +294,12 @@ func (s *Store) RegisterToolVersion(ctx context.Context, tv ToolVersion) (ToolVe
 	if err := validateToolVersion(out); err != nil {
 		return ToolVersion{}, fmt.Errorf("tool %s digest %s is incompatible with the current descriptor contract; publish a new version and digest: %w", tv.Name, tv.Digest, err)
 	}
+	// The digest binds descriptor + implementation (HOR-397). Re-registration
+	// must match every immutable descriptor field; returning the canonical row
+	// while silently accepting changed metadata would break attribution.
+	if !sameToolVersionDescriptor(tv, out) {
+		return ToolVersion{}, fmt.Errorf("tool %s digest %s was registered with different immutable descriptor metadata", tv.Name, tv.Digest)
+	}
 	// Immutability guard: same (name, version) must map to one digest.
 	var existingDigest string
 	err = s.pool.QueryRow(ctx, `
@@ -346,6 +360,32 @@ func validateToolVersion(tv ToolVersion) error {
 	return nil
 }
 
+func sameToolVersionDescriptor(a, b ToolVersion) bool {
+	if a.Name != b.Name || a.Version != b.Version || a.Digest != b.Digest ||
+		a.Description != b.Description || a.EffectClass != b.EffectClass || a.TimeoutMS != b.TimeoutMS {
+		return false
+	}
+	return sameJSON(a.InputSchema, b.InputSchema) &&
+		sameJSON(a.CredentialSlots, b.CredentialSlots) &&
+		sameJSON(a.ArtifactCapabs, b.ArtifactCapabs) &&
+		sameJSON(a.IdempotencyProof, b.IdempotencyProof) &&
+		sameJSON(a.ConsequenceTemplate, b.ConsequenceTemplate)
+}
+
+func sameJSON(a, b []byte) bool {
+	if len(a) == 0 || bytes.Equal(a, []byte("null")) {
+		a = []byte("null")
+	}
+	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
+		b = []byte("null")
+	}
+	var av, bv any
+	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+		return bytes.Equal(a, b)
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
 // GetToolVersion fetches a descriptor by (name, digest) — the pinned identity.
 func (s *Store) GetToolVersion(ctx context.Context, name, digest string) (ToolVersion, error) {
 	row := s.pool.QueryRow(ctx, `
@@ -383,7 +423,7 @@ func (s *Store) UpsertRunnerRegistration(ctx context.Context, r RunnerRegistrati
 			(runner_id, spiffe_id, namespace, tool_name, tool_version, tool_digest, fencing_generation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, runner_id, spiffe_id, namespace, tool_name, tool_version, tool_digest,
-		          fencing_generation, last_heartbeat_at, active, registered_at`,
+		          fencing_generation, last_heartbeat_at, active, accepting_new, registered_at`,
 		r.RunnerID, r.SpiffeID, r.Namespace, r.ToolName, r.ToolVersion, r.ToolDigest, r.FencingGeneration)
 	out, err := scanRunnerRegistration(row)
 	if err != nil {
@@ -423,6 +463,86 @@ func (s *Store) HeartbeatRunner(ctx context.Context, runnerID string, gen int64)
 		runnerID, gen)
 	if err != nil {
 		return fmt.Errorf("heartbeat runner: %w", err)
+	}
+	return nil
+}
+
+// BeginDrain removes the runner's superseded versions from new-attempt
+// selection while keeping the live stream dispatchable for existing pins.
+func (s *Store) BeginDrain(ctx context.Context, runnerID string, gen int64, refs []ToolRef) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin drain: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, ref := range refs {
+		if ref.Name == "" || ref.Digest == "" {
+			return fmt.Errorf("begin drain: name and digest are required")
+		}
+		ct, err := tx.Exec(ctx, `
+			UPDATE toolgateway.runner_registrations SET accepting_new=false
+			WHERE runner_id=$1 AND fencing_generation=$2 AND tool_name=$3
+			  AND tool_digest=$4 AND active`, runnerID, gen, ref.Name, ref.Digest)
+		if err != nil {
+			return fmt.Errorf("begin drain %s: %w", ref.Name, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return fmt.Errorf("begin drain %s: registration not owned by this stream", ref.Name)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// DrainingStatus partitions this stream's draining registrations by whether an
+// unfinished attempt still pins the exact name+digest. Missing work.attempts
+// rows are treated conservatively as pinned (legacy/runtime callers).
+func (s *Store) DrainingStatus(ctx context.Context, runnerID string, gen int64) (pinned, releasable []ToolRef, err error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT rr.tool_name, rr.tool_digest,
+		       EXISTS (
+		         SELECT 1 FROM toolgateway.attempt_tool_pins pin
+		         LEFT JOIN work.attempts a ON a.id::text=pin.attempt_id
+		         WHERE pin.tool_name=rr.tool_name
+		           AND pin.tool_version_digest=rr.tool_digest
+		           AND (a.id IS NULL OR a.finished_at IS NULL)
+		       ) AS pinned
+		FROM toolgateway.runner_registrations rr
+		WHERE rr.runner_id=$1 AND rr.fencing_generation=$2
+		  AND rr.active AND NOT rr.accepting_new
+		ORDER BY rr.tool_name, rr.tool_digest`, runnerID, gen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("draining status: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ref ToolRef
+		var isPinned bool
+		if err := rows.Scan(&ref.Name, &ref.Digest, &isPinned); err != nil {
+			return nil, nil, err
+		}
+		if isPinned {
+			pinned = append(pinned, ref)
+		} else {
+			releasable = append(releasable, ref)
+		}
+	}
+	return pinned, releasable, rows.Err()
+}
+
+// RetireVersions marks versions unloaded by this exact runner stream.
+func (s *Store) RetireVersions(ctx context.Context, runnerID string, gen int64, refs []ToolRef) error {
+	for _, ref := range refs {
+		ct, err := s.pool.Exec(ctx, `
+			UPDATE toolgateway.runner_registrations SET active=false, accepting_new=false
+			WHERE runner_id=$1 AND fencing_generation=$2 AND tool_name=$3
+			  AND tool_digest=$4 AND active AND NOT accepting_new`,
+			runnerID, gen, ref.Name, ref.Digest)
+		if err != nil {
+			return fmt.Errorf("retire %s: %w", ref.Name, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return fmt.Errorf("retire %s: draining registration not owned by this stream", ref.Name)
+		}
 	}
 	return nil
 }
@@ -1401,8 +1521,46 @@ func (s *Store) SoftDeleteWorkflowPoolBindingByKey(ctx context.Context, workflow
 	return nil
 }
 
-// UpsertApprovedRunner inserts/revives a runner approval (operator-seed;
-// runner materializer HOR-397/245 later).
+// ReconcileStaticApprovedRunners makes gateway deployment configuration the
+// source of truth for statically managed runner identities. Operator-managed
+// approvals are deliberately untouched.
+func (s *Store) ReconcileStaticApprovedRunners(ctx context.Context, configured []ApprovedRunner) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile static approved runners: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	ids := make([]string, 0, len(configured))
+	for _, a := range configured {
+		if a.SpiffeID == "" || a.Namespace == "" || a.RunnerID == "" || len(a.AllowedToolNamespaces) == 0 {
+			return fmt.Errorf("static approved runner requires spiffe_id, namespace, runner_id, and at least one allowed namespace")
+		}
+		ids = append(ids, a.SpiffeID)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO toolgateway.approved_runners
+				(namespace, runner_id, spiffe_id, allowed_tool_namespaces, managed_by)
+			VALUES ($1,$2,$3,$4,'static_config')
+			ON CONFLICT (spiffe_id) DO UPDATE
+			SET namespace=EXCLUDED.namespace, runner_id=EXCLUDED.runner_id,
+			    allowed_tool_namespaces=EXCLUDED.allowed_tool_namespaces,
+			    managed_by='static_config', deleted_at=NULL, updated_at=now()`,
+			a.Namespace, a.RunnerID, a.SpiffeID, a.AllowedToolNamespaces); err != nil {
+			return fmt.Errorf("reconcile static approved runner %s: %w", a.SpiffeID, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE toolgateway.approved_runners SET deleted_at=now(), updated_at=now()
+		WHERE managed_by='static_config' AND deleted_at IS NULL
+		  AND NOT (spiffe_id = ANY($1::text[]))`, ids); err != nil {
+		return fmt.Errorf("deactivate removed static approved runners: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("reconcile static approved runners: commit: %w", err)
+	}
+	return nil
+}
+
+// UpsertApprovedRunner inserts/revives an operator-managed runner approval.
 func (s *Store) UpsertApprovedRunner(ctx context.Context, namespace, runnerID, spiffeID string, allowedNs []string) error {
 	if allowedNs == nil {
 		allowedNs = []string{}
@@ -1443,7 +1601,7 @@ func scanRunnerRegistration(row pgx.Row) (RunnerRegistration, error) {
 	var r RunnerRegistration
 	err := row.Scan(&r.ID, &r.RunnerID, &r.SpiffeID, &r.Namespace, &r.ToolName,
 		&r.ToolVersion, &r.ToolDigest, &r.FencingGeneration, &r.LastHeartbeatAt,
-		&r.Active, &r.RegisteredAt)
+		&r.Active, &r.AcceptingNew, &r.RegisteredAt)
 	return r, err
 }
 

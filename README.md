@@ -212,13 +212,33 @@ never enter Postgres, logs, tool results, or the sandbox (ARCH-008). Large
 inputs/outputs are `ArtifactRef`s (the MinIO-backed artifact service is
 HOR-399).
 
-Several `toolgateway` tables (`pools`, `pool_grants`, `credential_bindings`,
-`workflow_pool_bindings`, `approved_runners`) are operator-seeded now and
-populated by later tickets via the Git→DB bridge: AgentPool CRD (HOR-245),
-Workflow definitions (HOR-252), the Node runner materializer (HOR-397). The
-real Node 24 runner is HOR-397; the supervisor IPC client is HOR-395; concrete
-Graph tools are HOR-358. AgentPool CRD/operator + EgressRoute/proxy removal
-(ARCH-009) is HOR-245.
+AgentPool and Workflow reconcilers populate grants, bindings, and immutable
+attempt pins. Exact runner identities and allowed tool namespaces come from
+static gateway deployment configuration and are reconciled into
+`approved_runners`; runners cannot approve themselves.
+
+### Flux tool generations (HOR-397)
+
+`tool-runner/` builds the separate generic Node 24
+`control-plane-tool-runner` image. A materializer sidecar polls one configured
+Flux `GitRepository`, verifies the exact artifact digest, safely extracts only
+`tools/product` and `tools/client`, and atomically publishes immutable generation
+directories. The runner mounts those files read-only, validates the complete
+manifest/bundle set, and registers over outbound mTLS. It receives no Kubernetes
+or Git credential; the materializer receives no runner private key.
+
+A client bundle shadows a product bundle by logical name only with a new
+immutable version. The digest binds canonical manifest metadata and exact ESM
+bytes; mismatches reject the whole revision while the last valid generation
+continues serving. Superseded registrations enter coordinated drain: new
+attempts cannot select them, existing pins remain routable, and release occurs
+when no unfinished pin remains or the configured hard retention deadline makes
+them explicitly unavailable. No substitution occurs.
+
+Use `make tool-runner-lint tool-runner-test tool-runner-build` locally. The
+image also provides `digest <tool-directory>` and `validate
+<generation-directory>` authoring commands. Concrete Graph tools remain owned
+by HOR-358; the supervisor IPC client is HOR-395.
 
 ## Model backends (HOR-306/388)
 

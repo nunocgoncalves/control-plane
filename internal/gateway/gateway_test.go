@@ -348,6 +348,61 @@ func TestGateway_RegistrationDiscoveryAndInvoke(t *testing.T) {
 	assert.Equal(t, `{"msg":"hi"}`, string(iresp.Msg.ResultJson))
 }
 
+func TestGateway_StaticRunnerApprovalReconciliation(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	staticID := "spiffe://iterabase.local/tool-runners/ns-1/overlay-tools"
+	require.NoError(t, env.store.ReconcileStaticApprovedRunners(ctx, []gateway.ApprovedRunner{{
+		Namespace: "ns-1", RunnerID: "overlay-tools", SpiffeID: staticID,
+		AllowedToolNamespaces: []string{"platform"},
+	}}))
+	approval, err := env.store.IsApprovedRunner(ctx, staticID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"platform"}, approval.AllowedToolNamespaces)
+
+	require.NoError(t, env.store.ReconcileStaticApprovedRunners(ctx, nil))
+	_, err = env.store.IsApprovedRunner(ctx, staticID)
+	require.ErrorIs(t, err, gateway.ErrNotFound)
+	// Existing operator-managed test approval is not owned/deactivated by the
+	// static deployment reconciler.
+	_, err = env.store.IsApprovedRunner(ctx, runnerSpiffe)
+	require.NoError(t, err)
+}
+
+func TestGateway_GenerationDrainPreservesPinsAndStopsNewSnapshots(t *testing.T) {
+	env := newTestEnv(t, nil)
+	desc := echoDescriptor()
+	runner := startRefRunner(t, env, desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{}`)}, false
+	})
+	defer runner.close()
+	runID, _ := seedTurnAttempt(t, env)
+
+	runner.mu.Lock()
+	gen := int64(runner.welcome.FencingGeneration) //nolint:gosec // test generation is tiny
+	runner.mu.Unlock()
+	ref := gateway.ToolRef{Name: desc.Name, Digest: desc.Digest}
+	require.NoError(t, env.store.BeginDrain(context.Background(), "runner-1", gen, []gateway.ToolRef{ref}))
+
+	pinned, releasable, err := env.store.DrainingStatus(context.Background(), "runner-1", gen)
+	require.NoError(t, err)
+	require.Equal(t, []gateway.ToolRef{ref}, pinned)
+	require.Empty(t, releasable)
+
+	// Draining registrations are not eligible for a new attempt snapshot.
+	err = env.store.SnapshotAttemptTools(context.Background(), "new-attempt", env.poolID, []string{desc.Name})
+	require.ErrorContains(t, err, "no eligible healthy version")
+
+	// Once the old attempt releases its pin, the exact version is releasable.
+	_, err = env.pgpool.Exec(context.Background(), `DELETE FROM toolgateway.attempt_tool_pins WHERE attempt_id=$1`, runID)
+	require.NoError(t, err)
+	pinned, releasable, err = env.store.DrainingStatus(context.Background(), "runner-1", gen)
+	require.NoError(t, err)
+	require.Empty(t, pinned)
+	require.Equal(t, []gateway.ToolRef{ref}, releasable)
+	require.NoError(t, env.store.RetireVersions(context.Background(), "runner-1", gen, releasable))
+}
+
 // TestGateway_FencingGenerationBinding (HOR-249 / DEC-041): the gateway binds
 // authorization to the verified worker AND the current fencing generation. A
 // request carrying a stale/wrong generation is denied even with a valid

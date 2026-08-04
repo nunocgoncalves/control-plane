@@ -1,0 +1,25 @@
+{
+  "name": "control-plane-tool-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Trusted Node 24 gateway tool runner and Flux artifact materializer (HOR-397)",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.1",
+    "@connectrpc/connect": "^2.1.2",
+    "@connectrpc/connect-node": "^2.1.2",
+    "@kubernetes/client-node": "^1.4.0",
+    "es-module-lexer": "^1.7.0",
+    "tar": "^7.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.6"
+  }
+}

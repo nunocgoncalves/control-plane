@@ -6,9 +6,10 @@ name: release
 #   - push to master  -> :latest + :sha-<short>
 #   - push of a v* tag -> :<semver> + :sha-<short> (+ GitHub release with SBOM)
 #
-# Two images:
-#   ghcr.io/nunocgoncalves/control-plane         (Go: manager + api + gateway)
-#   ghcr.io/nunocgoncalves/control-plane-harness (Node: the pi harness, HOR-351)
+# Three images:
+#   ghcr.io/nunocgoncalves/control-plane             (Go services)
+#   ghcr.io/nunocgoncalves/control-plane-harness     (Node pi harness)
+#   ghcr.io/nunocgoncalves/control-plane-tool-runner (Node 24 trusted tools)
 on:
   push:
     branches: [master]
@@ -133,5 +134,51 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: sbom-harness.spdx.json
+
+  release-tool-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/nunocgoncalves/control-plane-tool-runner
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+      - name: Build and push tool-runner image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: tool-runner
+          file: tool-runner/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/nunocgoncalves/control-plane-tool-runner@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-tool-runner.spdx.json
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attach SBOM to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom-tool-runner.spdx.json
 
 

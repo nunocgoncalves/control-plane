@@ -33,6 +33,13 @@ gateway:
   kube_namespace: "${GATEWAY_KUBE_NAMESPACE}"
   # Bounded inline JSON/text. Larger tool inputs/results use artifact refs.
   inline_limit: 65536
+  # Exact deployment-owned identities; reconciled fail-closed at gateway start.
+  # Wildcards and empty namespace lists are rejected (HOR-397 / ARCH-015).
+  approved_runners:
+    - namespace: iterabase-system
+      runner_id: overlay-tools
+      spiffe_id: spiffe://iterabase.local/tool-runners/iterabase-system/overlay-tools
+      allowed_tool_namespaces: [platform, graph]
 
 # Immutable artifact service (HOR-399). API + gateway are the only MinIO
 # clients; supervisors/runners/sandboxes use the gateway ArtifactService.

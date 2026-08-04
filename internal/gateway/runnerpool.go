@@ -33,7 +33,7 @@ type runnerConn struct {
 
 	mu      sync.Mutex
 	pending map[string]chan dispatchResult // invocationID -> result chan
-	tools   map[string]string              // tool_name -> digest (registered by this conn)
+	tools   map[string]struct{}            // name+digest registrations served by this conn
 	closed  bool
 
 	// sendMu serializes all runner->stream sends (Invoke dispatch + Cancel).
@@ -79,18 +79,26 @@ func (rc *runnerConn) send(msg *v1.RunnerControl) error {
 }
 
 // registerTool records a tool version served by this runner.
+func toolRefKey(name, digest string) string { return name + "\x00" + digest }
+
 func (rc *runnerConn) registerTool(name, digest string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.tools[name] = digest
+	rc.tools[toolRefKey(name, digest)] = struct{}{}
+}
+
+func (rc *runnerConn) retireTool(name, digest string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.tools, toolRefKey(name, digest))
 }
 
 // serves reports whether this conn serves the given (tool, digest).
 func (rc *runnerConn) serves(tool, digest string) bool {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	d, ok := rc.tools[tool]
-	return ok && d == digest
+	_, ok := rc.tools[toolRefKey(tool, digest)]
+	return ok
 }
 
 // dispatch sends an Invoke over the stream and waits for the result (or stream

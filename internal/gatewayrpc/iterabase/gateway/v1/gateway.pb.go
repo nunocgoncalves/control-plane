@@ -309,6 +309,8 @@ type RunnerMessage struct {
 	//	*RunnerMessage_Heartbeat
 	//	*RunnerMessage_InvokeResult
 	//	*RunnerMessage_InvokeError
+	//	*RunnerMessage_BeginDrain
+	//	*RunnerMessage_Retired
 	Kind          isRunnerMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -387,6 +389,24 @@ func (x *RunnerMessage) GetInvokeError() *InvokeError {
 	return nil
 }
 
+func (x *RunnerMessage) GetBeginDrain() *BeginDrain {
+	if x != nil {
+		if x, ok := x.Kind.(*RunnerMessage_BeginDrain); ok {
+			return x.BeginDrain
+		}
+	}
+	return nil
+}
+
+func (x *RunnerMessage) GetRetired() *Retired {
+	if x != nil {
+		if x, ok := x.Kind.(*RunnerMessage_Retired); ok {
+			return x.Retired
+		}
+	}
+	return nil
+}
+
 type isRunnerMessage_Kind interface {
 	isRunnerMessage_Kind()
 }
@@ -407,6 +427,14 @@ type RunnerMessage_InvokeError struct {
 	InvokeError *InvokeError `protobuf:"bytes,4,opt,name=invoke_error,json=invokeError,proto3,oneof"` // pre-execution / dispatch error
 }
 
+type RunnerMessage_BeginDrain struct {
+	BeginDrain *BeginDrain `protobuf:"bytes,5,opt,name=begin_drain,json=beginDrain,proto3,oneof"` // stop selecting superseded versions for new attempts
+}
+
+type RunnerMessage_Retired struct {
+	Retired *Retired `protobuf:"bytes,6,opt,name=retired,proto3,oneof"` // runner unloaded versions after drain/expiry
+}
+
 func (*RunnerMessage_Register) isRunnerMessage_Kind() {}
 
 func (*RunnerMessage_Heartbeat) isRunnerMessage_Kind() {}
@@ -414,6 +442,167 @@ func (*RunnerMessage_Heartbeat) isRunnerMessage_Kind() {}
 func (*RunnerMessage_InvokeResult) isRunnerMessage_Kind() {}
 
 func (*RunnerMessage_InvokeError) isRunnerMessage_Kind() {}
+
+func (*RunnerMessage_BeginDrain) isRunnerMessage_Kind() {}
+
+func (*RunnerMessage_Retired) isRunnerMessage_Kind() {}
+
+// ToolVersionRef is the immutable registration identity used by generation
+// draining. Name+digest is sufficient: version is part of the immutable
+// descriptor bound to that digest.
+type ToolVersionRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolVersionRef) Reset() {
+	*x = ToolVersionRef{}
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolVersionRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolVersionRef) ProtoMessage() {}
+
+func (x *ToolVersionRef) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolVersionRef.ProtoReflect.Descriptor instead.
+func (*ToolVersionRef) Descriptor() ([]byte, []int) {
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ToolVersionRef) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolVersionRef) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// BeginDrain atomically removes superseded versions from NEW-attempt
+// resolution. Existing attempt pins remain dispatchable over this stream until
+// DrainStatus reports them releasable. The runner may force retirement at its
+// configured hard retention deadline; pinned attempts then fail unavailable
+// rather than substitute (HOR-397 / ARCH-007).
+type BeginDrain struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Versions      []*ToolVersionRef      `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BeginDrain) Reset() {
+	*x = BeginDrain{}
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BeginDrain) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BeginDrain) ProtoMessage() {}
+
+func (x *BeginDrain) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BeginDrain.ProtoReflect.Descriptor instead.
+func (*BeginDrain) Descriptor() ([]byte, []int) {
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BeginDrain) GetVersions() []*ToolVersionRef {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
+// Retired confirms that versions are no longer loadable by this runner.
+type Retired struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Versions      []*ToolVersionRef      `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
+	Forced        bool                   `protobuf:"varint,2,opt,name=forced,proto3" json:"forced,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Retired) Reset() {
+	*x = Retired{}
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Retired) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Retired) ProtoMessage() {}
+
+func (x *Retired) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Retired.ProtoReflect.Descriptor instead.
+func (*Retired) Descriptor() ([]byte, []int) {
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Retired) GetVersions() []*ToolVersionRef {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
+func (x *Retired) GetForced() bool {
+	if x != nil {
+		return x.Forced
+	}
+	return false
+}
 
 // Register is the first message and may be repeated to publish additional
 // immutable tool versions. Each Register carries one ToolDescriptor; a runner
@@ -431,7 +620,7 @@ type Register struct {
 
 func (x *Register) Reset() {
 	*x = Register{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[1]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -443,7 +632,7 @@ func (x *Register) String() string {
 func (*Register) ProtoMessage() {}
 
 func (x *Register) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[1]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -456,7 +645,7 @@ func (x *Register) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Register.ProtoReflect.Descriptor instead.
 func (*Register) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{1}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Register) GetDescriptor_() *ToolDescriptor {
@@ -486,7 +675,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[2]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -498,7 +687,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[2]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -511,7 +700,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{2}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Heartbeat) GetTimestampMs() int64 {
@@ -543,7 +732,7 @@ type InvokeResult struct {
 
 func (x *InvokeResult) Reset() {
 	*x = InvokeResult{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[3]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +744,7 @@ func (x *InvokeResult) String() string {
 func (*InvokeResult) ProtoMessage() {}
 
 func (x *InvokeResult) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[3]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +757,7 @@ func (x *InvokeResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResult.ProtoReflect.Descriptor instead.
 func (*InvokeResult) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{3}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InvokeResult) GetInvocationId() string {
@@ -627,7 +816,7 @@ type InvokeError struct {
 
 func (x *InvokeError) Reset() {
 	*x = InvokeError{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[4]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +828,7 @@ func (x *InvokeError) String() string {
 func (*InvokeError) ProtoMessage() {}
 
 func (x *InvokeError) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[4]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +841,7 @@ func (x *InvokeError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeError.ProtoReflect.Descriptor instead.
 func (*InvokeError) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{4}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InvokeError) GetInvocationId() string {
@@ -677,6 +866,7 @@ type RunnerControl struct {
 	//	*RunnerControl_Invoke
 	//	*RunnerControl_Cancel
 	//	*RunnerControl_Ack
+	//	*RunnerControl_DrainStatus
 	Kind          isRunnerControl_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -684,7 +874,7 @@ type RunnerControl struct {
 
 func (x *RunnerControl) Reset() {
 	*x = RunnerControl{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[5]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +886,7 @@ func (x *RunnerControl) String() string {
 func (*RunnerControl) ProtoMessage() {}
 
 func (x *RunnerControl) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[5]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +899,7 @@ func (x *RunnerControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunnerControl.ProtoReflect.Descriptor instead.
 func (*RunnerControl) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{5}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RunnerControl) GetKind() isRunnerControl_Kind {
@@ -755,6 +945,15 @@ func (x *RunnerControl) GetAck() *Ack {
 	return nil
 }
 
+func (x *RunnerControl) GetDrainStatus() *DrainStatus {
+	if x != nil {
+		if x, ok := x.Kind.(*RunnerControl_DrainStatus); ok {
+			return x.DrainStatus
+		}
+	}
+	return nil
+}
+
 type isRunnerControl_Kind interface {
 	isRunnerControl_Kind()
 }
@@ -775,6 +974,10 @@ type RunnerControl_Ack struct {
 	Ack *Ack `protobuf:"bytes,4,opt,name=ack,proto3,oneof"`
 }
 
+type RunnerControl_DrainStatus struct {
+	DrainStatus *DrainStatus `protobuf:"bytes,5,opt,name=drain_status,json=drainStatus,proto3,oneof"`
+}
+
 func (*RunnerControl_Welcome) isRunnerControl_Kind() {}
 
 func (*RunnerControl_Invoke) isRunnerControl_Kind() {}
@@ -782,6 +985,63 @@ func (*RunnerControl_Invoke) isRunnerControl_Kind() {}
 func (*RunnerControl_Cancel) isRunnerControl_Kind() {}
 
 func (*RunnerControl_Ack) isRunnerControl_Kind() {}
+
+func (*RunnerControl_DrainStatus) isRunnerControl_Kind() {}
+
+// DrainStatus is returned after BeginDrain and refreshed on heartbeats while a
+// stream has draining versions. `pinned` must remain loaded; `releasable` has no
+// unfinished attempt pin and may be unloaded immediately.
+type DrainStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pinned        []*ToolVersionRef      `protobuf:"bytes,1,rep,name=pinned,proto3" json:"pinned,omitempty"`
+	Releasable    []*ToolVersionRef      `protobuf:"bytes,2,rep,name=releasable,proto3" json:"releasable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainStatus) Reset() {
+	*x = DrainStatus{}
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainStatus) ProtoMessage() {}
+
+func (x *DrainStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainStatus.ProtoReflect.Descriptor instead.
+func (*DrainStatus) Descriptor() ([]byte, []int) {
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DrainStatus) GetPinned() []*ToolVersionRef {
+	if x != nil {
+		return x.Pinned
+	}
+	return nil
+}
+
+func (x *DrainStatus) GetReleasable() []*ToolVersionRef {
+	if x != nil {
+		return x.Releasable
+	}
+	return nil
+}
 
 // Welcome is sent once after Register auth succeeds. A reconnection for the
 // same runner_id atomically fences the previous generation; any in-flight
@@ -799,7 +1059,7 @@ type Welcome struct {
 
 func (x *Welcome) Reset() {
 	*x = Welcome{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[6]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -811,7 +1071,7 @@ func (x *Welcome) String() string {
 func (*Welcome) ProtoMessage() {}
 
 func (x *Welcome) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[6]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -824,7 +1084,7 @@ func (x *Welcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Welcome.ProtoReflect.Descriptor instead.
 func (*Welcome) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{6}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Welcome) GetProtocolVersion() string {
@@ -877,7 +1137,7 @@ type Invoke struct {
 
 func (x *Invoke) Reset() {
 	*x = Invoke{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[7]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +1149,7 @@ func (x *Invoke) String() string {
 func (*Invoke) ProtoMessage() {}
 
 func (x *Invoke) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[7]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +1162,7 @@ func (x *Invoke) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Invoke.ProtoReflect.Descriptor instead.
 func (*Invoke) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{7}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Invoke) GetInvocationId() string {
@@ -961,7 +1221,7 @@ type Cancel struct {
 
 func (x *Cancel) Reset() {
 	*x = Cancel{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[8]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1233,7 @@ func (x *Cancel) String() string {
 func (*Cancel) ProtoMessage() {}
 
 func (x *Cancel) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[8]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1246,7 @@ func (x *Cancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cancel.ProtoReflect.Descriptor instead.
 func (*Cancel) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{8}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Cancel) GetInvocationId() string {
@@ -1019,7 +1279,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[9]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1031,7 +1291,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[9]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1044,7 +1304,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{9}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Ack) GetKind() isAck_Kind {
@@ -1100,7 +1360,7 @@ type DiscoverRequest struct {
 
 func (x *DiscoverRequest) Reset() {
 	*x = DiscoverRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[10]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1112,7 +1372,7 @@ func (x *DiscoverRequest) String() string {
 func (*DiscoverRequest) ProtoMessage() {}
 
 func (x *DiscoverRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[10]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1125,7 +1385,7 @@ func (x *DiscoverRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoverRequest.ProtoReflect.Descriptor instead.
 func (*DiscoverRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{10}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *DiscoverRequest) GetAttemptId() string {
@@ -1165,7 +1425,7 @@ type DiscoverResponse struct {
 
 func (x *DiscoverResponse) Reset() {
 	*x = DiscoverResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[11]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1177,7 +1437,7 @@ func (x *DiscoverResponse) String() string {
 func (*DiscoverResponse) ProtoMessage() {}
 
 func (x *DiscoverResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[11]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1190,7 +1450,7 @@ func (x *DiscoverResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoverResponse.ProtoReflect.Descriptor instead.
 func (*DiscoverResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{11}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DiscoverResponse) GetDescriptors() []*ToolDescriptor {
@@ -1218,7 +1478,7 @@ type InvokeRequest struct {
 
 func (x *InvokeRequest) Reset() {
 	*x = InvokeRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[12]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1230,7 +1490,7 @@ func (x *InvokeRequest) String() string {
 func (*InvokeRequest) ProtoMessage() {}
 
 func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[12]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1243,7 +1503,7 @@ func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeRequest.ProtoReflect.Descriptor instead.
 func (*InvokeRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{12}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *InvokeRequest) GetAttemptId() string {
@@ -1333,7 +1593,7 @@ type InvokeResponse struct {
 
 func (x *InvokeResponse) Reset() {
 	*x = InvokeResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[13]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1605,7 @@ func (x *InvokeResponse) String() string {
 func (*InvokeResponse) ProtoMessage() {}
 
 func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[13]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1618,7 @@ func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResponse.ProtoReflect.Descriptor instead.
 func (*InvokeResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{13}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *InvokeResponse) GetInvocationId() string {
@@ -1414,7 +1674,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[14]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1426,7 +1686,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[14]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1699,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{14}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CancelRequest) GetInvocationId() string {
@@ -1472,7 +1732,7 @@ type CancelResponse struct {
 
 func (x *CancelResponse) Reset() {
 	*x = CancelResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[15]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1484,7 +1744,7 @@ func (x *CancelResponse) String() string {
 func (*CancelResponse) ProtoMessage() {}
 
 func (x *CancelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[15]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1497,7 +1757,7 @@ func (x *CancelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelResponse.ProtoReflect.Descriptor instead.
 func (*CancelResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{15}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CancelResponse) GetState() InvokeState {
@@ -1522,7 +1782,7 @@ type ArtifactCallerContext struct {
 
 func (x *ArtifactCallerContext) Reset() {
 	*x = ArtifactCallerContext{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[16]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1534,7 +1794,7 @@ func (x *ArtifactCallerContext) String() string {
 func (*ArtifactCallerContext) ProtoMessage() {}
 
 func (x *ArtifactCallerContext) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[16]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1547,7 +1807,7 @@ func (x *ArtifactCallerContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactCallerContext.ProtoReflect.Descriptor instead.
 func (*ArtifactCallerContext) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{16}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ArtifactCallerContext) GetAttemptId() string {
@@ -1598,7 +1858,7 @@ type PutArtifactRequest struct {
 
 func (x *PutArtifactRequest) Reset() {
 	*x = PutArtifactRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1610,7 +1870,7 @@ func (x *PutArtifactRequest) String() string {
 func (*PutArtifactRequest) ProtoMessage() {}
 
 func (x *PutArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1623,7 +1883,7 @@ func (x *PutArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutArtifactRequest.ProtoReflect.Descriptor instead.
 func (*PutArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PutArtifactRequest) GetKind() isPutArtifactRequest_Kind {
@@ -1679,7 +1939,7 @@ type PutArtifactInit struct {
 
 func (x *PutArtifactInit) Reset() {
 	*x = PutArtifactInit{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1691,7 +1951,7 @@ func (x *PutArtifactInit) String() string {
 func (*PutArtifactInit) ProtoMessage() {}
 
 func (x *PutArtifactInit) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1704,7 +1964,7 @@ func (x *PutArtifactInit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutArtifactInit.ProtoReflect.Descriptor instead.
 func (*PutArtifactInit) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PutArtifactInit) GetContext() *ArtifactCallerContext {
@@ -1744,7 +2004,7 @@ type PutArtifactResponse struct {
 
 func (x *PutArtifactResponse) Reset() {
 	*x = PutArtifactResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1756,7 +2016,7 @@ func (x *PutArtifactResponse) String() string {
 func (*PutArtifactResponse) ProtoMessage() {}
 
 func (x *PutArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1769,7 +2029,7 @@ func (x *PutArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutArtifactResponse.ProtoReflect.Descriptor instead.
 func (*PutArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *PutArtifactResponse) GetMetadata() *ArtifactMetadata {
@@ -1789,7 +2049,7 @@ type GetArtifactRequest struct {
 
 func (x *GetArtifactRequest) Reset() {
 	*x = GetArtifactRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1801,7 +2061,7 @@ func (x *GetArtifactRequest) String() string {
 func (*GetArtifactRequest) ProtoMessage() {}
 
 func (x *GetArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1814,7 +2074,7 @@ func (x *GetArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArtifactRequest.ProtoReflect.Descriptor instead.
 func (*GetArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetArtifactRequest) GetContext() *ArtifactCallerContext {
@@ -1841,7 +2101,7 @@ type StatArtifactRequest struct {
 
 func (x *StatArtifactRequest) Reset() {
 	*x = StatArtifactRequest{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1853,7 +2113,7 @@ func (x *StatArtifactRequest) String() string {
 func (*StatArtifactRequest) ProtoMessage() {}
 
 func (x *StatArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1866,7 +2126,7 @@ func (x *StatArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatArtifactRequest.ProtoReflect.Descriptor instead.
 func (*StatArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *StatArtifactRequest) GetContext() *ArtifactCallerContext {
@@ -1892,7 +2152,7 @@ type StatArtifactResponse struct {
 
 func (x *StatArtifactResponse) Reset() {
 	*x = StatArtifactResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1904,7 +2164,7 @@ func (x *StatArtifactResponse) String() string {
 func (*StatArtifactResponse) ProtoMessage() {}
 
 func (x *StatArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1917,7 +2177,7 @@ func (x *StatArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatArtifactResponse.ProtoReflect.Descriptor instead.
 func (*StatArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *StatArtifactResponse) GetMetadata() *ArtifactMetadata {
@@ -1940,7 +2200,7 @@ type GetArtifactResponse struct {
 
 func (x *GetArtifactResponse) Reset() {
 	*x = GetArtifactResponse{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1952,7 +2212,7 @@ func (x *GetArtifactResponse) String() string {
 func (*GetArtifactResponse) ProtoMessage() {}
 
 func (x *GetArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1965,7 +2225,7 @@ func (x *GetArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArtifactResponse.ProtoReflect.Descriptor instead.
 func (*GetArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetArtifactResponse) GetKind() isGetArtifactResponse_Kind {
@@ -2023,7 +2283,7 @@ type ArtifactMetadata struct {
 
 func (x *ArtifactMetadata) Reset() {
 	*x = ArtifactMetadata{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2035,7 +2295,7 @@ func (x *ArtifactMetadata) String() string {
 func (*ArtifactMetadata) ProtoMessage() {}
 
 func (x *ArtifactMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2048,7 +2308,7 @@ func (x *ArtifactMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactMetadata.ProtoReflect.Descriptor instead.
 func (*ArtifactMetadata) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{24}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ArtifactMetadata) GetRef() *ArtifactRef {
@@ -2116,7 +2376,7 @@ type ToolDescriptor struct {
 
 func (x *ToolDescriptor) Reset() {
 	*x = ToolDescriptor{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[25]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2128,7 +2388,7 @@ func (x *ToolDescriptor) String() string {
 func (*ToolDescriptor) ProtoMessage() {}
 
 func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[25]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2141,7 +2401,7 @@ func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDescriptor.ProtoReflect.Descriptor instead.
 func (*ToolDescriptor) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{25}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ToolDescriptor) GetName() string {
@@ -2238,7 +2498,7 @@ type ConsequenceSummaryTemplate struct {
 
 func (x *ConsequenceSummaryTemplate) Reset() {
 	*x = ConsequenceSummaryTemplate{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[26]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2250,7 +2510,7 @@ func (x *ConsequenceSummaryTemplate) String() string {
 func (*ConsequenceSummaryTemplate) ProtoMessage() {}
 
 func (x *ConsequenceSummaryTemplate) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[26]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2263,7 +2523,7 @@ func (x *ConsequenceSummaryTemplate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsequenceSummaryTemplate.ProtoReflect.Descriptor instead.
 func (*ConsequenceSummaryTemplate) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{26}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ConsequenceSummaryTemplate) GetLocalizedTemplates() map[string]string {
@@ -2296,7 +2556,7 @@ type CredentialSlot struct {
 
 func (x *CredentialSlot) Reset() {
 	*x = CredentialSlot{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[27]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2308,7 +2568,7 @@ func (x *CredentialSlot) String() string {
 func (*CredentialSlot) ProtoMessage() {}
 
 func (x *CredentialSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[27]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2321,7 +2581,7 @@ func (x *CredentialSlot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialSlot.ProtoReflect.Descriptor instead.
 func (*CredentialSlot) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{27}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CredentialSlot) GetName() string {
@@ -2367,7 +2627,7 @@ type ArtifactCapabilities struct {
 
 func (x *ArtifactCapabilities) Reset() {
 	*x = ArtifactCapabilities{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[28]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2379,7 +2639,7 @@ func (x *ArtifactCapabilities) String() string {
 func (*ArtifactCapabilities) ProtoMessage() {}
 
 func (x *ArtifactCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[28]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2392,7 +2652,7 @@ func (x *ArtifactCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactCapabilities.ProtoReflect.Descriptor instead.
 func (*ArtifactCapabilities) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{28}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ArtifactCapabilities) GetReadsArtifacts() bool {
@@ -2432,7 +2692,7 @@ type IdempotencyProof struct {
 
 func (x *IdempotencyProof) Reset() {
 	*x = IdempotencyProof{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[29]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2444,7 +2704,7 @@ func (x *IdempotencyProof) String() string {
 func (*IdempotencyProof) ProtoMessage() {}
 
 func (x *IdempotencyProof) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[29]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2457,7 +2717,7 @@ func (x *IdempotencyProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdempotencyProof.ProtoReflect.Descriptor instead.
 func (*IdempotencyProof) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{29}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *IdempotencyProof) GetStrategy() string {
@@ -2494,7 +2754,7 @@ type CredentialContext struct {
 
 func (x *CredentialContext) Reset() {
 	*x = CredentialContext{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[30]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2506,7 +2766,7 @@ func (x *CredentialContext) String() string {
 func (*CredentialContext) ProtoMessage() {}
 
 func (x *CredentialContext) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[30]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2519,7 +2779,7 @@ func (x *CredentialContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialContext.ProtoReflect.Descriptor instead.
 func (*CredentialContext) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{30}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CredentialContext) GetSlots() map[string]*Credential {
@@ -2548,7 +2808,7 @@ type Credential struct {
 
 func (x *Credential) Reset() {
 	*x = Credential{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[31]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2560,7 +2820,7 @@ func (x *Credential) String() string {
 func (*Credential) ProtoMessage() {}
 
 func (x *Credential) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[31]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2573,7 +2833,7 @@ func (x *Credential) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Credential.ProtoReflect.Descriptor instead.
 func (*Credential) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{31}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *Credential) GetScheme() CredentialScheme {
@@ -2640,7 +2900,7 @@ type ArtifactRef struct {
 
 func (x *ArtifactRef) Reset() {
 	*x = ArtifactRef{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[32]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2652,7 +2912,7 @@ func (x *ArtifactRef) String() string {
 func (*ArtifactRef) ProtoMessage() {}
 
 func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[32]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2665,7 +2925,7 @@ func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactRef.ProtoReflect.Descriptor instead.
 func (*ArtifactRef) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{32}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ArtifactRef) GetArtifactId() string {
@@ -2710,7 +2970,7 @@ type ErrorDetail struct {
 
 func (x *ErrorDetail) Reset() {
 	*x = ErrorDetail{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[33]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2722,7 +2982,7 @@ func (x *ErrorDetail) String() string {
 func (*ErrorDetail) ProtoMessage() {}
 
 func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[33]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2735,7 +2995,7 @@ func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorDetail.ProtoReflect.Descriptor instead.
 func (*ErrorDetail) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{33}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ErrorDetail) GetCode() string {
@@ -2770,13 +3030,25 @@ var File_iterabase_gateway_v1_gateway_proto protoreflect.FileDescriptor
 
 const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"\n" +
-	"\"iterabase/gateway/v1/gateway.proto\x12\x14iterabase.gateway.v1\x1a\x1egoogle/protobuf/duration.proto\"\xa9\x02\n" +
+	"\"iterabase/gateway/v1/gateway.proto\x12\x14iterabase.gateway.v1\x1a\x1egoogle/protobuf/duration.proto\"\xa9\x03\n" +
 	"\rRunnerMessage\x12<\n" +
 	"\bregister\x18\x01 \x01(\v2\x1e.iterabase.gateway.v1.RegisterH\x00R\bregister\x12?\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x1f.iterabase.gateway.v1.HeartbeatH\x00R\theartbeat\x12I\n" +
 	"\rinvoke_result\x18\x03 \x01(\v2\".iterabase.gateway.v1.InvokeResultH\x00R\finvokeResult\x12F\n" +
-	"\finvoke_error\x18\x04 \x01(\v2!.iterabase.gateway.v1.InvokeErrorH\x00R\vinvokeErrorB\x06\n" +
-	"\x04kind\"m\n" +
+	"\finvoke_error\x18\x04 \x01(\v2!.iterabase.gateway.v1.InvokeErrorH\x00R\vinvokeError\x12C\n" +
+	"\vbegin_drain\x18\x05 \x01(\v2 .iterabase.gateway.v1.BeginDrainH\x00R\n" +
+	"beginDrain\x129\n" +
+	"\aretired\x18\x06 \x01(\v2\x1d.iterabase.gateway.v1.RetiredH\x00R\aretiredB\x06\n" +
+	"\x04kind\"<\n" +
+	"\x0eToolVersionRef\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"N\n" +
+	"\n" +
+	"BeginDrain\x12@\n" +
+	"\bversions\x18\x01 \x03(\v2$.iterabase.gateway.v1.ToolVersionRefR\bversions\"c\n" +
+	"\aRetired\x12@\n" +
+	"\bversions\x18\x01 \x03(\v2$.iterabase.gateway.v1.ToolVersionRefR\bversions\x12\x16\n" +
+	"\x06forced\x18\x02 \x01(\bR\x06forced\"m\n" +
 	"\bRegister\x12D\n" +
 	"\n" +
 	"descriptor\x18\x01 \x01(\v2$.iterabase.gateway.v1.ToolDescriptorR\n" +
@@ -2794,13 +3066,19 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"\ftimestamp_ms\x18\x06 \x01(\x03R\vtimestampMs\"k\n" +
 	"\vInvokeError\x12#\n" +
 	"\rinvocation_id\x18\x01 \x01(\tR\finvocationId\x127\n" +
-	"\x05error\x18\x02 \x01(\v2!.iterabase.gateway.v1.ErrorDetailR\x05error\"\xf1\x01\n" +
+	"\x05error\x18\x02 \x01(\v2!.iterabase.gateway.v1.ErrorDetailR\x05error\"\xb9\x02\n" +
 	"\rRunnerControl\x129\n" +
 	"\awelcome\x18\x01 \x01(\v2\x1d.iterabase.gateway.v1.WelcomeH\x00R\awelcome\x126\n" +
 	"\x06invoke\x18\x02 \x01(\v2\x1c.iterabase.gateway.v1.InvokeH\x00R\x06invoke\x126\n" +
 	"\x06cancel\x18\x03 \x01(\v2\x1c.iterabase.gateway.v1.CancelH\x00R\x06cancel\x12-\n" +
-	"\x03ack\x18\x04 \x01(\v2\x19.iterabase.gateway.v1.AckH\x00R\x03ackB\x06\n" +
-	"\x04kind\"\xc1\x01\n" +
+	"\x03ack\x18\x04 \x01(\v2\x19.iterabase.gateway.v1.AckH\x00R\x03ack\x12F\n" +
+	"\fdrain_status\x18\x05 \x01(\v2!.iterabase.gateway.v1.DrainStatusH\x00R\vdrainStatusB\x06\n" +
+	"\x04kind\"\x91\x01\n" +
+	"\vDrainStatus\x12<\n" +
+	"\x06pinned\x18\x01 \x03(\v2$.iterabase.gateway.v1.ToolVersionRefR\x06pinned\x12D\n" +
+	"\n" +
+	"releasable\x18\x02 \x03(\v2$.iterabase.gateway.v1.ToolVersionRefR\n" +
+	"releasable\"\xc1\x01\n" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12-\n" +
 	"\x12fencing_generation\x18\x02 \x01(\x04R\x11fencingGeneration\x122\n" +
@@ -3017,7 +3295,7 @@ func file_iterabase_gateway_v1_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_gateway_v1_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_iterabase_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_iterabase_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_iterabase_gateway_v1_gateway_proto_goTypes = []any{
 	(CallerScope)(0),                   // 0: iterabase.gateway.v1.CallerScope
 	(EffectClass)(0),                   // 1: iterabase.gateway.v1.EffectClass
@@ -3025,110 +3303,121 @@ var file_iterabase_gateway_v1_gateway_proto_goTypes = []any{
 	(InvokeState)(0),                   // 3: iterabase.gateway.v1.InvokeState
 	(Retryability)(0),                  // 4: iterabase.gateway.v1.Retryability
 	(*RunnerMessage)(nil),              // 5: iterabase.gateway.v1.RunnerMessage
-	(*Register)(nil),                   // 6: iterabase.gateway.v1.Register
-	(*Heartbeat)(nil),                  // 7: iterabase.gateway.v1.Heartbeat
-	(*InvokeResult)(nil),               // 8: iterabase.gateway.v1.InvokeResult
-	(*InvokeError)(nil),                // 9: iterabase.gateway.v1.InvokeError
-	(*RunnerControl)(nil),              // 10: iterabase.gateway.v1.RunnerControl
-	(*Welcome)(nil),                    // 11: iterabase.gateway.v1.Welcome
-	(*Invoke)(nil),                     // 12: iterabase.gateway.v1.Invoke
-	(*Cancel)(nil),                     // 13: iterabase.gateway.v1.Cancel
-	(*Ack)(nil),                        // 14: iterabase.gateway.v1.Ack
-	(*DiscoverRequest)(nil),            // 15: iterabase.gateway.v1.DiscoverRequest
-	(*DiscoverResponse)(nil),           // 16: iterabase.gateway.v1.DiscoverResponse
-	(*InvokeRequest)(nil),              // 17: iterabase.gateway.v1.InvokeRequest
-	(*InvokeResponse)(nil),             // 18: iterabase.gateway.v1.InvokeResponse
-	(*CancelRequest)(nil),              // 19: iterabase.gateway.v1.CancelRequest
-	(*CancelResponse)(nil),             // 20: iterabase.gateway.v1.CancelResponse
-	(*ArtifactCallerContext)(nil),      // 21: iterabase.gateway.v1.ArtifactCallerContext
-	(*PutArtifactRequest)(nil),         // 22: iterabase.gateway.v1.PutArtifactRequest
-	(*PutArtifactInit)(nil),            // 23: iterabase.gateway.v1.PutArtifactInit
-	(*PutArtifactResponse)(nil),        // 24: iterabase.gateway.v1.PutArtifactResponse
-	(*GetArtifactRequest)(nil),         // 25: iterabase.gateway.v1.GetArtifactRequest
-	(*StatArtifactRequest)(nil),        // 26: iterabase.gateway.v1.StatArtifactRequest
-	(*StatArtifactResponse)(nil),       // 27: iterabase.gateway.v1.StatArtifactResponse
-	(*GetArtifactResponse)(nil),        // 28: iterabase.gateway.v1.GetArtifactResponse
-	(*ArtifactMetadata)(nil),           // 29: iterabase.gateway.v1.ArtifactMetadata
-	(*ToolDescriptor)(nil),             // 30: iterabase.gateway.v1.ToolDescriptor
-	(*ConsequenceSummaryTemplate)(nil), // 31: iterabase.gateway.v1.ConsequenceSummaryTemplate
-	(*CredentialSlot)(nil),             // 32: iterabase.gateway.v1.CredentialSlot
-	(*ArtifactCapabilities)(nil),       // 33: iterabase.gateway.v1.ArtifactCapabilities
-	(*IdempotencyProof)(nil),           // 34: iterabase.gateway.v1.IdempotencyProof
-	(*CredentialContext)(nil),          // 35: iterabase.gateway.v1.CredentialContext
-	(*Credential)(nil),                 // 36: iterabase.gateway.v1.Credential
-	(*ArtifactRef)(nil),                // 37: iterabase.gateway.v1.ArtifactRef
-	(*ErrorDetail)(nil),                // 38: iterabase.gateway.v1.ErrorDetail
-	nil,                                // 39: iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
-	nil,                                // 40: iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
-	nil,                                // 41: iterabase.gateway.v1.CredentialContext.SlotsEntry
-	(*durationpb.Duration)(nil),        // 42: google.protobuf.Duration
+	(*ToolVersionRef)(nil),             // 6: iterabase.gateway.v1.ToolVersionRef
+	(*BeginDrain)(nil),                 // 7: iterabase.gateway.v1.BeginDrain
+	(*Retired)(nil),                    // 8: iterabase.gateway.v1.Retired
+	(*Register)(nil),                   // 9: iterabase.gateway.v1.Register
+	(*Heartbeat)(nil),                  // 10: iterabase.gateway.v1.Heartbeat
+	(*InvokeResult)(nil),               // 11: iterabase.gateway.v1.InvokeResult
+	(*InvokeError)(nil),                // 12: iterabase.gateway.v1.InvokeError
+	(*RunnerControl)(nil),              // 13: iterabase.gateway.v1.RunnerControl
+	(*DrainStatus)(nil),                // 14: iterabase.gateway.v1.DrainStatus
+	(*Welcome)(nil),                    // 15: iterabase.gateway.v1.Welcome
+	(*Invoke)(nil),                     // 16: iterabase.gateway.v1.Invoke
+	(*Cancel)(nil),                     // 17: iterabase.gateway.v1.Cancel
+	(*Ack)(nil),                        // 18: iterabase.gateway.v1.Ack
+	(*DiscoverRequest)(nil),            // 19: iterabase.gateway.v1.DiscoverRequest
+	(*DiscoverResponse)(nil),           // 20: iterabase.gateway.v1.DiscoverResponse
+	(*InvokeRequest)(nil),              // 21: iterabase.gateway.v1.InvokeRequest
+	(*InvokeResponse)(nil),             // 22: iterabase.gateway.v1.InvokeResponse
+	(*CancelRequest)(nil),              // 23: iterabase.gateway.v1.CancelRequest
+	(*CancelResponse)(nil),             // 24: iterabase.gateway.v1.CancelResponse
+	(*ArtifactCallerContext)(nil),      // 25: iterabase.gateway.v1.ArtifactCallerContext
+	(*PutArtifactRequest)(nil),         // 26: iterabase.gateway.v1.PutArtifactRequest
+	(*PutArtifactInit)(nil),            // 27: iterabase.gateway.v1.PutArtifactInit
+	(*PutArtifactResponse)(nil),        // 28: iterabase.gateway.v1.PutArtifactResponse
+	(*GetArtifactRequest)(nil),         // 29: iterabase.gateway.v1.GetArtifactRequest
+	(*StatArtifactRequest)(nil),        // 30: iterabase.gateway.v1.StatArtifactRequest
+	(*StatArtifactResponse)(nil),       // 31: iterabase.gateway.v1.StatArtifactResponse
+	(*GetArtifactResponse)(nil),        // 32: iterabase.gateway.v1.GetArtifactResponse
+	(*ArtifactMetadata)(nil),           // 33: iterabase.gateway.v1.ArtifactMetadata
+	(*ToolDescriptor)(nil),             // 34: iterabase.gateway.v1.ToolDescriptor
+	(*ConsequenceSummaryTemplate)(nil), // 35: iterabase.gateway.v1.ConsequenceSummaryTemplate
+	(*CredentialSlot)(nil),             // 36: iterabase.gateway.v1.CredentialSlot
+	(*ArtifactCapabilities)(nil),       // 37: iterabase.gateway.v1.ArtifactCapabilities
+	(*IdempotencyProof)(nil),           // 38: iterabase.gateway.v1.IdempotencyProof
+	(*CredentialContext)(nil),          // 39: iterabase.gateway.v1.CredentialContext
+	(*Credential)(nil),                 // 40: iterabase.gateway.v1.Credential
+	(*ArtifactRef)(nil),                // 41: iterabase.gateway.v1.ArtifactRef
+	(*ErrorDetail)(nil),                // 42: iterabase.gateway.v1.ErrorDetail
+	nil,                                // 43: iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
+	nil,                                // 44: iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
+	nil,                                // 45: iterabase.gateway.v1.CredentialContext.SlotsEntry
+	(*durationpb.Duration)(nil),        // 46: google.protobuf.Duration
 }
 var file_iterabase_gateway_v1_gateway_proto_depIdxs = []int32{
-	6,  // 0: iterabase.gateway.v1.RunnerMessage.register:type_name -> iterabase.gateway.v1.Register
-	7,  // 1: iterabase.gateway.v1.RunnerMessage.heartbeat:type_name -> iterabase.gateway.v1.Heartbeat
-	8,  // 2: iterabase.gateway.v1.RunnerMessage.invoke_result:type_name -> iterabase.gateway.v1.InvokeResult
-	9,  // 3: iterabase.gateway.v1.RunnerMessage.invoke_error:type_name -> iterabase.gateway.v1.InvokeError
-	30, // 4: iterabase.gateway.v1.Register.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
-	3,  // 5: iterabase.gateway.v1.InvokeResult.state:type_name -> iterabase.gateway.v1.InvokeState
-	37, // 6: iterabase.gateway.v1.InvokeResult.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	38, // 7: iterabase.gateway.v1.InvokeResult.error:type_name -> iterabase.gateway.v1.ErrorDetail
-	38, // 8: iterabase.gateway.v1.InvokeError.error:type_name -> iterabase.gateway.v1.ErrorDetail
-	11, // 9: iterabase.gateway.v1.RunnerControl.welcome:type_name -> iterabase.gateway.v1.Welcome
-	12, // 10: iterabase.gateway.v1.RunnerControl.invoke:type_name -> iterabase.gateway.v1.Invoke
-	13, // 11: iterabase.gateway.v1.RunnerControl.cancel:type_name -> iterabase.gateway.v1.Cancel
-	14, // 12: iterabase.gateway.v1.RunnerControl.ack:type_name -> iterabase.gateway.v1.Ack
-	30, // 13: iterabase.gateway.v1.Invoke.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
-	37, // 14: iterabase.gateway.v1.Invoke.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	35, // 15: iterabase.gateway.v1.Invoke.credential_context:type_name -> iterabase.gateway.v1.CredentialContext
-	0,  // 16: iterabase.gateway.v1.DiscoverRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
-	30, // 17: iterabase.gateway.v1.DiscoverResponse.descriptors:type_name -> iterabase.gateway.v1.ToolDescriptor
-	0,  // 18: iterabase.gateway.v1.InvokeRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
-	37, // 19: iterabase.gateway.v1.InvokeRequest.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	3,  // 20: iterabase.gateway.v1.InvokeResponse.state:type_name -> iterabase.gateway.v1.InvokeState
-	37, // 21: iterabase.gateway.v1.InvokeResponse.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	38, // 22: iterabase.gateway.v1.InvokeResponse.error:type_name -> iterabase.gateway.v1.ErrorDetail
-	3,  // 23: iterabase.gateway.v1.CancelResponse.state:type_name -> iterabase.gateway.v1.InvokeState
-	0,  // 24: iterabase.gateway.v1.ArtifactCallerContext.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
-	23, // 25: iterabase.gateway.v1.PutArtifactRequest.init:type_name -> iterabase.gateway.v1.PutArtifactInit
-	21, // 26: iterabase.gateway.v1.PutArtifactInit.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
-	29, // 27: iterabase.gateway.v1.PutArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
-	21, // 28: iterabase.gateway.v1.GetArtifactRequest.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
-	21, // 29: iterabase.gateway.v1.StatArtifactRequest.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
-	29, // 30: iterabase.gateway.v1.StatArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
-	29, // 31: iterabase.gateway.v1.GetArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
-	37, // 32: iterabase.gateway.v1.ArtifactMetadata.ref:type_name -> iterabase.gateway.v1.ArtifactRef
-	1,  // 33: iterabase.gateway.v1.ToolDescriptor.effect_class:type_name -> iterabase.gateway.v1.EffectClass
-	32, // 34: iterabase.gateway.v1.ToolDescriptor.credential_slots:type_name -> iterabase.gateway.v1.CredentialSlot
-	33, // 35: iterabase.gateway.v1.ToolDescriptor.artifact_capabilities:type_name -> iterabase.gateway.v1.ArtifactCapabilities
-	42, // 36: iterabase.gateway.v1.ToolDescriptor.timeout:type_name -> google.protobuf.Duration
-	34, // 37: iterabase.gateway.v1.ToolDescriptor.idempotency_proof:type_name -> iterabase.gateway.v1.IdempotencyProof
-	31, // 38: iterabase.gateway.v1.ToolDescriptor.consequence_summary_template:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate
-	39, // 39: iterabase.gateway.v1.ConsequenceSummaryTemplate.localized_templates:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
-	40, // 40: iterabase.gateway.v1.ConsequenceSummaryTemplate.argument_paths:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
-	2,  // 41: iterabase.gateway.v1.CredentialSlot.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
-	41, // 42: iterabase.gateway.v1.CredentialContext.slots:type_name -> iterabase.gateway.v1.CredentialContext.SlotsEntry
-	2,  // 43: iterabase.gateway.v1.Credential.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
-	4,  // 44: iterabase.gateway.v1.ErrorDetail.retryability:type_name -> iterabase.gateway.v1.Retryability
-	36, // 45: iterabase.gateway.v1.CredentialContext.SlotsEntry.value:type_name -> iterabase.gateway.v1.Credential
-	5,  // 46: iterabase.gateway.v1.RunnerService.RegisterRunner:input_type -> iterabase.gateway.v1.RunnerMessage
-	15, // 47: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:input_type -> iterabase.gateway.v1.DiscoverRequest
-	17, // 48: iterabase.gateway.v1.GatewayService.InvokeTool:input_type -> iterabase.gateway.v1.InvokeRequest
-	19, // 49: iterabase.gateway.v1.GatewayService.CancelInvocation:input_type -> iterabase.gateway.v1.CancelRequest
-	22, // 50: iterabase.gateway.v1.ArtifactService.PutArtifact:input_type -> iterabase.gateway.v1.PutArtifactRequest
-	25, // 51: iterabase.gateway.v1.ArtifactService.GetArtifact:input_type -> iterabase.gateway.v1.GetArtifactRequest
-	26, // 52: iterabase.gateway.v1.ArtifactService.StatArtifact:input_type -> iterabase.gateway.v1.StatArtifactRequest
-	10, // 53: iterabase.gateway.v1.RunnerService.RegisterRunner:output_type -> iterabase.gateway.v1.RunnerControl
-	16, // 54: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:output_type -> iterabase.gateway.v1.DiscoverResponse
-	18, // 55: iterabase.gateway.v1.GatewayService.InvokeTool:output_type -> iterabase.gateway.v1.InvokeResponse
-	20, // 56: iterabase.gateway.v1.GatewayService.CancelInvocation:output_type -> iterabase.gateway.v1.CancelResponse
-	24, // 57: iterabase.gateway.v1.ArtifactService.PutArtifact:output_type -> iterabase.gateway.v1.PutArtifactResponse
-	28, // 58: iterabase.gateway.v1.ArtifactService.GetArtifact:output_type -> iterabase.gateway.v1.GetArtifactResponse
-	27, // 59: iterabase.gateway.v1.ArtifactService.StatArtifact:output_type -> iterabase.gateway.v1.StatArtifactResponse
-	53, // [53:60] is the sub-list for method output_type
-	46, // [46:53] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	9,  // 0: iterabase.gateway.v1.RunnerMessage.register:type_name -> iterabase.gateway.v1.Register
+	10, // 1: iterabase.gateway.v1.RunnerMessage.heartbeat:type_name -> iterabase.gateway.v1.Heartbeat
+	11, // 2: iterabase.gateway.v1.RunnerMessage.invoke_result:type_name -> iterabase.gateway.v1.InvokeResult
+	12, // 3: iterabase.gateway.v1.RunnerMessage.invoke_error:type_name -> iterabase.gateway.v1.InvokeError
+	7,  // 4: iterabase.gateway.v1.RunnerMessage.begin_drain:type_name -> iterabase.gateway.v1.BeginDrain
+	8,  // 5: iterabase.gateway.v1.RunnerMessage.retired:type_name -> iterabase.gateway.v1.Retired
+	6,  // 6: iterabase.gateway.v1.BeginDrain.versions:type_name -> iterabase.gateway.v1.ToolVersionRef
+	6,  // 7: iterabase.gateway.v1.Retired.versions:type_name -> iterabase.gateway.v1.ToolVersionRef
+	34, // 8: iterabase.gateway.v1.Register.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
+	3,  // 9: iterabase.gateway.v1.InvokeResult.state:type_name -> iterabase.gateway.v1.InvokeState
+	41, // 10: iterabase.gateway.v1.InvokeResult.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	42, // 11: iterabase.gateway.v1.InvokeResult.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	42, // 12: iterabase.gateway.v1.InvokeError.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	15, // 13: iterabase.gateway.v1.RunnerControl.welcome:type_name -> iterabase.gateway.v1.Welcome
+	16, // 14: iterabase.gateway.v1.RunnerControl.invoke:type_name -> iterabase.gateway.v1.Invoke
+	17, // 15: iterabase.gateway.v1.RunnerControl.cancel:type_name -> iterabase.gateway.v1.Cancel
+	18, // 16: iterabase.gateway.v1.RunnerControl.ack:type_name -> iterabase.gateway.v1.Ack
+	14, // 17: iterabase.gateway.v1.RunnerControl.drain_status:type_name -> iterabase.gateway.v1.DrainStatus
+	6,  // 18: iterabase.gateway.v1.DrainStatus.pinned:type_name -> iterabase.gateway.v1.ToolVersionRef
+	6,  // 19: iterabase.gateway.v1.DrainStatus.releasable:type_name -> iterabase.gateway.v1.ToolVersionRef
+	34, // 20: iterabase.gateway.v1.Invoke.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
+	41, // 21: iterabase.gateway.v1.Invoke.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	39, // 22: iterabase.gateway.v1.Invoke.credential_context:type_name -> iterabase.gateway.v1.CredentialContext
+	0,  // 23: iterabase.gateway.v1.DiscoverRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
+	34, // 24: iterabase.gateway.v1.DiscoverResponse.descriptors:type_name -> iterabase.gateway.v1.ToolDescriptor
+	0,  // 25: iterabase.gateway.v1.InvokeRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
+	41, // 26: iterabase.gateway.v1.InvokeRequest.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	3,  // 27: iterabase.gateway.v1.InvokeResponse.state:type_name -> iterabase.gateway.v1.InvokeState
+	41, // 28: iterabase.gateway.v1.InvokeResponse.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	42, // 29: iterabase.gateway.v1.InvokeResponse.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	3,  // 30: iterabase.gateway.v1.CancelResponse.state:type_name -> iterabase.gateway.v1.InvokeState
+	0,  // 31: iterabase.gateway.v1.ArtifactCallerContext.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
+	27, // 32: iterabase.gateway.v1.PutArtifactRequest.init:type_name -> iterabase.gateway.v1.PutArtifactInit
+	25, // 33: iterabase.gateway.v1.PutArtifactInit.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
+	33, // 34: iterabase.gateway.v1.PutArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
+	25, // 35: iterabase.gateway.v1.GetArtifactRequest.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
+	25, // 36: iterabase.gateway.v1.StatArtifactRequest.context:type_name -> iterabase.gateway.v1.ArtifactCallerContext
+	33, // 37: iterabase.gateway.v1.StatArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
+	33, // 38: iterabase.gateway.v1.GetArtifactResponse.metadata:type_name -> iterabase.gateway.v1.ArtifactMetadata
+	41, // 39: iterabase.gateway.v1.ArtifactMetadata.ref:type_name -> iterabase.gateway.v1.ArtifactRef
+	1,  // 40: iterabase.gateway.v1.ToolDescriptor.effect_class:type_name -> iterabase.gateway.v1.EffectClass
+	36, // 41: iterabase.gateway.v1.ToolDescriptor.credential_slots:type_name -> iterabase.gateway.v1.CredentialSlot
+	37, // 42: iterabase.gateway.v1.ToolDescriptor.artifact_capabilities:type_name -> iterabase.gateway.v1.ArtifactCapabilities
+	46, // 43: iterabase.gateway.v1.ToolDescriptor.timeout:type_name -> google.protobuf.Duration
+	38, // 44: iterabase.gateway.v1.ToolDescriptor.idempotency_proof:type_name -> iterabase.gateway.v1.IdempotencyProof
+	35, // 45: iterabase.gateway.v1.ToolDescriptor.consequence_summary_template:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate
+	43, // 46: iterabase.gateway.v1.ConsequenceSummaryTemplate.localized_templates:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
+	44, // 47: iterabase.gateway.v1.ConsequenceSummaryTemplate.argument_paths:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
+	2,  // 48: iterabase.gateway.v1.CredentialSlot.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
+	45, // 49: iterabase.gateway.v1.CredentialContext.slots:type_name -> iterabase.gateway.v1.CredentialContext.SlotsEntry
+	2,  // 50: iterabase.gateway.v1.Credential.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
+	4,  // 51: iterabase.gateway.v1.ErrorDetail.retryability:type_name -> iterabase.gateway.v1.Retryability
+	40, // 52: iterabase.gateway.v1.CredentialContext.SlotsEntry.value:type_name -> iterabase.gateway.v1.Credential
+	5,  // 53: iterabase.gateway.v1.RunnerService.RegisterRunner:input_type -> iterabase.gateway.v1.RunnerMessage
+	19, // 54: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:input_type -> iterabase.gateway.v1.DiscoverRequest
+	21, // 55: iterabase.gateway.v1.GatewayService.InvokeTool:input_type -> iterabase.gateway.v1.InvokeRequest
+	23, // 56: iterabase.gateway.v1.GatewayService.CancelInvocation:input_type -> iterabase.gateway.v1.CancelRequest
+	26, // 57: iterabase.gateway.v1.ArtifactService.PutArtifact:input_type -> iterabase.gateway.v1.PutArtifactRequest
+	29, // 58: iterabase.gateway.v1.ArtifactService.GetArtifact:input_type -> iterabase.gateway.v1.GetArtifactRequest
+	30, // 59: iterabase.gateway.v1.ArtifactService.StatArtifact:input_type -> iterabase.gateway.v1.StatArtifactRequest
+	13, // 60: iterabase.gateway.v1.RunnerService.RegisterRunner:output_type -> iterabase.gateway.v1.RunnerControl
+	20, // 61: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:output_type -> iterabase.gateway.v1.DiscoverResponse
+	22, // 62: iterabase.gateway.v1.GatewayService.InvokeTool:output_type -> iterabase.gateway.v1.InvokeResponse
+	24, // 63: iterabase.gateway.v1.GatewayService.CancelInvocation:output_type -> iterabase.gateway.v1.CancelResponse
+	28, // 64: iterabase.gateway.v1.ArtifactService.PutArtifact:output_type -> iterabase.gateway.v1.PutArtifactResponse
+	32, // 65: iterabase.gateway.v1.ArtifactService.GetArtifact:output_type -> iterabase.gateway.v1.GetArtifactResponse
+	31, // 66: iterabase.gateway.v1.ArtifactService.StatArtifact:output_type -> iterabase.gateway.v1.StatArtifactResponse
+	60, // [60:67] is the sub-list for method output_type
+	53, // [53:60] is the sub-list for method input_type
+	53, // [53:53] is the sub-list for extension type_name
+	53, // [53:53] is the sub-list for extension extendee
+	0,  // [0:53] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_gateway_v1_gateway_proto_init() }
@@ -3141,34 +3430,37 @@ func file_iterabase_gateway_v1_gateway_proto_init() {
 		(*RunnerMessage_Heartbeat)(nil),
 		(*RunnerMessage_InvokeResult)(nil),
 		(*RunnerMessage_InvokeError)(nil),
+		(*RunnerMessage_BeginDrain)(nil),
+		(*RunnerMessage_Retired)(nil),
 	}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[5].OneofWrappers = []any{
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[8].OneofWrappers = []any{
 		(*RunnerControl_Welcome)(nil),
 		(*RunnerControl_Invoke)(nil),
 		(*RunnerControl_Cancel)(nil),
 		(*RunnerControl_Ack)(nil),
+		(*RunnerControl_DrainStatus)(nil),
 	}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[9].OneofWrappers = []any{
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[13].OneofWrappers = []any{
 		(*Ack_Registered)(nil),
 		(*Ack_Heartbeat)(nil),
 	}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[17].OneofWrappers = []any{
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[21].OneofWrappers = []any{
 		(*PutArtifactRequest_Init)(nil),
 		(*PutArtifactRequest_Chunk)(nil),
 	}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[18].OneofWrappers = []any{}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[23].OneofWrappers = []any{
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[22].OneofWrappers = []any{}
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[27].OneofWrappers = []any{
 		(*GetArtifactResponse_Metadata)(nil),
 		(*GetArtifactResponse_Chunk)(nil),
 	}
-	file_iterabase_gateway_v1_gateway_proto_msgTypes[24].OneofWrappers = []any{}
+	file_iterabase_gateway_v1_gateway_proto_msgTypes[28].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_gateway_v1_gateway_proto_rawDesc), len(file_iterabase_gateway_v1_gateway_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   37,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

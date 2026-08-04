@@ -674,7 +674,7 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 	gen := s.gen.Add(1)
 	rc := &runnerConn{
 		identity: id, runnerID: approved.RunnerID, gen: int64(gen), //nolint:gosec // G115: generation counter
-		stream: st, pending: make(map[string]chan dispatchResult), tools: make(map[string]string),
+		stream: st, pending: make(map[string]chan dispatchResult), tools: make(map[string]struct{}),
 	}
 	s.pool.add(rc)
 	defer func() {
@@ -732,6 +732,30 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 		case *v1.RunnerMessage_Heartbeat:
 			_ = s.store.HeartbeatRunner(ctx, rc.runnerID, int64(gen)) //nolint:gosec // G115
 			_ = rc.send(&v1.RunnerControl{Kind: &v1.RunnerControl_Ack{Ack: &v1.Ack{Kind: &v1.Ack_Heartbeat{Heartbeat: true}}}})
+			_ = s.sendDrainStatus(ctx, rc)
+		case *v1.RunnerMessage_BeginDrain:
+			refs, err := protoToolRefs(m.BeginDrain.Versions)
+			if err != nil {
+				return connect.NewError(connect.CodeInvalidArgument, err)
+			}
+			if err := s.store.BeginDrain(ctx, rc.runnerID, rc.gen, refs); err != nil {
+				return connect.NewError(connect.CodeFailedPrecondition, err)
+			}
+			if err := s.sendDrainStatus(ctx, rc); err != nil {
+				return err
+			}
+		case *v1.RunnerMessage_Retired:
+			refs, err := protoToolRefs(m.Retired.Versions)
+			if err != nil {
+				return connect.NewError(connect.CodeInvalidArgument, err)
+			}
+			if err := s.store.RetireVersions(ctx, rc.runnerID, rc.gen, refs); err != nil {
+				return connect.NewError(connect.CodeFailedPrecondition, err)
+			}
+			for _, ref := range refs {
+				rc.retireTool(ref.Name, ref.Digest)
+			}
+			s.log.Info("runner retired tool versions", "runner", rc.runnerID, "count", len(refs), "forced", m.Retired.Forced)
 		case *v1.RunnerMessage_InvokeResult:
 			rc.deliver(m.InvokeResult.InvocationId, invokeResultToDispatch(m.InvokeResult))
 		case *v1.RunnerMessage_InvokeError:
@@ -741,6 +765,47 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 			})
 		}
 	}
+}
+
+func protoToolRefs(in []*v1.ToolVersionRef) ([]ToolRef, error) {
+	out := make([]ToolRef, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, ref := range in {
+		if ref == nil || ref.Name == "" || ref.Digest == "" {
+			return nil, errors.New("tool drain references require name and digest")
+		}
+		key := toolRefKey(ref.Name, ref.Digest)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("duplicate tool drain reference %s", ref.Name)
+		}
+		seen[key] = struct{}{}
+		out = append(out, ToolRef{Name: ref.Name, Digest: ref.Digest})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("tool drain reference list must not be empty")
+	}
+	return out, nil
+}
+
+func toolRefsToProto(in []ToolRef) []*v1.ToolVersionRef {
+	out := make([]*v1.ToolVersionRef, 0, len(in))
+	for _, ref := range in {
+		out = append(out, &v1.ToolVersionRef{Name: ref.Name, Digest: ref.Digest})
+	}
+	return out
+}
+
+func (s *Service) sendDrainStatus(ctx context.Context, rc *runnerConn) error {
+	pinned, releasable, err := s.store.DrainingStatus(ctx, rc.runnerID, rc.gen)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err)
+	}
+	if len(pinned) == 0 && len(releasable) == 0 {
+		return nil
+	}
+	return rc.send(&v1.RunnerControl{Kind: &v1.RunnerControl_DrainStatus{DrainStatus: &v1.DrainStatus{
+		Pinned: toolRefsToProto(pinned), Releasable: toolRefsToProto(releasable),
+	}}})
 }
 
 // handleRegister registers one tool version for the runner + publishes the

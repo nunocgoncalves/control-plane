@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -51,8 +52,18 @@ type GatewayConfig struct {
 	TrustDomain  string `yaml:"trust_domain"`
 	// KubeNamespace scopes Secret-read RBAC for credential-slot resolution
 	// (ARCH-008). The gateway reads only named K8s Secrets in this namespace.
-	KubeNamespace string `yaml:"kube_namespace"`
-	InlineLimit   int    `yaml:"inline_limit"`
+	KubeNamespace   string                 `yaml:"kube_namespace"`
+	InlineLimit     int                    `yaml:"inline_limit"`
+	ApprovedRunners []ApprovedRunnerConfig `yaml:"approved_runners"`
+}
+
+// ApprovedRunnerConfig is one exact, deployment-owned runner identity. Empty
+// namespace lists and wildcards are rejected: registration remains fail-closed.
+type ApprovedRunnerConfig struct {
+	Namespace             string   `yaml:"namespace"`
+	RunnerID              string   `yaml:"runner_id"`
+	SpiffeID              string   `yaml:"spiffe_id"`
+	AllowedToolNamespaces []string `yaml:"allowed_tool_namespaces"`
 }
 
 // DispatchConfig configures the dispatch Work gRPC server (cmd/dispatch,
@@ -366,6 +377,7 @@ func ArtifactDurations(cfg *Config) (defaultRetention, pendingTTL, sweepInterval
 	return
 }
 
+//nolint:gocyclo // fail-closed validation enumerates each runner identity field.
 func ValidateGatewayServe(cfg *Config) error {
 	g := cfg.Gateway
 	if g.Addr == "" {
@@ -379,6 +391,21 @@ func ValidateGatewayServe(cfg *Config) error {
 	}
 	if g.KubeNamespace == "" {
 		return fmt.Errorf("gateway.kube_namespace is required (Secret-read scope for credential resolution)")
+	}
+	seen := make(map[string]struct{}, len(g.ApprovedRunners))
+	for i, r := range g.ApprovedRunners {
+		if r.Namespace == "" || r.RunnerID == "" || r.SpiffeID == "" || len(r.AllowedToolNamespaces) == 0 {
+			return fmt.Errorf("gateway.approved_runners[%d] requires namespace, runner_id, spiffe_id, and allowed_tool_namespaces", i)
+		}
+		if _, ok := seen[r.SpiffeID]; ok {
+			return fmt.Errorf("gateway.approved_runners[%d] duplicates spiffe_id %q", i, r.SpiffeID)
+		}
+		seen[r.SpiffeID] = struct{}{}
+		for _, ns := range r.AllowedToolNamespaces {
+			if ns == "" || ns == "*" || strings.ContainsAny(ns, "/ ") {
+				return fmt.Errorf("gateway.approved_runners[%d] has invalid allowed namespace %q", i, ns)
+			}
+		}
 	}
 	return nil
 }
