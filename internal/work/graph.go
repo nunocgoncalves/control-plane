@@ -556,11 +556,10 @@ func createConsequenceBlockerTx(ctx context.Context, tx pgx.Tx, itemID, attemptI
 
 func consequencesForNodeTx(ctx context.Context, tx pgx.Tx, attemptID, nodeKey, excludeNodeID string) ([]Consequence, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT i.id::text, COALESCE(NULLIF(tv.description,''), 'External system update'), i.state
+		SELECT i.id::text, i.consequence_summary, i.state
 		FROM toolgateway.invocations i
 		JOIN runtime.turns t ON t.id::text=i.caller_scope_id AND i.caller_scope='turn'
 		JOIN runtime.node_executions ne ON ne.id=t.node_execution_id
-		LEFT JOIN toolgateway.tool_versions tv ON tv.digest=i.tool_version_digest AND tv.name=i.tool_name
 		WHERE ne.attempt_id=$1 AND ne.node_key=$2 AND ne.id<>$3
 		  AND i.effect_class IN ('idempotent_write','non_idempotent_write')
 		  AND i.state IN ('succeeded','outcome_unknown')
@@ -572,12 +571,26 @@ func consequencesForNodeTx(ctx context.Context, tx pgx.Tx, attemptID, nodeKey, e
 	out := make([]Consequence, 0)
 	for rows.Next() {
 		var c Consequence
-		if err := rows.Scan(&c.InvocationID, &c.Action, &c.State); err != nil {
+		if err := rows.Scan(&c.InvocationID, &c.Summary, &c.State); err != nil {
 			return nil, err
+		}
+		if err := validateConsequenceSummary(c.Summary); err != nil {
+			return nil, fmt.Errorf("invocation %s: %w", c.InvocationID, err)
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func validateConsequenceSummary(raw json.RawMessage) error {
+	var localized map[string]string
+	if err := json.Unmarshal(raw, &localized); err != nil {
+		return fmt.Errorf("invalid customer-safe consequence summary: %w", err)
+	}
+	if localized["en"] == "" || localized["pt"] == "" {
+		return fmt.Errorf("customer-safe consequence summary requires en and pt text")
+	}
+	return nil
 }
 
 func consequencesConfirmedTx(ctx context.Context, tx pgx.Tx, nodeID string, current []Consequence) (bool, error) {

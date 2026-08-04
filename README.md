@@ -172,7 +172,8 @@ gRPC contract over native HTTP/2 + mTLS (a SPIFFE URI SAN binds caller identity)
 - **`RunnerService.RegisterRunner`** — a long-lived bidi stream. Trusted tool
   runners connect outbound, self-register immutable `ToolDescriptor`s (name /
   version / digest / JSON input schema / effect class / credential slots /
-  artifact capabilities / timeout), heart-beat availability, and receive
+  artifact capabilities / timeout / write-consequence summary template),
+  heart-beat availability, and receive
   invocations to execute. Runners expose no inbound endpoint (ARCH-015).
 - **`GatewayService`** — the caller-facing surface. `DiscoverEffectiveTools`
   returns only the descriptors permitted for the caller's active attempt/turn or
@@ -189,6 +190,15 @@ result becomes `outcome_unknown` and is never automatically repeated. Retry is
 classified by effect class: `read_only` may bounded-retry; `idempotent_write`
 only when the descriptor proves a stable strategy; `non_idempotent_write` never
 auto-retries after execution begins (ARCH-014).
+
+Every write descriptor must also provide immutable English and Portuguese
+consequence templates. Placeholders bind only to explicitly allow-listed RFC
+6901 argument paths. After schema/resource validation, the gateway renders and
+persists the localized customer-safe summary with the invocation **before**
+dispatch; missing, structured, or unrenderable fields fail closed. Cycle and
+revised-attempt confirmation return that exact persisted summary and never raw
+arguments/results, including when the write becomes `outcome_unknown`
+(ARCH-022 / REQ-026).
 
 The gateway resolves logical credential slots to K8s Secret values via the
 in-cluster API (Secret-read RBAC scoped to `gateway.kube_namespace`) and hands a

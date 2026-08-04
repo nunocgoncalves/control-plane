@@ -318,10 +318,9 @@ func (s *Store) ConsequencesForItem(ctx context.Context, itemID string) ([]Conse
 
 func consequencesForItemQuery(ctx context.Context, q consequenceQuerier, itemID string) ([]Consequence, error) {
 	rows, err := q.Query(ctx, `
-		SELECT i.id::text,COALESCE(NULLIF(tv.description,''),'External system update'),i.state
+		SELECT i.id::text,i.consequence_summary,i.state
 		FROM toolgateway.invocations i JOIN runtime.turns t ON t.id::text=i.caller_scope_id AND i.caller_scope='turn'
 		JOIN runtime.node_executions ne ON ne.id=t.node_execution_id JOIN work.attempts a ON a.id=ne.attempt_id
-		LEFT JOIN toolgateway.tool_versions tv ON tv.digest=i.tool_version_digest AND tv.name=i.tool_name
 		WHERE a.work_item_id=$1 AND i.effect_class IN('idempotent_write','non_idempotent_write') AND i.state IN('succeeded','outcome_unknown')
 		ORDER BY i.created_at,i.id`, itemID)
 	if err != nil {
@@ -331,8 +330,11 @@ func consequencesForItemQuery(ctx context.Context, q consequenceQuerier, itemID 
 	out := make([]Consequence, 0)
 	for rows.Next() {
 		var c Consequence
-		if err := rows.Scan(&c.InvocationID, &c.Action, &c.State); err != nil {
+		if err := rows.Scan(&c.InvocationID, &c.Summary, &c.State); err != nil {
 			return nil, err
+		}
+		if err := validateConsequenceSummary(c.Summary); err != nil {
+			return nil, fmt.Errorf("invocation %s: %w", c.InvocationID, err)
 		}
 		out = append(out, c)
 	}

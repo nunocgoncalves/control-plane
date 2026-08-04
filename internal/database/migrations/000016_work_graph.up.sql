@@ -8,6 +8,19 @@
 
 CREATE SCHEMA IF NOT EXISTS work;
 
+-- ARCH-022: immutable write descriptors define customer-safe consequence
+-- templates, and every write invocation persists its rendered localized
+-- summary before the side-effect boundary. The summary is safe for work-item
+-- cycle/revision confirmation; raw arguments/results remain operator-only.
+ALTER TABLE toolgateway.tool_versions
+    ADD COLUMN consequence_summary_template jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE toolgateway.invocations
+    ADD COLUMN consequence_summary jsonb;
+ALTER TABLE toolgateway.invocations
+    ADD CONSTRAINT invocations_write_consequence_summary_check CHECK (
+        effect_class = 'read_only' OR consequence_summary IS NOT NULL
+    );
+
 -- The pre-release run_steps workflow plan is superseded. The table remains only
 -- for chat's degenerate single agent task; graph workflows use node_executions.
 ALTER TABLE runtime.run_steps DROP CONSTRAINT run_steps_kind_check;
