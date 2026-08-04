@@ -129,14 +129,6 @@ func descriptorToToolVersion(d *v1.ToolDescriptor) (ToolVersion, error) {
 	} else {
 		tv.ArtifactCapabs = []byte("{}")
 	}
-	if d.ConsequenceSummaryTemplate != nil {
-		tv.ConsequenceTemplate, _ = marshalJSON(map[string]any{
-			"localized_templates": d.ConsequenceSummaryTemplate.LocalizedTemplates,
-			"argument_paths":      d.ConsequenceSummaryTemplate.ArgumentPaths,
-		})
-	} else {
-		tv.ConsequenceTemplate = []byte("{}")
-	}
 	if d.IdempotencyProof != nil {
 		// Reject a non-nil but empty proof: a serialized object with no strategy
 		// must not pass the `len > 0` retry gate (ARCH-014 fail-closed).

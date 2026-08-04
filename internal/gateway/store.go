@@ -98,19 +98,18 @@ const (
 // ToolVersion is a row from toolgateway.tool_versions: an immutable published
 // descriptor (ARCH-006/007).
 type ToolVersion struct {
-	ID                  string
-	Name                string
-	Version             string
-	Digest              string
-	Description         string
-	InputSchema         []byte // JSON Schema
-	EffectClass         EffectClass
-	CredentialSlots     []byte // JSONB [{name, scheme, binding_schema, required}]
-	ArtifactCapabs      []byte // JSONB {reads, writes, accepted_mime_types}
-	TimeoutMS           int64
-	IdempotencyProof    []byte // JSONB; required when EffectClass == idempotent_write
-	ConsequenceTemplate []byte // JSONB; required for writes and rendered before dispatch (ARCH-022)
-	CreatedAt           time.Time
+	ID               string
+	Name             string
+	Version          string
+	Digest           string
+	Description      string
+	InputSchema      []byte // JSON Schema
+	EffectClass      EffectClass
+	CredentialSlots  []byte // JSONB [{name, scheme, binding_schema, required}]
+	ArtifactCapabs   []byte // JSONB {reads, writes, accepted_mime_types}
+	TimeoutMS        int64
+	IdempotencyProof []byte // JSONB; required when EffectClass == idempotent_write
+	CreatedAt        time.Time
 }
 
 // RunnerRegistration is a row from toolgateway.runner_registrations.
@@ -214,7 +213,6 @@ type Invocation struct {
 	PoolID                 *string
 	RunnerID               *string
 	ArgumentsJSON          []byte
-	ConsequenceSummary     []byte // JSONB localized customer-safe text, persisted before dispatch
 	State                  InvocationState
 	ResultJSON             []byte
 	ArtifactOutputRefs     []byte // JSONB []ArtifactRef
@@ -267,12 +265,11 @@ func (s *Store) RegisterToolVersion(ctx context.Context, tv ToolVersion) (ToolVe
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO toolgateway.tool_versions
 			(name, version, digest, description, input_schema, effect_class,
-			 credential_slots, artifact_capabilities, timeout_ms, idempotency_proof,
-			 consequence_summary_template)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 credential_slots, artifact_capabilities, timeout_ms, idempotency_proof)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (name, digest) DO NOTHING`,
 		tv.Name, tv.Version, tv.Digest, tv.Description, tv.InputSchema, tv.EffectClass,
-		tv.CredentialSlots, tv.ArtifactCapabs, tv.TimeoutMS, tv.IdempotencyProof, tv.ConsequenceTemplate); err != nil {
+		tv.CredentialSlots, tv.ArtifactCapabs, tv.TimeoutMS, tv.IdempotencyProof); err != nil {
 		return ToolVersion{}, fmt.Errorf("register tool version: %w", err)
 	}
 	out, err := s.GetToolVersion(ctx, tv.Name, tv.Digest)
@@ -305,9 +302,6 @@ func validateToolVersion(tv ToolVersion) error {
 	default:
 		return fmt.Errorf("tool %s: effect_class must be a concrete class (read_only|idempotent_write|non_idempotent_write), got %q",
 			tv.Name, tv.EffectClass)
-	}
-	if err := validateConsequenceTemplate(tv); err != nil {
-		return err
 	}
 	if tv.EffectClass == EffectIdempotentWrite {
 		if len(tv.IdempotencyProof) == 0 || bytes.Equal(tv.IdempotencyProof, []byte("null")) {
@@ -343,8 +337,7 @@ func validateToolVersion(tv ToolVersion) error {
 func (s *Store) GetToolVersion(ctx context.Context, name, digest string) (ToolVersion, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, name, version, digest, description, input_schema, effect_class,
-		       credential_slots, artifact_capabilities, timeout_ms, idempotency_proof,
-		       consequence_summary_template, created_at
+		       credential_slots, artifact_capabilities, timeout_ms, idempotency_proof, created_at
 		FROM toolgateway.tool_versions WHERE name = $1 AND digest = $2`, name, digest)
 	tv, err := scanToolVersion(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -764,7 +757,7 @@ func (s *Store) DiscoverEffectiveTools(ctx context.Context, attemptID, poolID st
 	rows, err := s.pool.Query(ctx, `
 		SELECT tv.id, tv.name, tv.version, tv.digest, tv.description, tv.input_schema,
 		       tv.effect_class, tv.credential_slots, tv.artifact_capabilities,
-		       tv.timeout_ms, tv.idempotency_proof, tv.consequence_summary_template, tv.created_at
+		       tv.timeout_ms, tv.idempotency_proof, tv.created_at
 		FROM toolgateway.tool_versions tv
 		JOIN toolgateway.attempt_tool_pins pin
 		  ON pin.tool_name = tv.name AND pin.tool_version_digest = tv.digest AND pin.attempt_id = $1
@@ -873,19 +866,18 @@ type InvocationKey struct {
 // side-effect boundary, with a crash-recovery lease. On a unique-key conflict
 // (duplicate caller) it returns the existing invocation with inserted=false so
 // the caller can report in-progress or replay the committed result (ARCH-014).
-func (s *Store) BeginInvocation(ctx context.Context, key InvocationKey, tv ToolVersion, poolID *string, args, consequenceSummary []byte, leaseExpiresAt time.Time, gatewayInstanceID string) (inv Invocation, inserted bool, err error) {
+func (s *Store) BeginInvocation(ctx context.Context, key InvocationKey, tv ToolVersion, poolID *string, args []byte, leaseExpiresAt time.Time, gatewayInstanceID string) (inv Invocation, inserted bool, err error) {
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO toolgateway.invocations
 			(attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
 			 tool_version_digest, idempotency_key, effect_class, pool_id, arguments_json,
-			 consequence_summary, state, dispatch_lease_expires_at, gateway_instance_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'dispatching', $12, $13)
+			 state, dispatch_lease_expires_at, gateway_instance_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'dispatching', $11, $12)
 		ON CONFLICT (attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_version_digest, idempotency_key)
 		DO NOTHING
 		RETURNING id`,
 		key.AttemptID, key.CallerScope, key.CallerScopeID, key.ToolCallID, tv.Name,
-		key.ToolVersionDigest, key.IdempotencyKey, tv.EffectClass, poolID, args,
-		nullableJSONBytes(consequenceSummary), leaseExpiresAt, gatewayInstanceID)
+		key.ToolVersionDigest, key.IdempotencyKey, tv.EffectClass, poolID, args, leaseExpiresAt, gatewayInstanceID)
 	var id string
 	if err := row.Scan(&id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1419,7 +1411,7 @@ func (s *Store) UpsertApprovedRunner(ctx context.Context, namespace, runnerID, s
 const invocationSelect = `
 	SELECT id, attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
 	       tool_version_digest, idempotency_key, effect_class, pool_id, runner_id,
-	       arguments_json, consequence_summary, state, result_json, artifact_output_refs, error,
+	       arguments_json, state, result_json, artifact_output_refs, error,
 	       dispatch_lease_expires_at, gateway_instance_id,
 	       dispatching_at, running_at, finished_at, created_at, updated_at
 	FROM toolgateway.invocations`
@@ -1428,7 +1420,7 @@ func scanToolVersion(row pgx.Row) (ToolVersion, error) {
 	var tv ToolVersion
 	err := row.Scan(&tv.ID, &tv.Name, &tv.Version, &tv.Digest, &tv.Description,
 		&tv.InputSchema, &tv.EffectClass, &tv.CredentialSlots, &tv.ArtifactCapabs,
-		&tv.TimeoutMS, &tv.IdempotencyProof, &tv.ConsequenceTemplate, &tv.CreatedAt)
+		&tv.TimeoutMS, &tv.IdempotencyProof, &tv.CreatedAt)
 	return tv, err
 }
 
@@ -1444,7 +1436,7 @@ func scanInvocation(row pgx.Row) (Invocation, error) {
 	var inv Invocation
 	err := row.Scan(&inv.ID, &inv.AttemptID, &inv.CallerScope, &inv.CallerScopeID,
 		&inv.ToolCallID, &inv.ToolName, &inv.ToolVersionDigest, &inv.IdempotencyKey,
-		&inv.EffectClass, &inv.PoolID, &inv.RunnerID, &inv.ArgumentsJSON, &inv.ConsequenceSummary, &inv.State,
+		&inv.EffectClass, &inv.PoolID, &inv.RunnerID, &inv.ArgumentsJSON, &inv.State,
 		&inv.ResultJSON, &inv.ArtifactOutputRefs, &inv.Error,
 		&inv.DispatchLeaseExpiresAt, &inv.GatewayInstanceID,
 		&inv.DispatchingAt, &inv.RunningAt, &inv.FinishedAt, &inv.CreatedAt, &inv.UpdatedAt)
@@ -1455,13 +1447,6 @@ func scanInvocation(row pgx.Row) (Invocation, error) {
 // comparison: read_only (1) < idempotent_write (2) < non_idempotent_write (3).
 // A pool grant's max_effect_class is the ceiling; a tool whose effect_class
 // exceeds it is denied (ARCH-016).
-func nullableJSONBytes(v []byte) any {
-	if len(v) == 0 {
-		return nil
-	}
-	return v
-}
-
 func effectRank(c EffectClass) int {
 	switch c {
 	case EffectReadOnly:

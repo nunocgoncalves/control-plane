@@ -218,11 +218,10 @@ type SkillSnapshot struct {
 }
 
 // Consequence is the customer-safe description of a prior external write that
-// requires exact confirmation. Summary is trusted localized text rendered from
-// the immutable tool descriptor before dispatch; raw arguments/results remain
-// excluded. InvocationID is only the exact confirmation token.
+// requires exact confirmation. It deliberately excludes raw tool arguments,
+// results, errors, and runtime identifiers other than the confirmation token.
 type Consequence struct {
-	InvocationID string          `json:"invocationId"`
-	Summary      json.RawMessage `json:"summary"`
-	State        string          `json:"state"`
+	InvocationID string `json:"invocationId"`
+	Action       string `json:"action"`
+	State        string `json:"state"`
 }

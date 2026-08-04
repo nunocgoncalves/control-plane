@@ -273,19 +273,6 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 		}), nil
 	}
 
-	// 4c. Render the trusted customer-safe consequence summary from the pinned
-	//     descriptor and validated arguments. Writes fail closed if required
-	//     fields are absent/non-scalar; raw arguments/results are never copied to
-	//     the customer projection. The rendered localized text is committed with
-	//     the invocation before runner dispatch (ARCH-022).
-	consequenceSummary, err := renderConsequenceSummary(tv, msg.ArgumentsJson)
-	if err != nil {
-		return connect.NewResponse(&v1.InvokeResponse{
-			State: v1.InvokeState_INVOKE_STATE_FAILED,
-			Error: &v1.ErrorDetail{Code: "consequence_summary_invalid", Message: err.Error(), Retryability: v1.Retryability_RETRYABILITY_NON_RETRYABLE},
-		}), nil
-	}
-
 	// 5. Commit the ledger row BEFORE the side-effect boundary (ARCH-014), with
 	//    a crash-recovery lease covering the full dispatch timeout + margin so a
 	//    live invocation cannot be recovered while still executing. The caller's
@@ -298,7 +285,7 @@ func (s *Service) InvokeTool(ctx context.Context, req *connect.Request[v1.Invoke
 		CallerScopeID: res.CallerScopeID, ToolCallID: msg.ToolCallId,
 		ToolVersionDigest: tv.Digest, IdempotencyKey: msg.IdempotencyKey,
 	}
-	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, consequenceSummary, leaseExpiresAt, s.cfg.GatewayInstanceID)
+	inv, inserted, err := s.store.BeginInvocation(ctx, key, tv, &res.Pool.ID, msg.ArgumentsJson, leaseExpiresAt, s.cfg.GatewayInstanceID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

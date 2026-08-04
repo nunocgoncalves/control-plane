@@ -280,17 +280,12 @@ func echoDescriptor() *v1.ToolDescriptor {
 	}
 }
 
-func consequenceTemplate(en, pt string, paths map[string]string) *v1.ConsequenceSummaryTemplate {
-	return &v1.ConsequenceSummaryTemplate{LocalizedTemplates: map[string]string{"en": en, "pt": pt}, ArgumentPaths: paths}
-}
-
 func sendEmailDescriptor() *v1.ToolDescriptor {
 	return &v1.ToolDescriptor{
 		Name: "send_email", Version: "1.0.0", Digest: "sha256:send-1",
 		Description: "send an email", EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE,
 		InputSchema: []byte(`{"type":"object"}`), Timeout: durationPtr(5 * time.Second),
-		CredentialSlots:            []*v1.CredentialSlot{{Name: "graph_token", Scheme: v1.CredentialScheme_CREDENTIAL_SCHEME_BEARER, Required: true}},
-		ConsequenceSummaryTemplate: consequenceTemplate("Send an email to {{recipient}}", "Enviar um email para {{recipient}}", map[string]string{"recipient": "/to"}),
+		CredentialSlots: []*v1.CredentialSlot{{Name: "graph_token", Scheme: v1.CredentialScheme_CREDENTIAL_SCHEME_BEARER, Required: true}},
 	}
 }
 
@@ -299,7 +294,6 @@ func upsertRowDescriptor(proof bool) *v1.ToolDescriptor {
 		Name: "upsert_row", Version: "1.0.0", Digest: "sha256:upsert-1",
 		Description: "idempotent upsert", EffectClass: v1.EffectClass_EFFECT_CLASS_IDEMPOTENT_WRITE,
 		InputSchema: []byte(`{"type":"object"}`), Timeout: durationPtr(5 * time.Second),
-		ConsequenceSummaryTemplate: consequenceTemplate("Update the configured row", "Atualizar a linha configurada", nil),
 	}
 	if proof {
 		d.IdempotencyProof = &v1.IdempotencyProof{Strategy: "upstream_key", UpstreamKeyHeader: "Idempotency-Key"}
@@ -405,7 +399,6 @@ func TestGateway_PermissionDenialFailsClosed(t *testing.T) {
 	rr := startRefRunner(t, env, &v1.ToolDescriptor{
 		Name: "danger", Version: "1.0.0", Digest: "sha256:danger-1",
 		EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE, InputSchema: []byte(`{}`),
-		ConsequenceSummaryTemplate: consequenceTemplate("Perform the configured dangerous action", "Executar a ação perigosa configurada", nil),
 	}, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
 		t.Error("denied tool must not be dispatched to the runner")
 		return nil, false
@@ -489,36 +482,6 @@ func TestGateway_CredentialBindingResolution(t *testing.T) {
 	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, iresp.Msg.State)
 	require.NotNil(t, seenCred)
 	assert.Equal(t, "sekret-token-value", seenCred.Slots["graph_token"].BearerValue)
-	invocation, err := env.store.GetInvocation(context.Background(), iresp.Msg.InvocationId)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"en":"Send an email to x@y","pt":"Enviar um email para x@y"}`, string(invocation.ConsequenceSummary))
-	assert.NotContains(t, string(invocation.ConsequenceSummary), "sekret-token-value")
-}
-
-func TestGateway_ConsequenceSummariesDistinguishRecipients(t *testing.T) {
-	env := newTestEnv(t, nil)
-	rr := startRefRunner(t, env, sendEmailDescriptor(), func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
-		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"sent":true}`)}, false
-	})
-	defer rr.close()
-
-	runID, turnID := seedTurnAttempt(t, env)
-	gc := gatewayClient(env, env.supervisor)
-	summaries := make([]string, 0, 2)
-	for index, recipient := range []string{"buyer-a@example.test", "buyer-b@example.test"} {
-		resp, err := gc.InvokeTool(context.Background(), connect.NewRequest(&v1.InvokeRequest{
-			AttemptId: runID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
-			ToolCallId: fmt.Sprintf("call-%d", index), ToolName: "send_email", ToolVersionDigest: "sha256:send-1",
-			ArgumentsJson: []byte(fmt.Sprintf(`{"to":%q}`, recipient)), IdempotencyKey: fmt.Sprintf("send-%d", index),
-		}))
-		require.NoError(t, err)
-		invocation, err := env.store.GetInvocation(context.Background(), resp.Msg.InvocationId)
-		require.NoError(t, err)
-		summaries = append(summaries, string(invocation.ConsequenceSummary))
-	}
-	assert.NotEqual(t, summaries[0], summaries[1])
-	assert.Contains(t, summaries[0], "buyer-a@example.test")
-	assert.Contains(t, summaries[1], "buyer-b@example.test")
 }
 
 func TestGateway_CredentialSlotMismatchRejected(t *testing.T) {
@@ -572,9 +535,6 @@ func TestGateway_AmbiguousOutcomeNotRepeated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, v1.InvokeState_INVOKE_STATE_OUTCOME_UNKNOWN, second.Msg.State)
 	assert.Equal(t, iresp.Msg.InvocationId, second.Msg.InvocationId, "outcome_unknown invocation is not repeated")
-	invocation, err := env.store.GetInvocation(context.Background(), iresp.Msg.InvocationId)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"en":"Send an email to x@y","pt":"Enviar um email para x@y"}`, string(invocation.ConsequenceSummary), "summary is committed before an ambiguous effect")
 }
 
 func TestGateway_ReadOnlyRetryOnStreamLoss(t *testing.T) {
@@ -640,22 +600,6 @@ func TestGateway_IdempotentWriteWithoutProofRejected(t *testing.T) {
 	require.NoError(t, err)
 	_, err = stream.Receive()
 	require.Error(t, err, "idempotent_write without proof must be rejected at registration")
-}
-
-func TestGateway_WriteWithoutConsequenceTemplateRejected(t *testing.T) {
-	env := newTestEnv(t, nil)
-	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
-	stream := client.RegisterRunner(context.Background())
-	err := stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{
-		Descriptor_: &v1.ToolDescriptor{
-			Name: "send_email", Version: "2.0.0", Digest: "sha256:send-2",
-			EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE, InputSchema: []byte(`{"type":"object"}`),
-		},
-	}}})
-	require.NoError(t, err)
-	_, err = stream.Receive()
-	require.Error(t, err, "writes without trusted en/pt consequence templates must be rejected")
-	assert.Contains(t, err.Error(), "consequence summary templates")
 }
 
 func TestGateway_EmptyEffectClassRejected(t *testing.T) {
@@ -768,9 +712,8 @@ func seedOrphanInvocation(t *testing.T, env *testEnv, attemptID string, ec gatew
 		INSERT INTO toolgateway.invocations
 			(attempt_id, caller_scope, caller_scope_id, tool_call_id, tool_name,
 			 tool_version_digest, idempotency_key, effect_class, pool_id, arguments_json,
-			 consequence_summary, state, dispatch_lease_expires_at, gateway_instance_id)
-		VALUES ($1, 'turn', 'orphan-turn', $2, $3, $4, $5, $6, $7, '{}',
-		        '{"en":"Orphan update","pt":"Atualização órfã"}', 'running', $8, 'dead-gw')
+			 state, dispatch_lease_expires_at, gateway_instance_id)
+		VALUES ($1, 'turn', 'orphan-turn', $2, $3, $4, $5, $6, $7, '{}', 'running', $8, 'dead-gw')
 		RETURNING id::text`,
 		attemptID, "call-"+shortID(), "orphan_tool", "sha256:orphan", "k-"+shortID(), ec, env.poolID, expiresAt).Scan(&id))
 	return id
@@ -983,7 +926,6 @@ func TestGateway_ToolNamespaceEnforced(t *testing.T) {
 	require.NoError(t, stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_Register{Register: &v1.Register{Descriptor_: &v1.ToolDescriptor{
 		Name: "fs.delete", Version: "1.0.0", Digest: "sha256:fsd-1",
 		EffectClass: v1.EffectClass_EFFECT_CLASS_NON_IDEMPOTENT_WRITE, InputSchema: []byte(`{"type":"object"}`),
-		ConsequenceSummaryTemplate: consequenceTemplate("Delete the configured file", "Eliminar o ficheiro configurado", nil),
 	}}}}))
 	_, err := stream.Receive()
 	require.Error(t, err, "tool outside the runner's permitted namespace must be rejected")

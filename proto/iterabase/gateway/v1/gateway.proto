@@ -275,19 +275,6 @@ message ToolDescriptor {
   ArtifactCapabilities artifact_capabilities = 8;
   google.protobuf.Duration timeout = 9;          // per-invocation execution timeout
   IdempotencyProof idempotency_proof = 10;       // required when effect_class = idempotent_write
-  ConsequenceSummaryTemplate consequence_summary_template = 11; // required for writes; rendered + persisted before dispatch (ARCH-022)
-}
-
-// ConsequenceSummaryTemplate lets a trusted, immutable tool descriptor define
-// customer-safe, invocation-specific consequence wording without exposing raw
-// arguments/results. Templates use `{{field}}` placeholders; argument_paths
-// maps each field to an RFC 6901 JSON Pointer in the already-validated business
-// arguments. The gateway renders every locale and persists the resulting text
-// before dispatch, so succeeded and outcome-unknown writes have the same exact
-// consequence identity. V1 requires `en` and `pt` templates for write tools.
-message ConsequenceSummaryTemplate {
-  map<string, string> localized_templates = 1; // locale -> customer-safe template
-  map<string, string> argument_paths = 2;      // placeholder -> RFC 6901 JSON Pointer
 }
 
 // EffectClass classifies the external effect of a tool (ARCH-014). Drives

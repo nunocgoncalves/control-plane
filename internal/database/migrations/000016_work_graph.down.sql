@@ -1,7 +1,3 @@
-ALTER TABLE toolgateway.invocations DROP CONSTRAINT IF EXISTS invocations_write_consequence_summary_check;
-ALTER TABLE toolgateway.invocations DROP COLUMN IF EXISTS consequence_summary;
-ALTER TABLE toolgateway.tool_versions DROP COLUMN IF EXISTS consequence_summary_template;
-
 ALTER TABLE identity.api_keys DROP CONSTRAINT IF EXISTS api_keys_scope_check;
 ALTER TABLE identity.api_keys ADD CONSTRAINT api_keys_scope_check
     CHECK (scope IN ('admin', 'token', 'gateway'));

@@ -1512,20 +1512,19 @@ func (x *CancelResponse) GetState() InvokeState {
 // coexisting for pinned attempts (ARCH-007); the digest is the exact
 // implementation identity retained on every audit record.
 type ToolDescriptor struct {
-	state                      protoimpl.MessageState      `protogen:"open.v1"`
-	Name                       string                      `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`       // logical tool name within an approved namespace
-	Version                    string                      `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"` // immutable version string
-	Digest                     string                      `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`   // implementation content digest (the pin identity)
-	Description                string                      `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	InputSchema                []byte                      `protobuf:"bytes,5,opt,name=input_schema,json=inputSchema,proto3" json:"input_schema,omitempty"`                                        // JSON Schema for arguments
-	EffectClass                EffectClass                 `protobuf:"varint,6,opt,name=effect_class,json=effectClass,proto3,enum=iterabase.gateway.v1.EffectClass" json:"effect_class,omitempty"` // drives the retry/ledger policy (ARCH-014)
-	CredentialSlots            []*CredentialSlot           `protobuf:"bytes,7,rep,name=credential_slots,json=credentialSlots,proto3" json:"credential_slots,omitempty"`                            // logical slots the gateway binds to SecretRefs
-	ArtifactCapabilities       *ArtifactCapabilities       `protobuf:"bytes,8,opt,name=artifact_capabilities,json=artifactCapabilities,proto3" json:"artifact_capabilities,omitempty"`
-	Timeout                    *durationpb.Duration        `protobuf:"bytes,9,opt,name=timeout,proto3" json:"timeout,omitempty"`                                                                            // per-invocation execution timeout
-	IdempotencyProof           *IdempotencyProof           `protobuf:"bytes,10,opt,name=idempotency_proof,json=idempotencyProof,proto3" json:"idempotency_proof,omitempty"`                                 // required when effect_class = idempotent_write
-	ConsequenceSummaryTemplate *ConsequenceSummaryTemplate `protobuf:"bytes,11,opt,name=consequence_summary_template,json=consequenceSummaryTemplate,proto3" json:"consequence_summary_template,omitempty"` // required for writes; rendered + persisted before dispatch (ARCH-022)
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Name                 string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`       // logical tool name within an approved namespace
+	Version              string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"` // immutable version string
+	Digest               string                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`   // implementation content digest (the pin identity)
+	Description          string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	InputSchema          []byte                 `protobuf:"bytes,5,opt,name=input_schema,json=inputSchema,proto3" json:"input_schema,omitempty"`                                        // JSON Schema for arguments
+	EffectClass          EffectClass            `protobuf:"varint,6,opt,name=effect_class,json=effectClass,proto3,enum=iterabase.gateway.v1.EffectClass" json:"effect_class,omitempty"` // drives the retry/ledger policy (ARCH-014)
+	CredentialSlots      []*CredentialSlot      `protobuf:"bytes,7,rep,name=credential_slots,json=credentialSlots,proto3" json:"credential_slots,omitempty"`                            // logical slots the gateway binds to SecretRefs
+	ArtifactCapabilities *ArtifactCapabilities  `protobuf:"bytes,8,opt,name=artifact_capabilities,json=artifactCapabilities,proto3" json:"artifact_capabilities,omitempty"`
+	Timeout              *durationpb.Duration   `protobuf:"bytes,9,opt,name=timeout,proto3" json:"timeout,omitempty"`                                            // per-invocation execution timeout
+	IdempotencyProof     *IdempotencyProof      `protobuf:"bytes,10,opt,name=idempotency_proof,json=idempotencyProof,proto3" json:"idempotency_proof,omitempty"` // required when effect_class = idempotent_write
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ToolDescriptor) Reset() {
@@ -1628,72 +1627,6 @@ func (x *ToolDescriptor) GetIdempotencyProof() *IdempotencyProof {
 	return nil
 }
 
-func (x *ToolDescriptor) GetConsequenceSummaryTemplate() *ConsequenceSummaryTemplate {
-	if x != nil {
-		return x.ConsequenceSummaryTemplate
-	}
-	return nil
-}
-
-// ConsequenceSummaryTemplate lets a trusted, immutable tool descriptor define
-// customer-safe, invocation-specific consequence wording without exposing raw
-// arguments/results. Templates use `{{field}}` placeholders; argument_paths
-// maps each field to an RFC 6901 JSON Pointer in the already-validated business
-// arguments. The gateway renders every locale and persists the resulting text
-// before dispatch, so succeeded and outcome-unknown writes have the same exact
-// consequence identity. V1 requires `en` and `pt` templates for write tools.
-type ConsequenceSummaryTemplate struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	LocalizedTemplates map[string]string      `protobuf:"bytes,1,rep,name=localized_templates,json=localizedTemplates,proto3" json:"localized_templates,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // locale -> customer-safe template
-	ArgumentPaths      map[string]string      `protobuf:"bytes,2,rep,name=argument_paths,json=argumentPaths,proto3" json:"argument_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`                // placeholder -> RFC 6901 JSON Pointer
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *ConsequenceSummaryTemplate) Reset() {
-	*x = ConsequenceSummaryTemplate{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConsequenceSummaryTemplate) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConsequenceSummaryTemplate) ProtoMessage() {}
-
-func (x *ConsequenceSummaryTemplate) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConsequenceSummaryTemplate.ProtoReflect.Descriptor instead.
-func (*ConsequenceSummaryTemplate) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *ConsequenceSummaryTemplate) GetLocalizedTemplates() map[string]string {
-	if x != nil {
-		return x.LocalizedTemplates
-	}
-	return nil
-}
-
-func (x *ConsequenceSummaryTemplate) GetArgumentPaths() map[string]string {
-	if x != nil {
-		return x.ArgumentPaths
-	}
-	return nil
-}
-
 // CredentialSlot is a logical credential declaration in a tool manifest. The
 // gateway binds slots to K8s Secret references + non-secret resource
 // constraints via AgentPool (ARCH-008/018). The agent supplies business
@@ -1710,7 +1643,7 @@ type CredentialSlot struct {
 
 func (x *CredentialSlot) Reset() {
 	*x = CredentialSlot{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1722,7 +1655,7 @@ func (x *CredentialSlot) String() string {
 func (*CredentialSlot) ProtoMessage() {}
 
 func (x *CredentialSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1735,7 +1668,7 @@ func (x *CredentialSlot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialSlot.ProtoReflect.Descriptor instead.
 func (*CredentialSlot) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CredentialSlot) GetName() string {
@@ -1781,7 +1714,7 @@ type ArtifactCapabilities struct {
 
 func (x *ArtifactCapabilities) Reset() {
 	*x = ArtifactCapabilities{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +1726,7 @@ func (x *ArtifactCapabilities) String() string {
 func (*ArtifactCapabilities) ProtoMessage() {}
 
 func (x *ArtifactCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +1739,7 @@ func (x *ArtifactCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactCapabilities.ProtoReflect.Descriptor instead.
 func (*ArtifactCapabilities) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ArtifactCapabilities) GetReadsArtifacts() bool {
@@ -1846,7 +1779,7 @@ type IdempotencyProof struct {
 
 func (x *IdempotencyProof) Reset() {
 	*x = IdempotencyProof{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1858,7 +1791,7 @@ func (x *IdempotencyProof) String() string {
 func (*IdempotencyProof) ProtoMessage() {}
 
 func (x *IdempotencyProof) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1871,7 +1804,7 @@ func (x *IdempotencyProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdempotencyProof.ProtoReflect.Descriptor instead.
 func (*IdempotencyProof) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *IdempotencyProof) GetStrategy() string {
@@ -1908,7 +1841,7 @@ type CredentialContext struct {
 
 func (x *CredentialContext) Reset() {
 	*x = CredentialContext{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1920,7 +1853,7 @@ func (x *CredentialContext) String() string {
 func (*CredentialContext) ProtoMessage() {}
 
 func (x *CredentialContext) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1933,7 +1866,7 @@ func (x *CredentialContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialContext.ProtoReflect.Descriptor instead.
 func (*CredentialContext) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CredentialContext) GetSlots() map[string]*Credential {
@@ -1962,7 +1895,7 @@ type Credential struct {
 
 func (x *Credential) Reset() {
 	*x = Credential{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1974,7 +1907,7 @@ func (x *Credential) String() string {
 func (*Credential) ProtoMessage() {}
 
 func (x *Credential) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1987,7 +1920,7 @@ func (x *Credential) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Credential.ProtoReflect.Descriptor instead.
 func (*Credential) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Credential) GetScheme() CredentialScheme {
@@ -2054,7 +1987,7 @@ type ArtifactRef struct {
 
 func (x *ArtifactRef) Reset() {
 	*x = ArtifactRef{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2066,7 +1999,7 @@ func (x *ArtifactRef) String() string {
 func (*ArtifactRef) ProtoMessage() {}
 
 func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2079,7 +2012,7 @@ func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactRef.ProtoReflect.Descriptor instead.
 func (*ArtifactRef) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ArtifactRef) GetArtifactId() string {
@@ -2124,7 +2057,7 @@ type ErrorDetail struct {
 
 func (x *ErrorDetail) Reset() {
 	*x = ErrorDetail{}
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2136,7 +2069,7 @@ func (x *ErrorDetail) String() string {
 func (*ErrorDetail) ProtoMessage() {}
 
 func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[24]
+	mi := &file_iterabase_gateway_v1_gateway_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2149,7 +2082,7 @@ func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorDetail.ProtoReflect.Descriptor instead.
 func (*ErrorDetail) Descriptor() ([]byte, []int) {
-	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{24}
+	return file_iterabase_gateway_v1_gateway_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ErrorDetail) GetCode() string {
@@ -2273,7 +2206,7 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12-\n" +
 	"\x12fencing_generation\x18\x03 \x01(\x04R\x11fencingGeneration\"I\n" +
 	"\x0eCancelResponse\x127\n" +
-	"\x05state\x18\x01 \x01(\x0e2!.iterabase.gateway.v1.InvokeStateR\x05state\"\x91\x05\n" +
+	"\x05state\x18\x01 \x01(\x0e2!.iterabase.gateway.v1.InvokeStateR\x05state\"\x9d\x04\n" +
 	"\x0eToolDescriptor\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -2285,17 +2218,7 @@ const file_iterabase_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x15artifact_capabilities\x18\b \x01(\v2*.iterabase.gateway.v1.ArtifactCapabilitiesR\x14artifactCapabilities\x123\n" +
 	"\atimeout\x18\t \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12S\n" +
 	"\x11idempotency_proof\x18\n" +
-	" \x01(\v2&.iterabase.gateway.v1.IdempotencyProofR\x10idempotencyProof\x12r\n" +
-	"\x1cconsequence_summary_template\x18\v \x01(\v20.iterabase.gateway.v1.ConsequenceSummaryTemplateR\x1aconsequenceSummaryTemplate\"\x8c\x03\n" +
-	"\x1aConsequenceSummaryTemplate\x12y\n" +
-	"\x13localized_templates\x18\x01 \x03(\v2H.iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntryR\x12localizedTemplates\x12j\n" +
-	"\x0eargument_paths\x18\x02 \x03(\v2C.iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntryR\rargumentPaths\x1aE\n" +
-	"\x17LocalizedTemplatesEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a@\n" +
-	"\x12ArgumentPathsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x01\n" +
+	" \x01(\v2&.iterabase.gateway.v1.IdempotencyProofR\x10idempotencyProof\"\xa7\x01\n" +
 	"\x0eCredentialSlot\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12>\n" +
 	"\x06scheme\x18\x02 \x01(\x0e2&.iterabase.gateway.v1.CredentialSchemeR\x06scheme\x12%\n" +
@@ -2385,42 +2308,39 @@ func file_iterabase_gateway_v1_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_iterabase_gateway_v1_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_iterabase_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_iterabase_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_iterabase_gateway_v1_gateway_proto_goTypes = []any{
-	(CallerScope)(0),                   // 0: iterabase.gateway.v1.CallerScope
-	(EffectClass)(0),                   // 1: iterabase.gateway.v1.EffectClass
-	(CredentialScheme)(0),              // 2: iterabase.gateway.v1.CredentialScheme
-	(InvokeState)(0),                   // 3: iterabase.gateway.v1.InvokeState
-	(Retryability)(0),                  // 4: iterabase.gateway.v1.Retryability
-	(*RunnerMessage)(nil),              // 5: iterabase.gateway.v1.RunnerMessage
-	(*Register)(nil),                   // 6: iterabase.gateway.v1.Register
-	(*Heartbeat)(nil),                  // 7: iterabase.gateway.v1.Heartbeat
-	(*InvokeResult)(nil),               // 8: iterabase.gateway.v1.InvokeResult
-	(*InvokeError)(nil),                // 9: iterabase.gateway.v1.InvokeError
-	(*RunnerControl)(nil),              // 10: iterabase.gateway.v1.RunnerControl
-	(*Welcome)(nil),                    // 11: iterabase.gateway.v1.Welcome
-	(*Invoke)(nil),                     // 12: iterabase.gateway.v1.Invoke
-	(*Cancel)(nil),                     // 13: iterabase.gateway.v1.Cancel
-	(*Ack)(nil),                        // 14: iterabase.gateway.v1.Ack
-	(*DiscoverRequest)(nil),            // 15: iterabase.gateway.v1.DiscoverRequest
-	(*DiscoverResponse)(nil),           // 16: iterabase.gateway.v1.DiscoverResponse
-	(*InvokeRequest)(nil),              // 17: iterabase.gateway.v1.InvokeRequest
-	(*InvokeResponse)(nil),             // 18: iterabase.gateway.v1.InvokeResponse
-	(*CancelRequest)(nil),              // 19: iterabase.gateway.v1.CancelRequest
-	(*CancelResponse)(nil),             // 20: iterabase.gateway.v1.CancelResponse
-	(*ToolDescriptor)(nil),             // 21: iterabase.gateway.v1.ToolDescriptor
-	(*ConsequenceSummaryTemplate)(nil), // 22: iterabase.gateway.v1.ConsequenceSummaryTemplate
-	(*CredentialSlot)(nil),             // 23: iterabase.gateway.v1.CredentialSlot
-	(*ArtifactCapabilities)(nil),       // 24: iterabase.gateway.v1.ArtifactCapabilities
-	(*IdempotencyProof)(nil),           // 25: iterabase.gateway.v1.IdempotencyProof
-	(*CredentialContext)(nil),          // 26: iterabase.gateway.v1.CredentialContext
-	(*Credential)(nil),                 // 27: iterabase.gateway.v1.Credential
-	(*ArtifactRef)(nil),                // 28: iterabase.gateway.v1.ArtifactRef
-	(*ErrorDetail)(nil),                // 29: iterabase.gateway.v1.ErrorDetail
-	nil,                                // 30: iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
-	nil,                                // 31: iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
-	nil,                                // 32: iterabase.gateway.v1.CredentialContext.SlotsEntry
-	(*durationpb.Duration)(nil),        // 33: google.protobuf.Duration
+	(CallerScope)(0),             // 0: iterabase.gateway.v1.CallerScope
+	(EffectClass)(0),             // 1: iterabase.gateway.v1.EffectClass
+	(CredentialScheme)(0),        // 2: iterabase.gateway.v1.CredentialScheme
+	(InvokeState)(0),             // 3: iterabase.gateway.v1.InvokeState
+	(Retryability)(0),            // 4: iterabase.gateway.v1.Retryability
+	(*RunnerMessage)(nil),        // 5: iterabase.gateway.v1.RunnerMessage
+	(*Register)(nil),             // 6: iterabase.gateway.v1.Register
+	(*Heartbeat)(nil),            // 7: iterabase.gateway.v1.Heartbeat
+	(*InvokeResult)(nil),         // 8: iterabase.gateway.v1.InvokeResult
+	(*InvokeError)(nil),          // 9: iterabase.gateway.v1.InvokeError
+	(*RunnerControl)(nil),        // 10: iterabase.gateway.v1.RunnerControl
+	(*Welcome)(nil),              // 11: iterabase.gateway.v1.Welcome
+	(*Invoke)(nil),               // 12: iterabase.gateway.v1.Invoke
+	(*Cancel)(nil),               // 13: iterabase.gateway.v1.Cancel
+	(*Ack)(nil),                  // 14: iterabase.gateway.v1.Ack
+	(*DiscoverRequest)(nil),      // 15: iterabase.gateway.v1.DiscoverRequest
+	(*DiscoverResponse)(nil),     // 16: iterabase.gateway.v1.DiscoverResponse
+	(*InvokeRequest)(nil),        // 17: iterabase.gateway.v1.InvokeRequest
+	(*InvokeResponse)(nil),       // 18: iterabase.gateway.v1.InvokeResponse
+	(*CancelRequest)(nil),        // 19: iterabase.gateway.v1.CancelRequest
+	(*CancelResponse)(nil),       // 20: iterabase.gateway.v1.CancelResponse
+	(*ToolDescriptor)(nil),       // 21: iterabase.gateway.v1.ToolDescriptor
+	(*CredentialSlot)(nil),       // 22: iterabase.gateway.v1.CredentialSlot
+	(*ArtifactCapabilities)(nil), // 23: iterabase.gateway.v1.ArtifactCapabilities
+	(*IdempotencyProof)(nil),     // 24: iterabase.gateway.v1.IdempotencyProof
+	(*CredentialContext)(nil),    // 25: iterabase.gateway.v1.CredentialContext
+	(*Credential)(nil),           // 26: iterabase.gateway.v1.Credential
+	(*ArtifactRef)(nil),          // 27: iterabase.gateway.v1.ArtifactRef
+	(*ErrorDetail)(nil),          // 28: iterabase.gateway.v1.ErrorDetail
+	nil,                          // 29: iterabase.gateway.v1.CredentialContext.SlotsEntry
+	(*durationpb.Duration)(nil),  // 30: google.protobuf.Duration
 }
 var file_iterabase_gateway_v1_gateway_proto_depIdxs = []int32{
 	6,  // 0: iterabase.gateway.v1.RunnerMessage.register:type_name -> iterabase.gateway.v1.Register
@@ -2429,50 +2349,47 @@ var file_iterabase_gateway_v1_gateway_proto_depIdxs = []int32{
 	9,  // 3: iterabase.gateway.v1.RunnerMessage.invoke_error:type_name -> iterabase.gateway.v1.InvokeError
 	21, // 4: iterabase.gateway.v1.Register.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
 	3,  // 5: iterabase.gateway.v1.InvokeResult.state:type_name -> iterabase.gateway.v1.InvokeState
-	28, // 6: iterabase.gateway.v1.InvokeResult.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	29, // 7: iterabase.gateway.v1.InvokeResult.error:type_name -> iterabase.gateway.v1.ErrorDetail
-	29, // 8: iterabase.gateway.v1.InvokeError.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	27, // 6: iterabase.gateway.v1.InvokeResult.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	28, // 7: iterabase.gateway.v1.InvokeResult.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	28, // 8: iterabase.gateway.v1.InvokeError.error:type_name -> iterabase.gateway.v1.ErrorDetail
 	11, // 9: iterabase.gateway.v1.RunnerControl.welcome:type_name -> iterabase.gateway.v1.Welcome
 	12, // 10: iterabase.gateway.v1.RunnerControl.invoke:type_name -> iterabase.gateway.v1.Invoke
 	13, // 11: iterabase.gateway.v1.RunnerControl.cancel:type_name -> iterabase.gateway.v1.Cancel
 	14, // 12: iterabase.gateway.v1.RunnerControl.ack:type_name -> iterabase.gateway.v1.Ack
 	21, // 13: iterabase.gateway.v1.Invoke.descriptor:type_name -> iterabase.gateway.v1.ToolDescriptor
-	28, // 14: iterabase.gateway.v1.Invoke.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	26, // 15: iterabase.gateway.v1.Invoke.credential_context:type_name -> iterabase.gateway.v1.CredentialContext
+	27, // 14: iterabase.gateway.v1.Invoke.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	25, // 15: iterabase.gateway.v1.Invoke.credential_context:type_name -> iterabase.gateway.v1.CredentialContext
 	0,  // 16: iterabase.gateway.v1.DiscoverRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
 	21, // 17: iterabase.gateway.v1.DiscoverResponse.descriptors:type_name -> iterabase.gateway.v1.ToolDescriptor
 	0,  // 18: iterabase.gateway.v1.InvokeRequest.caller_scope:type_name -> iterabase.gateway.v1.CallerScope
-	28, // 19: iterabase.gateway.v1.InvokeRequest.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	27, // 19: iterabase.gateway.v1.InvokeRequest.artifact_input_refs:type_name -> iterabase.gateway.v1.ArtifactRef
 	3,  // 20: iterabase.gateway.v1.InvokeResponse.state:type_name -> iterabase.gateway.v1.InvokeState
-	28, // 21: iterabase.gateway.v1.InvokeResponse.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
-	29, // 22: iterabase.gateway.v1.InvokeResponse.error:type_name -> iterabase.gateway.v1.ErrorDetail
+	27, // 21: iterabase.gateway.v1.InvokeResponse.artifact_output_refs:type_name -> iterabase.gateway.v1.ArtifactRef
+	28, // 22: iterabase.gateway.v1.InvokeResponse.error:type_name -> iterabase.gateway.v1.ErrorDetail
 	3,  // 23: iterabase.gateway.v1.CancelResponse.state:type_name -> iterabase.gateway.v1.InvokeState
 	1,  // 24: iterabase.gateway.v1.ToolDescriptor.effect_class:type_name -> iterabase.gateway.v1.EffectClass
-	23, // 25: iterabase.gateway.v1.ToolDescriptor.credential_slots:type_name -> iterabase.gateway.v1.CredentialSlot
-	24, // 26: iterabase.gateway.v1.ToolDescriptor.artifact_capabilities:type_name -> iterabase.gateway.v1.ArtifactCapabilities
-	33, // 27: iterabase.gateway.v1.ToolDescriptor.timeout:type_name -> google.protobuf.Duration
-	25, // 28: iterabase.gateway.v1.ToolDescriptor.idempotency_proof:type_name -> iterabase.gateway.v1.IdempotencyProof
-	22, // 29: iterabase.gateway.v1.ToolDescriptor.consequence_summary_template:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate
-	30, // 30: iterabase.gateway.v1.ConsequenceSummaryTemplate.localized_templates:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.LocalizedTemplatesEntry
-	31, // 31: iterabase.gateway.v1.ConsequenceSummaryTemplate.argument_paths:type_name -> iterabase.gateway.v1.ConsequenceSummaryTemplate.ArgumentPathsEntry
-	2,  // 32: iterabase.gateway.v1.CredentialSlot.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
-	32, // 33: iterabase.gateway.v1.CredentialContext.slots:type_name -> iterabase.gateway.v1.CredentialContext.SlotsEntry
-	2,  // 34: iterabase.gateway.v1.Credential.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
-	4,  // 35: iterabase.gateway.v1.ErrorDetail.retryability:type_name -> iterabase.gateway.v1.Retryability
-	27, // 36: iterabase.gateway.v1.CredentialContext.SlotsEntry.value:type_name -> iterabase.gateway.v1.Credential
-	5,  // 37: iterabase.gateway.v1.RunnerService.RegisterRunner:input_type -> iterabase.gateway.v1.RunnerMessage
-	15, // 38: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:input_type -> iterabase.gateway.v1.DiscoverRequest
-	17, // 39: iterabase.gateway.v1.GatewayService.InvokeTool:input_type -> iterabase.gateway.v1.InvokeRequest
-	19, // 40: iterabase.gateway.v1.GatewayService.CancelInvocation:input_type -> iterabase.gateway.v1.CancelRequest
-	10, // 41: iterabase.gateway.v1.RunnerService.RegisterRunner:output_type -> iterabase.gateway.v1.RunnerControl
-	16, // 42: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:output_type -> iterabase.gateway.v1.DiscoverResponse
-	18, // 43: iterabase.gateway.v1.GatewayService.InvokeTool:output_type -> iterabase.gateway.v1.InvokeResponse
-	20, // 44: iterabase.gateway.v1.GatewayService.CancelInvocation:output_type -> iterabase.gateway.v1.CancelResponse
-	41, // [41:45] is the sub-list for method output_type
-	37, // [37:41] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	22, // 25: iterabase.gateway.v1.ToolDescriptor.credential_slots:type_name -> iterabase.gateway.v1.CredentialSlot
+	23, // 26: iterabase.gateway.v1.ToolDescriptor.artifact_capabilities:type_name -> iterabase.gateway.v1.ArtifactCapabilities
+	30, // 27: iterabase.gateway.v1.ToolDescriptor.timeout:type_name -> google.protobuf.Duration
+	24, // 28: iterabase.gateway.v1.ToolDescriptor.idempotency_proof:type_name -> iterabase.gateway.v1.IdempotencyProof
+	2,  // 29: iterabase.gateway.v1.CredentialSlot.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
+	29, // 30: iterabase.gateway.v1.CredentialContext.slots:type_name -> iterabase.gateway.v1.CredentialContext.SlotsEntry
+	2,  // 31: iterabase.gateway.v1.Credential.scheme:type_name -> iterabase.gateway.v1.CredentialScheme
+	4,  // 32: iterabase.gateway.v1.ErrorDetail.retryability:type_name -> iterabase.gateway.v1.Retryability
+	26, // 33: iterabase.gateway.v1.CredentialContext.SlotsEntry.value:type_name -> iterabase.gateway.v1.Credential
+	5,  // 34: iterabase.gateway.v1.RunnerService.RegisterRunner:input_type -> iterabase.gateway.v1.RunnerMessage
+	15, // 35: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:input_type -> iterabase.gateway.v1.DiscoverRequest
+	17, // 36: iterabase.gateway.v1.GatewayService.InvokeTool:input_type -> iterabase.gateway.v1.InvokeRequest
+	19, // 37: iterabase.gateway.v1.GatewayService.CancelInvocation:input_type -> iterabase.gateway.v1.CancelRequest
+	10, // 38: iterabase.gateway.v1.RunnerService.RegisterRunner:output_type -> iterabase.gateway.v1.RunnerControl
+	16, // 39: iterabase.gateway.v1.GatewayService.DiscoverEffectiveTools:output_type -> iterabase.gateway.v1.DiscoverResponse
+	18, // 40: iterabase.gateway.v1.GatewayService.InvokeTool:output_type -> iterabase.gateway.v1.InvokeResponse
+	20, // 41: iterabase.gateway.v1.GatewayService.CancelInvocation:output_type -> iterabase.gateway.v1.CancelResponse
+	38, // [38:42] is the sub-list for method output_type
+	34, // [34:38] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_iterabase_gateway_v1_gateway_proto_init() }
@@ -2502,7 +2419,7 @@ func file_iterabase_gateway_v1_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_iterabase_gateway_v1_gateway_proto_rawDesc), len(file_iterabase_gateway_v1_gateway_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   28,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
