@@ -85,10 +85,10 @@ func TestMigrations(t *testing.T) {
 	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
 
 	// HOR-254 must migrate an existing gateway ledger without requiring an
-	// unavailable customer-safe summary backfill. Roll back HOR-396, HOR-397,
-	// HOR-399, and HOR-254, seed a pre-existing write descriptor/invocation, and
-	// apply all four again.
-	require.NoError(t, database.MigrateDown(connStr, 4))
+	// unavailable customer-safe summary backfill. Roll back both HOR-396
+	// migrations plus HOR-397, HOR-399, and HOR-254, seed a pre-existing write
+	// descriptor/invocation, and apply all five again.
+	require.NoError(t, database.MigrateDown(connStr, 5))
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.tool_versions
 		    (name,version,digest,description,input_schema,effect_class,credential_slots,artifact_capabilities,timeout_ms)
