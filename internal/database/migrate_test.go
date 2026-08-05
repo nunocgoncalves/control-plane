@@ -85,10 +85,10 @@ func TestMigrations(t *testing.T) {
 	assert.True(t, viewExists, "permissions.effective_capabilities view should exist after MigrateUp")
 
 	// HOR-254 must migrate an existing gateway ledger without requiring an
-	// unavailable customer-safe summary backfill. Roll back both HOR-396
+	// unavailable customer-safe summary backfill. Roll back the three HOR-396
 	// migrations plus HOR-397, HOR-399, and HOR-254, seed a pre-existing write
-	// descriptor/invocation, and apply all five again.
-	require.NoError(t, database.MigrateDown(connStr, 5))
+	// descriptor/invocation, and apply all six again.
+	require.NoError(t, database.MigrateDown(connStr, 6))
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.tool_versions
 		    (name,version,digest,description,input_schema,effect_class,credential_slots,artifact_capabilities,timeout_ms)
@@ -143,11 +143,13 @@ func TestMigrations(t *testing.T) {
 			WHERE table_schema='work' AND table_name=$1 AND column_name=$2)`, table, column).Scan(&exists))
 		assert.True(t, exists, "work.%s.%s should exist after HOR-396 migration", table, column)
 	}
-	var businessLabel bool
-	require.NoError(t, pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM information_schema.columns
-		WHERE table_schema='runtime' AND table_name='node_executions' AND column_name='business_label')`).Scan(&businessLabel))
-	assert.True(t, businessLabel)
+	for _, column := range []string{"business_label", "result_presentation"} {
+		var exists bool
+		require.NoError(t, pool.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema='runtime' AND table_name='node_executions' AND column_name=$1)`, column).Scan(&exists))
+		assert.True(t, exists, "runtime.node_executions.%s should exist after HOR-396 migration", column)
+	}
 
 	// Down: schemas should be gone.
 	require.NoError(t, database.MigrateDown(connStr, 0))

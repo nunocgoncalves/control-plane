@@ -815,6 +815,18 @@ a:hover {
   font-weight: 500;
   text-overflow: ellipsis;
 }
+.result-grid.nested {
+  grid-template-columns: 1fr;
+  margin-top: 5px;
+}
+.result-records {
+  display: grid;
+  gap: 7px;
+}
+.result-values {
+  margin: 0;
+  padding-left: 18px;
+}
 .artifact-list {
   display: flex;
   flex-direction: column;

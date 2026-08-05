@@ -385,6 +385,11 @@ value-model reference, and a single-active-node directed graph.
 - Every agent node finishes through the reserved `complete_step` control
   function. Its declared outcome and JSON output are validated before the
   engine atomically follows an edge. A clean worker outcome is also required.
+  Every terminal node defines `resultPresentation`: localized EN/PT receipt
+  summaries per terminal outcome plus localized property-path and controlled-
+  value labels aligned exactly with its closed structured-result schema. That
+  presentation is snapshotted on each node visit so historical results retain
+  customer-readable identity and hierarchy without exposing machine keys.
 - A workflow **cannot request capabilities beyond its `poolRef` AgentPool**:
   each requested tool must be granted and its effect/action narrowing must not
   exceed the pool grant; every node exposes an explicit subset, enforced from
@@ -450,13 +455,17 @@ link, and localized evidence). Customer APIs serialize only the latter. Each
 workflow node requires English and Portuguese business labels. Human gates
 also require ordered localized labels for outcomes, response fields, and enum
 options; blockers snapshot that presentation so the Dashboard never exposes
-machine identifiers. Their v1 response schemas are constrained to a direct
-object/property form contract that the Dashboard can encode: top-level fields
-must use string, boolean, number, integer, object, array, or enum; root
-composition, top-level property references/composition, and indirectly declared
-required fields are rejected.
-Attempts and node visits snapshot workflow/persona/stage
-presentation for stable cards. Artifact blocker responses accept validated
+machine identifiers. Their v1 response schemas are constrained to the exact
+direct object/property contract the Dashboard can encode: top-level fields may
+use string, boolean, number, integer, unconstrained object/array JSON, or enum;
+unsupported validation keywords (including nested schemas, patterns, ranges,
+and composition/references) and indirectly declared required fields are
+rejected before deployment.
+Attempts and node visits snapshot workflow/persona/stage presentation for
+stable cards. Terminal visits additionally snapshot localized result summaries,
+structured property-path labels, and exact enum-value labels; the Dashboard renders that
+contract rather than agent summaries, stage labels, or raw schema identifiers.
+Artifact blocker responses accept validated
 `artifactRefs`, link them to the
 human-gate visit, and propagate them as authorized inputs when work resumes.
 

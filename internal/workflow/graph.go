@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
@@ -191,6 +193,9 @@ func ValidateGraph(spec CanonicalSpec) error {
 		routes[r] = "$terminal"
 		terminalNodes[t.Node] = struct{}{}
 	}
+	if err := validateResultPresentations(nodes, g.TerminalOutcomes); err != nil {
+		return err
+	}
 	for node, declared := range outcomes {
 		for outcome := range declared {
 			if _, ok := routes[route{node, outcome}]; !ok {
@@ -238,6 +243,288 @@ func walk(start string, adj map[string][]string) map[string]struct{} {
 	return seen
 }
 
+func validateResultPresentations(nodes map[string]CanonicalNode, terminals []CanonicalTerminalOutcome) error {
+	terminalByNode := make(map[string]map[string]struct{})
+	for _, terminal := range terminals {
+		if terminalByNode[terminal.Node] == nil {
+			terminalByNode[terminal.Node] = make(map[string]struct{})
+		}
+		terminalByNode[terminal.Node][terminal.Outcome] = struct{}{}
+	}
+	nodeKeys := make([]string, 0, len(nodes))
+	for key := range nodes {
+		nodeKeys = append(nodeKeys, key)
+	}
+	sort.Strings(nodeKeys)
+	for _, key := range nodeKeys {
+		node := nodes[key]
+		terminalOutcomes := terminalByNode[key]
+		if len(terminalOutcomes) == 0 {
+			if node.ResultPresentation != nil {
+				return fmt.Errorf("graph node %q resultPresentation is only allowed on a terminal node", key)
+			}
+			continue
+		}
+		if node.ResultPresentation == nil {
+			return fmt.Errorf("graph node %q requires resultPresentation for its terminal outcomes", key)
+		}
+		if err := validateResultOutcomePresentations(key, terminalOutcomes, node.ResultPresentation.Outcomes); err != nil {
+			return err
+		}
+		schema := node.OutputSchema
+		if node.Kind == NodeHumanGate {
+			schema = node.HumanGate.ResponseSchema
+		}
+		if err := validateResultFields(schema, node.ResultPresentation.Fields, fmt.Sprintf("graph node %q resultPresentation.fields", key)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResultOutcomePresentations(nodeKey string, terminal map[string]struct{}, presentations []CanonicalResultOutcomePresentation) error {
+	if len(presentations) != len(terminal) {
+		return fmt.Errorf("graph node %q resultPresentation.outcomes must cover each terminal outcome exactly once", nodeKey)
+	}
+	seen := make(map[string]struct{}, len(presentations))
+	for i, presentation := range presentations {
+		if _, ok := terminal[presentation.Outcome]; !ok {
+			return fmt.Errorf("graph node %q resultPresentation.outcomes[%d] references non-terminal outcome %q", nodeKey, i, presentation.Outcome)
+		}
+		if _, duplicate := seen[presentation.Outcome]; duplicate {
+			return fmt.Errorf("graph node %q resultPresentation outcome %q is duplicated", nodeKey, presentation.Outcome)
+		}
+		seen[presentation.Outcome] = struct{}{}
+		if presentation.Summary.EN == "" || presentation.Summary.PT == "" {
+			return fmt.Errorf("graph node %q resultPresentation outcome %q summary requires en and pt text", nodeKey, presentation.Outcome)
+		}
+	}
+	return nil
+}
+
+func validateResultFields(raw json.RawMessage, fields []CanonicalResultFieldPresentation, path string) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
+		if len(fields) > 0 {
+			return fmt.Errorf("%s cannot declare fields without a direct object schema", path)
+		}
+		return nil
+	}
+	schemas := make(map[string]json.RawMessage)
+	if err := collectResultSchemaFields(trimmed, nil, schemas, path); err != nil {
+		return err
+	}
+	indexed, err := indexResultPresentations(fields, schemas, path)
+	if err != nil {
+		return err
+	}
+	if len(indexed) != len(schemas) {
+		return fmt.Errorf("%s must present every declared schema property exactly once", path)
+	}
+	for key := range schemas {
+		if _, exists := indexed[key]; !exists {
+			return fmt.Errorf("%s schema property path %q requires localized presentation", path, resultPathLabelFromKey(key))
+		}
+	}
+	return nil
+}
+
+func indexResultPresentations(fields []CanonicalResultFieldPresentation, schemas map[string]json.RawMessage, path string) (map[string]struct{}, error) {
+	indexed := make(map[string]struct{}, len(fields))
+	for i, field := range fields {
+		if len(field.Path) == 0 {
+			return nil, fmt.Errorf("%s[%d].path is required", path, i)
+		}
+		for _, segment := range field.Path {
+			if segment == "" {
+				return nil, fmt.Errorf("%s[%d].path cannot contain an empty segment", path, i)
+			}
+		}
+		key := resultPathKey(field.Path)
+		if _, duplicate := indexed[key]; duplicate {
+			return nil, fmt.Errorf("%s path %q is duplicated", path, resultPathLabel(field.Path))
+		}
+		if field.Label.EN == "" || field.Label.PT == "" {
+			return nil, fmt.Errorf("%s path %q label requires en and pt text", path, resultPathLabel(field.Path))
+		}
+		schema, exists := schemas[key]
+		if !exists {
+			return nil, fmt.Errorf("%s path %q does not exist in the result schema", path, resultPathLabel(field.Path))
+		}
+		if err := validateResultFieldSchema(schema, field.Options, fmt.Sprintf("%s path %q", path, resultPathLabel(field.Path))); err != nil {
+			return nil, err
+		}
+		indexed[key] = struct{}{}
+	}
+	return indexed, nil
+}
+
+func collectResultSchemaFields(raw json.RawMessage, prefix []string, out map[string]json.RawMessage, path string) error {
+	var schema struct {
+		Type                 string                     `json:"type"`
+		Properties           map[string]json.RawMessage `json:"properties"`
+		AdditionalProperties *bool                      `json:"additionalProperties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return fmt.Errorf("%s schema must be an object: %w", path, err)
+	}
+	if len(schema.Properties) == 0 {
+		if len(prefix) > 0 {
+			return fmt.Errorf("%s object path %q must declare direct properties", path, resultPathLabel(prefix))
+		}
+		return nil
+	}
+	if schema.Type != "object" {
+		return fmt.Errorf("%s requires a direct object schema", path)
+	}
+	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+		return fmt.Errorf("%s schema with presented properties must set additionalProperties to false", path)
+	}
+	keys := make([]string, 0, len(schema.Properties))
+	for key := range schema.Properties {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fieldPath := append(append([]string(nil), prefix...), key)
+		fieldSchema := schema.Properties[key]
+		out[resultPathKey(fieldPath)] = fieldSchema
+		effective, effectiveType, hasEnum, err := effectiveResultSchema(fieldSchema, fmt.Sprintf("%s path %q", path, resultPathLabel(fieldPath)))
+		if err != nil {
+			return err
+		}
+		if !hasEnum && effectiveType == "object" {
+			if err := collectResultSchemaFields(effective, fieldPath, out, path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateResultFieldSchema(raw json.RawMessage, options []CanonicalResultValuePresentation, path string) error {
+	effective, effectiveType, hasEnum, err := effectiveResultSchema(raw, path)
+	if err != nil {
+		return err
+	}
+	var schema map[string]json.RawMessage
+	if err := json.Unmarshal(effective, &schema); err != nil {
+		return fmt.Errorf("%s schema must be an object", path)
+	}
+	if err := validateResultOptions(schema["enum"], options, path); err != nil {
+		return err
+	}
+	if hasEnum {
+		return nil
+	}
+	switch effectiveType {
+	case "string", "boolean", "number", "integer", "object":
+		return nil
+	default:
+		return fmt.Errorf("%s type %q is not supported by resultPresentation", path, effectiveType)
+	}
+}
+
+func effectiveResultSchema(raw json.RawMessage, path string) (json.RawMessage, string, bool, error) {
+	var schema map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, "", false, fmt.Errorf("%s schema must be an object", path)
+	}
+	for _, keyword := range []string{"$ref", "allOf", "anyOf", "if", "not", "oneOf"} {
+		if _, exists := schema[keyword]; exists {
+			return nil, "", false, fmt.Errorf("%s schema keyword %q is not supported by resultPresentation", path, keyword)
+		}
+	}
+	effective := raw
+	var schemaType string
+	_ = json.Unmarshal(schema["type"], &schemaType)
+	if len(schema["enum"]) > 0 {
+		return effective, schemaType, true, nil
+	}
+	if schemaType == "array" {
+		if len(schema["items"]) == 0 {
+			return nil, "", false, fmt.Errorf("%s array schema must declare direct items", path)
+		}
+		effective = schema["items"]
+		var itemSchema map[string]json.RawMessage
+		if err := json.Unmarshal(effective, &itemSchema); err != nil {
+			return nil, "", false, fmt.Errorf("%s item schema must be an object", path)
+		}
+		schema = itemSchema
+		for _, keyword := range []string{"$ref", "allOf", "anyOf", "if", "not", "oneOf"} {
+			if _, exists := schema[keyword]; exists {
+				return nil, "", false, fmt.Errorf("%s item schema keyword %q is not supported by resultPresentation", path, keyword)
+			}
+		}
+		schemaType = ""
+		_ = json.Unmarshal(schema["type"], &schemaType)
+	}
+	if len(schema["enum"]) > 0 {
+		return effective, schemaType, true, nil
+	}
+	if schemaType == "" {
+		return nil, "", false, fmt.Errorf("%s schema must declare a direct type or enum", path)
+	}
+	return effective, schemaType, false, nil
+}
+
+func resultPathKey(path []string) string {
+	encoded, _ := json.Marshal(path)
+	return string(encoded)
+}
+
+func resultPathLabel(path []string) string {
+	return "/" + strings.Join(path, "/")
+}
+
+func resultPathLabelFromKey(key string) string {
+	var path []string
+	_ = json.Unmarshal([]byte(key), &path)
+	return resultPathLabel(path)
+}
+
+func validateResultOptions(enumRaw json.RawMessage, options []CanonicalResultValuePresentation, path string) error {
+	if len(enumRaw) == 0 {
+		if len(options) > 0 {
+			return fmt.Errorf("%s options require a schema enum", path)
+		}
+		return nil
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(enumRaw, &values); err != nil || len(values) == 0 {
+		return fmt.Errorf("%s enum must contain at least one value", path)
+	}
+	if len(options) != len(values) {
+		return fmt.Errorf("%s options must localize every enum value exactly once", path)
+	}
+	matched := make([]bool, len(values))
+	for i, option := range options {
+		if option.Label.EN == "" || option.Label.PT == "" {
+			return fmt.Errorf("%s options[%d] label requires en and pt text", path, i)
+		}
+		match := -1
+		for j, value := range values {
+			if !matched[j] && equalJSON(option.Value, value) {
+				match = j
+				break
+			}
+		}
+		if match < 0 {
+			return fmt.Errorf("%s options[%d] value is not an unmatched schema enum value", path, i)
+		}
+		matched[match] = true
+	}
+	return nil
+}
+
+func equalJSON(a, b json.RawMessage) bool {
+	var av, bv any
+	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
 //nolint:gocyclo // The fail-closed Dashboard schema subset validates each allowed shape explicitly.
 func validateDashboardResponseSchema(raw json.RawMessage) error {
 	trimmed := bytes.TrimSpace(raw)
@@ -251,8 +538,8 @@ func validateDashboardResponseSchema(raw json.RawMessage) error {
 	allowed := map[string]struct{}{
 		"$comment": {}, "$id": {}, "$schema": {}, "additionalProperties": {},
 		"default": {}, "deprecated": {}, "description": {}, "examples": {},
-		"maxProperties": {}, "minProperties": {}, "properties": {}, "readOnly": {},
-		"required": {}, "title": {}, "type": {}, "writeOnly": {},
+		"properties": {}, "readOnly": {}, "required": {}, "title": {},
+		"type": {}, "writeOnly": {},
 	}
 	for keyword := range schema {
 		if _, ok := allowed[keyword]; !ok {
@@ -278,16 +565,10 @@ func validateDashboardResponseSchema(raw json.RawMessage) error {
 			return fmt.Errorf("required property %q must be declared directly in properties", key)
 		}
 	}
-	if value := schema["minProperties"]; len(value) > 0 {
-		var minimum int
-		if err := json.Unmarshal(value, &minimum); err != nil || minimum > len(properties) {
-			return fmt.Errorf("minProperties cannot exceed the directly declared property count")
-		}
-	}
-	if value := schema["maxProperties"]; len(value) > 0 {
-		var maximum int
-		if err := json.Unmarshal(value, &maximum); err != nil || maximum < len(required) {
-			return fmt.Errorf("maxProperties cannot be smaller than the required property count")
+	if value := schema["additionalProperties"]; len(value) > 0 {
+		var additional bool
+		if err := json.Unmarshal(value, &additional); err != nil {
+			return fmt.Errorf("additionalProperties must be a boolean for the v1 Dashboard form")
 		}
 	}
 	for key, property := range properties {
@@ -303,8 +584,13 @@ func validateDashboardResponseProperty(key string, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &property); err != nil {
 		return fmt.Errorf("property %q must be a JSON object", key)
 	}
-	for _, keyword := range []string{"$ref", "allOf", "anyOf", "if", "not", "oneOf"} {
-		if _, exists := property[keyword]; exists {
+	allowed := map[string]struct{}{
+		"$comment": {}, "$id": {}, "$schema": {}, "default": {},
+		"deprecated": {}, "description": {}, "enum": {}, "examples": {},
+		"readOnly": {}, "title": {}, "type": {}, "writeOnly": {},
+	}
+	for keyword := range property {
+		if _, ok := allowed[keyword]; !ok {
 			return fmt.Errorf("property %q keyword %q is not supported by the v1 Dashboard form", key, keyword)
 		}
 	}

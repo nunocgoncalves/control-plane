@@ -41,6 +41,12 @@ func jsonConfig(s string) *apiextensionsv1.JSON {
 	return &apiextensionsv1.JSON{Raw: []byte(s)}
 }
 
+func terminalResult(outcome, en, pt string) *v1alpha1.ResultPresentation {
+	return &v1alpha1.ResultPresentation{Outcomes: []v1alpha1.ResultOutcomePresentation{{
+		Outcome: outcome, Summary: v1alpha1.LocalizedText{EN: en, PT: pt},
+	}}}
+}
+
 // poolWithGrants builds an AgentPool CR carrying the given gateway grants (the
 // policy ceiling a workflow cannot widen). Only the fields the Workflow
 // reconciler reads are populated.
@@ -66,6 +72,14 @@ func poolWithGrants(name, ns string, grants ...v1alpha1.GatewayGrant) *v1alpha1.
 
 // validWalterWorkflow builds a valid graph_email workflow referencing the pool.
 func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
+	processResult := terminalResult("completed", "Quotation processed", "Pedido de cotação processado")
+	processResult.Fields = []v1alpha1.ResultFieldPresentation{{
+		Path: []string{"classification"}, Label: v1alpha1.LocalizedText{EN: "Classification", PT: "Classificação"},
+		Options: []v1alpha1.ResultValuePresentation{
+			{Value: apiextensionsv1.JSON{Raw: []byte(`"engineering"`)}, Label: v1alpha1.LocalizedText{EN: "Engineering", PT: "Engenharia"}},
+			{Value: apiextensionsv1.JSON{Raw: []byte(`"pricing"`)}, Label: v1alpha1.LocalizedText{EN: "Pricing", PT: "Preços"}},
+		},
+	}}
 	return &v1alpha1.Workflow{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.WorkflowSpec{
@@ -84,8 +98,25 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 			Graph: v1alpha1.WorkflowGraph{
 				EntryNode: "process", MaxTransitions: 20,
 				Nodes: []v1alpha1.WorkflowNode{
-					{Key: "process", Label: v1alpha1.LocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"}, Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"}, OutputSchema: jsonConfig(`{"type":"object"}`)},
-					{Key: "review", Label: v1alpha1.LocalizedText{EN: "Reviewing result", PT: "A rever resultado"}, Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review", PT: "Revisão"}, Description: v1alpha1.LocalizedText{EN: "Review the result", PT: "Reveja o resultado"}, Presentation: v1alpha1.HumanGatePresentation{Outcomes: []v1alpha1.LocalizedText{{EN: "Approve", PT: "Aprovar"}, {EN: "Request changes", PT: "Pedir alterações"}}}}},
+					{
+						Key: "process", Label: v1alpha1.LocalizedText{EN: "Processing quotation", PT: "A processar cotação"},
+						Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"},
+						Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"},
+						OutputSchema:       jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"classification":{"type":"string","enum":["engineering","pricing"]}}}`),
+						ResultPresentation: processResult,
+					},
+					{
+						Key: "review", Label: v1alpha1.LocalizedText{EN: "Reviewing result", PT: "A rever resultado"},
+						Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"},
+						ResultPresentation: terminalResult("approved", "Review completed", "Revisão concluída"),
+						HumanGate: &v1alpha1.HumanGateSpec{
+							Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review", PT: "Revisão"},
+							Description: v1alpha1.LocalizedText{EN: "Review the result", PT: "Reveja o resultado"},
+							Presentation: v1alpha1.HumanGatePresentation{Outcomes: []v1alpha1.LocalizedText{
+								{EN: "Approve", PT: "Aprovar"}, {EN: "Request changes", PT: "Pedir alterações"},
+							}},
+						},
+					},
 				},
 				Edges:            []v1alpha1.WorkflowEdge{{From: "process", Outcome: "needs_review", To: "review"}, {From: "review", Outcome: "changes_requested", To: "process"}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "process", Outcome: "completed"}, {Node: "review", Outcome: "approved"}},
@@ -124,9 +155,38 @@ func TestWorkflowValidation(t *testing.T) {
 	// Valid Walter workflow passes.
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool")))
 
+	missingResultPresentation := validWalterWorkflow("w", ns, "walter-pool")
+	missingResultPresentation.Spec.Graph.Nodes[0].ResultPresentation = nil
+	err := newReconciler(pool).validateSpec(ctx, missingResultPresentation)
+	assert.ErrorContains(t, err, "requires resultPresentation")
+
+	missingResultField := validWalterWorkflow("w", ns, "walter-pool")
+	missingResultField.Spec.Graph.Nodes[0].ResultPresentation.Fields = nil
+	err = newReconciler(pool).validateSpec(ctx, missingResultField)
+	assert.ErrorContains(t, err, "must present every declared schema property")
+
+	missingResultOption := validWalterWorkflow("w", ns, "walter-pool")
+	missingResultOption.Spec.Graph.Nodes[0].ResultPresentation.Fields[0].Options = nil
+	err = newReconciler(pool).validateSpec(ctx, missingResultOption)
+	assert.ErrorContains(t, err, "must localize every enum value")
+
+	nestedResult := validWalterWorkflow("w", ns, "walter-pool")
+	nestedResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"country":{"type":"string"}}}}}`)
+	nestedResult.Spec.Graph.Nodes[0].ResultPresentation.Fields = []v1alpha1.ResultFieldPresentation{
+		{Path: []string{"customer"}, Label: v1alpha1.LocalizedText{EN: "Customer", PT: "Cliente"}},
+		{Path: []string{"customer", "name"}, Label: v1alpha1.LocalizedText{EN: "Name", PT: "Nome"}},
+		{Path: []string{"customer", "country"}, Label: v1alpha1.LocalizedText{EN: "Country", PT: "País"}},
+	}
+	assert.NoError(t, newReconciler(pool).validateSpec(ctx, nestedResult))
+
+	openNestedResult := nestedResult.DeepCopy()
+	openNestedResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"object","properties":{"name":{"type":"string"},"country":{"type":"string"}}}}}`)
+	err = newReconciler(pool).validateSpec(ctx, openNestedResult)
+	assert.ErrorContains(t, err, "must set additionalProperties to false")
+
 	missingBusinessLabel := validWalterWorkflow("w", ns, "walter-pool")
 	missingBusinessLabel.Spec.Graph.Nodes[0].Label.PT = ""
-	err := newReconciler(pool).validateSpec(ctx, missingBusinessLabel)
+	err = newReconciler(pool).validateSpec(ctx, missingBusinessLabel)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label requires en and pt")
 
@@ -141,10 +201,17 @@ func TestWorkflowValidation(t *testing.T) {
 	assert.ErrorContains(t, err, `property "route" requires localized presentation`)
 
 	localizedResponse := validWalterWorkflow("w", ns, "walter-pool")
-	localizedResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","properties":{"route":{"type":"string","enum":["claims","operations"]}}}`)
+	localizedResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"route":{"type":"string","enum":["claims","operations"]}}}`)
 	localizedResponse.Spec.Graph.Nodes[1].HumanGate.Presentation.Fields = []v1alpha1.HumanGateFieldPresentation{{
 		Key: "route", Label: v1alpha1.LocalizedText{EN: "Route", PT: "Destino"},
 		Options: []v1alpha1.LocalizedText{{EN: "Claims", PT: "Reclamações"}, {EN: "Operations", PT: "Operações"}},
+	}}
+	localizedResponse.Spec.Graph.Nodes[1].ResultPresentation.Fields = []v1alpha1.ResultFieldPresentation{{
+		Path: []string{"route"}, Label: v1alpha1.LocalizedText{EN: "Route", PT: "Destino"},
+		Options: []v1alpha1.ResultValuePresentation{
+			{Value: apiextensionsv1.JSON{Raw: []byte(`"claims"`)}, Label: v1alpha1.LocalizedText{EN: "Claims", PT: "Reclamações"}},
+			{Value: apiextensionsv1.JSON{Raw: []byte(`"operations"`)}, Label: v1alpha1.LocalizedText{EN: "Operations", PT: "Operações"}},
+		},
 	}}
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, localizedResponse))
 
@@ -167,6 +234,23 @@ func TestWorkflowValidation(t *testing.T) {
 	indirectPropertyResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","properties":{"amount":{"$ref":"#/$defs/amount"}},"$defs":{"amount":{"type":"number"}}}`)
 	err = newReconciler(pool).validateSpec(ctx, indirectPropertyResponse)
 	assert.ErrorContains(t, err, `keyword "$defs" is not supported`)
+
+	for name, property := range map[string]string{
+		"string pattern": `{"type":"string","pattern":"^[A-Z]+$"}`,
+		"string length":  `{"type":"string","minLength":3}`,
+		"number range":   `{"type":"number","minimum":1}`,
+		"nested object":  `{"type":"object","properties":{"code":{"type":"string"}}}`,
+		"array items":    `{"type":"array","items":{"type":"string"}}`,
+	} {
+		t.Run("rejects unsupported response constraint "+name, func(t *testing.T) {
+			constrained := validWalterWorkflow("w", ns, "walter-pool")
+			constrained.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(
+				`{"type":"object","properties":{"value":` + property + `}}`,
+			)
+			err := newReconciler(pool).validateSpec(ctx, constrained)
+			assert.ErrorContains(t, err, "is not supported by the v1 Dashboard form")
+		})
+	}
 
 	// Unknown source type -> rejected.
 	badSource := validWalterWorkflow("w", ns, "walter-pool")
@@ -297,7 +381,8 @@ func TestWorkflowValidation(t *testing.T) {
 				},
 			},
 			Graph: v1alpha1.WorkflowGraph{EntryNode: "map", MaxTransitions: 10,
-				Nodes:            []v1alpha1.WorkflowNode{{Key: "map", Label: v1alpha1.LocalizedText{EN: "Building shipment map", PT: "A criar mapa de envios"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"}}},
+				Nodes: []v1alpha1.WorkflowNode{{Key: "map", Label: v1alpha1.LocalizedText{EN: "Building shipment map", PT: "A criar mapa de envios"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"},
+					ResultPresentation: terminalResult("completed", "Export processed", "Exportação processada")}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "map", Outcome: "completed"}}},
 			Presentation: v1alpha1.PresentationSpec{WorkflowTitle: "Shipment Map", PersonaName: "XBS Ops", Locale: "pt"},
 		},

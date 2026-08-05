@@ -49,7 +49,7 @@ func sampleDefinition(key, version, scopeID string) workflow.Definition {
 			`"skills":[{"name":"walter-quotation","version":"1.0.0","digest":"sha256:skill-v1"}],` +
 			`"requestedCapabilities":[{"tool":"graph.excel.write","maxEffectClass":"idempotent_write"}],` +
 			`"defaultModelRef":"model-one","graph":{"entryNode":"write","maxTransitions":10,` +
-			`"nodes":[{"key":"write","label":{"en":"Writing result","pt":"A escrever resultado"},"kind":"agent_task","prompt":"write","skills":["walter-quotation"],"capabilities":["graph.excel.write"],"outcomes":["completed"]}],` +
+			`"nodes":[{"key":"write","label":{"en":"Writing result","pt":"A escrever resultado"},"kind":"agent_task","prompt":"write","skills":["walter-quotation"],"capabilities":["graph.excel.write"],"outcomes":["completed"],"resultPresentation":{"outcomes":[{"outcome":"completed","summary":{"en":"Quotation processed","pt":"Pedido de cotação processado"}}]}}],` +
 			`"terminalOutcomes":[{"node":"write","outcome":"completed"}]},` +
 			`"presentation":{"workflowTitle":"Quotation","personaName":"Walter Ops"},` +
 			`"poolRef":"walter-pool","source":{"type":"graph_email"}}`),
@@ -410,7 +410,8 @@ func TestCanonicalSpec_DeterministicMarshal(t *testing.T) {
 		Skills:                []workflow.CanonicalSkill{{Name: "walter", Version: "1", Digest: "sha256:skill"}},
 		RequestedCapabilities: []workflow.CanonicalCapability{{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}},
 		Graph: workflow.CanonicalGraph{EntryNode: "write", MaxTransitions: 10,
-			Nodes:            []workflow.CanonicalNode{{Key: "write", Label: workflow.CanonicalLocalizedText{EN: "Writing result", PT: "A escrever resultado"}, Kind: workflow.NodeAgentTask, Prompt: "write", Skills: []string{"walter"}, Capabilities: []string{"graph.excel.write"}, Outcomes: []string{"completed"}}},
+			Nodes: []workflow.CanonicalNode{{Key: "write", Label: workflow.CanonicalLocalizedText{EN: "Writing result", PT: "A escrever resultado"}, Kind: workflow.NodeAgentTask, Prompt: "write", Skills: []string{"walter"}, Capabilities: []string{"graph.excel.write"}, Outcomes: []string{"completed"},
+				ResultPresentation: &workflow.CanonicalResultPresentation{Outcomes: []workflow.CanonicalResultOutcomePresentation{{Outcome: "completed", Summary: workflow.CanonicalLocalizedText{EN: "Quotation processed", PT: "Pedido de cotação processado"}}}}}},
 			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "write", Outcome: "completed"}}},
 		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Walter Ops"},
 	}

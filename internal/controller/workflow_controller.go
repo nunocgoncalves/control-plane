@@ -551,6 +551,9 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 		if n.Timeout != nil {
 			cn.Timeout = n.Timeout.Duration.String()
 		}
+		if n.ResultPresentation != nil {
+			cn.ResultPresentation = canonicalResultPresentation(n.ResultPresentation)
+		}
 		if n.HumanGate != nil {
 			cn.HumanGate = &workflow.CanonicalHumanGate{
 				Type:           n.HumanGate.Type,
@@ -589,6 +592,36 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 		})
 	}
 	return spec
+}
+
+func canonicalResultPresentation(in *v1alpha1.ResultPresentation) *workflow.CanonicalResultPresentation {
+	out := &workflow.CanonicalResultPresentation{}
+	for _, outcome := range in.Outcomes {
+		out.Outcomes = append(out.Outcomes, workflow.CanonicalResultOutcomePresentation{
+			Outcome: outcome.Outcome,
+			Summary: workflow.CanonicalLocalizedText{EN: outcome.Summary.EN, PT: outcome.Summary.PT},
+		})
+	}
+	out.Fields = canonicalResultFields(in.Fields)
+	return out
+}
+
+func canonicalResultFields(in []v1alpha1.ResultFieldPresentation) []workflow.CanonicalResultFieldPresentation {
+	out := make([]workflow.CanonicalResultFieldPresentation, 0, len(in))
+	for _, field := range in {
+		canonical := workflow.CanonicalResultFieldPresentation{
+			Path:  append([]string(nil), field.Path...),
+			Label: workflow.CanonicalLocalizedText{EN: field.Label.EN, PT: field.Label.PT},
+		}
+		for _, option := range field.Options {
+			canonical.Options = append(canonical.Options, workflow.CanonicalResultValuePresentation{
+				Value: append(json.RawMessage(nil), option.Value.Raw...),
+				Label: workflow.CanonicalLocalizedText{EN: option.Label.EN, PT: option.Label.PT},
+			})
+		}
+		out = append(out, canonical)
+	}
+	return out
 }
 
 // triggerBindingKey validates a source-specific non-secret trigger payload and

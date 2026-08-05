@@ -172,8 +172,9 @@ spec:
                               description: |-
                                 responseSchema validates the response payload. V1 Dashboard forms accept
                                 an object with direct properties of type string, boolean, number, integer,
-                                object, or array (or enum); root and top-level property composition or
-                                references are rejected.
+                                unconstrained object, or unconstrained array (or enum). Validation keywords
+                                the form cannot enforce—including nested schemas, ranges, patterns,
+                                composition, and references—are rejected.
                               x-kubernetes-preserve-unknown-fields: true
                             title:
                               description: title and description are localized customer-facing
@@ -240,6 +241,94 @@ spec:
                           description: prompt is required for agent_task and forbidden
                             for human_gate.
                           type: string
+                        resultPresentation:
+                          description: |-
+                            resultPresentation defines the immutable, localized outcome receipt for
+                            terminal outcomes. Controller validation requires it on every terminal
+                            node and aligns its fields and controlled values with the node schema.
+                          properties:
+                            fields:
+                              description: |-
+                                fields presents every structured-output property by its path. Paths retain
+                                object/array hierarchy without relying on raw schema keys as UI labels.
+                              items:
+                                description: |-
+                                  ResultFieldPresentation localizes one structured-result property path.
+                                  Array item objects use the same property path as one representative item;
+                                  array indexes never enter the immutable presentation contract.
+                                properties:
+                                  label:
+                                    description: LocalizedText carries approved English/Portuguese
+                                      customer copy.
+                                    properties:
+                                      en:
+                                        type: string
+                                      pt:
+                                        type: string
+                                    type: object
+                                  options:
+                                    description: |-
+                                      options provides localized labels for every enum value at this field (or
+                                      at the item schema for an array of controlled values).
+                                    items:
+                                      description: ResultValuePresentation localizes
+                                        one exact JSON-Schema enum value.
+                                      properties:
+                                        label:
+                                          description: LocalizedText carries approved
+                                            English/Portuguese customer copy.
+                                          properties:
+                                            en:
+                                              type: string
+                                            pt:
+                                              type: string
+                                          type: object
+                                        value:
+                                          x-kubernetes-preserve-unknown-fields: true
+                                      required:
+                                      - label
+                                      - value
+                                      type: object
+                                    type: array
+                                  path:
+                                    items:
+                                      type: string
+                                    minItems: 1
+                                    type: array
+                                required:
+                                - label
+                                - path
+                                type: object
+                              type: array
+                            outcomes:
+                              description: |-
+                                outcomes provides one localized completion summary for each terminal
+                                outcome declared for this node.
+                              items:
+                                description: ResultOutcomePresentation localizes one
+                                  terminal outcome receipt heading.
+                                properties:
+                                  outcome:
+                                    minLength: 1
+                                    type: string
+                                  summary:
+                                    description: LocalizedText carries approved English/Portuguese
+                                      customer copy.
+                                    properties:
+                                      en:
+                                        type: string
+                                      pt:
+                                        type: string
+                                    type: object
+                                required:
+                                - outcome
+                                - summary
+                                type: object
+                              minItems: 1
+                              type: array
+                          required:
+                          - outcomes
+                          type: object
                         skills:
                           description: skills narrows spec.skills by logical name
                             for this agent node.

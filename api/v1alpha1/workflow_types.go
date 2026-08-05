@@ -148,9 +148,66 @@ type WorkflowNode struct {
 	// +optional
 	OutputSchema *apiextensionsv1.JSON `json:"outputSchema,omitempty"`
 
+	// resultPresentation defines the immutable, localized outcome receipt for
+	// terminal outcomes. Controller validation requires it on every terminal
+	// node and aligns its fields and controlled values with the node schema.
+	// +optional
+	ResultPresentation *ResultPresentation `json:"resultPresentation,omitempty"`
+
 	// humanGate is required for human_gate and forbidden for agent_task.
 	// +optional
 	HumanGate *HumanGateSpec `json:"humanGate,omitempty"`
+}
+
+// ResultPresentation is the approved customer projection for a terminal node.
+// Machine outcomes, schema keys, and controlled values never serve as labels.
+// +kubebuilder:object:generate=true
+type ResultPresentation struct {
+	// outcomes provides one localized completion summary for each terminal
+	// outcome declared for this node.
+	// +kubebuilder:validation:MinItems=1
+	Outcomes []ResultOutcomePresentation `json:"outcomes"`
+
+	// fields presents every structured-output property by its path. Paths retain
+	// object/array hierarchy without relying on raw schema keys as UI labels.
+	// +optional
+	Fields []ResultFieldPresentation `json:"fields,omitempty"`
+}
+
+// ResultOutcomePresentation localizes one terminal outcome receipt heading.
+// +kubebuilder:object:generate=true
+type ResultOutcomePresentation struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Outcome string `json:"outcome"`
+	// +kubebuilder:validation:Required
+	Summary LocalizedText `json:"summary"`
+}
+
+// ResultFieldPresentation localizes one structured-result property path.
+// Array item objects use the same property path as one representative item;
+// array indexes never enter the immutable presentation contract.
+// +kubebuilder:object:generate=true
+type ResultFieldPresentation struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	Path []string `json:"path"`
+	// +kubebuilder:validation:Required
+	Label LocalizedText `json:"label"`
+	// options provides localized labels for every enum value at this field (or
+	// at the item schema for an array of controlled values).
+	// +optional
+	Options []ResultValuePresentation `json:"options,omitempty"`
+}
+
+// ResultValuePresentation localizes one exact JSON-Schema enum value.
+// +kubebuilder:object:generate=true
+type ResultValuePresentation struct {
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Required
+	Value apiextensionsv1.JSON `json:"value"`
+	// +kubebuilder:validation:Required
+	Label LocalizedText `json:"label"`
 }
 
 // HumanGateSpec defines a business-readable blocker and its response contract.
@@ -169,8 +226,9 @@ type HumanGateSpec struct {
 
 	// responseSchema validates the response payload. V1 Dashboard forms accept
 	// an object with direct properties of type string, boolean, number, integer,
-	// object, or array (or enum); root and top-level property composition or
-	// references are rejected.
+	// unconstrained object, or unconstrained array (or enum). Validation keywords
+	// the form cannot enforce—including nested schemas, ranges, patterns,
+	// composition, and references—are rejected.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	ResponseSchema *apiextensionsv1.JSON `json:"responseSchema,omitempty"`

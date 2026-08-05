@@ -106,12 +106,55 @@ function fetchMock(
           en: "Processing quotation",
           pt: "A processar cotação",
         },
+        resultPresentation: {
+          outcomes: [
+            {
+              outcome: "completed",
+              summary: {
+                en: "Quotation processed",
+                pt: "Pedido de cotação processado",
+              },
+            },
+          ],
+          fields: [
+            {
+              path: ["classification"],
+              label: { en: "Classification", pt: "Classificação" },
+              options: [
+                {
+                  value: "engineering",
+                  label: { en: "Engineering", pt: "Engenharia" },
+                },
+                {
+                  value: "pricing",
+                  label: { en: "Pricing", pt: "Preços" },
+                },
+              ],
+            },
+            {
+              path: ["customer"],
+              label: { en: "Customer", pt: "Cliente" },
+            },
+            {
+              path: ["customer", "name"],
+              label: { en: "Name", pt: "Nome" },
+            },
+            {
+              path: ["customer", "country"],
+              label: { en: "Country", pt: "País" },
+            },
+          ],
+        },
         visit: 1,
         executionSeq: 1,
         kind: "agent_task",
         state: "succeeded",
+        outcome: "completed",
         summary: "Quotation processed",
-        output: { classification: "pricing" },
+        output: {
+          classification: "pricing",
+          customer: { name: "ACME", country: "Portugal" },
+        },
         createdAt: item.createdAt,
       },
     ]);
@@ -297,7 +340,7 @@ describe("Platform v1 Dashboard", () => {
     expect(
       await screen.findByRole("heading", { name: "Quotation processed" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("pricing")).toBeInTheDocument();
+    expect(screen.getByText("Pricing")).toBeInTheDocument();
     const itemValueExplanation = screen
       .getAllByText("How this is estimated")
       .at(-1);
@@ -312,14 +355,17 @@ describe("Platform v1 Dashboard", () => {
       screen.getByText("Tempo de trabalho manual poupado"),
     ).toBeInTheDocument();
     expect(screen.getByText(/\/hora/)).toBeInTheDocument();
+    expect(screen.getByText("Classificação")).toBeInTheDocument();
+    expect(screen.getByText("Preços")).toBeInTheDocument();
+    expect(screen.getAllByText("Cliente").length).toBeGreaterThan(0);
+    expect(screen.getByText("Nome")).toBeInTheDocument();
+    expect(screen.getAllByText("ACME").length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText("Detalhe do resultado 1").length,
-    ).toBeGreaterThan(0);
+      screen.getByRole("heading", { name: "Pedido de cotação processado" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("classification")).not.toBeInTheDocument();
+    expect(screen.queryByText("pricing")).not.toBeInTheDocument();
     expect(screen.queryByText("Quotation processed")).not.toBeInTheDocument();
-    expect(screen.getAllByText("A processar cotação").length).toBeGreaterThan(
-      0,
-    );
     await user.click(screen.getByRole("button", { name: "EN" }));
     expect(
       screen.queryByText(/successful|correct|approved/i),

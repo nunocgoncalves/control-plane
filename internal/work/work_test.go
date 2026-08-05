@@ -15,11 +15,17 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/workflow"
 )
 
+func terminalResult(outcome, en, pt string) *workflow.CanonicalResultPresentation {
+	return &workflow.CanonicalResultPresentation{Outcomes: []workflow.CanonicalResultOutcomePresentation{{
+		Outcome: outcome, Summary: workflow.CanonicalLocalizedText{EN: en, PT: pt},
+	}}}
+}
+
 func TestGraphValidation_CycleAndCoverage(t *testing.T) {
 	spec := workflow.CanonicalSpec{Key: "dev/review", ScopeIdentityKey: "workflow:default/dev", DefaultModelRef: "model-one",
 		Graph: workflow.CanonicalGraph{EntryNode: "review", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
-				{Key: "review", Label: workflow.CanonicalLocalizedText{EN: "Review", PT: "Rever"}, Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}},
+				{Key: "review", Label: workflow.CanonicalLocalizedText{EN: "Review", PT: "Rever"}, Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}, ResultPresentation: terminalResult("approved", "Review completed", "Revisão concluída")},
 				{Key: "address", Label: workflow.CanonicalLocalizedText{EN: "Address feedback", PT: "Tratar feedback"}, Kind: workflow.NodeAgentTask, Prompt: "address", Outcomes: []string{"addressed"}},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "review", Outcome: "changes", To: "address"}, {From: "address", Outcome: "addressed", To: "review"}},
@@ -154,7 +160,7 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 		VALUES ($1,$3,$4,$5,'output'),($2,$3,$4,$5,'output')`, selectedArtifactID, unselectedArtifactID, item.ID, attemptID, first.ID)
 	require.NoError(t, err)
 	require.NoError(t, store.RecordCompletionReport(ctx, turn.ID, workstore.CompletionReport{
-		Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{"missing":"destination"}`),
+		Outcome: "needs_information", Summary: "Destination is missing", Output: json.RawMessage(`{}`),
 		ArtifactRefs: []workstore.ArtifactRef{{ArtifactID: selectedArtifactID, Role: "output"}},
 	}))
 	state, err := store.CompleteTurn(ctx, turn.ID, "completed", nil, nil)
@@ -233,6 +239,10 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	done, err := restarted.GetWorkItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, workstore.StateDone, done.State)
+	nodes, err := restarted.ListNodeExecutions(ctx, attemptID)
+	require.NoError(t, err)
+	require.Len(t, nodes, 3)
+	assert.JSONEq(t, `{"outcomes":[{"outcome":"completed","summary":{"en":"Quotation processed","pt":"Pedido de cotação processado"}}],"fields":[{"path":["classification"],"label":{"en":"Classification","pt":"Classificação"},"options":[{"value":"engineering","label":{"en":"Engineering","pt":"Engenharia"}},{"value":"pricing","label":{"en":"Pricing","pt":"Preços"}}]}]}`, string(nodes[2].ResultPresentation))
 	require.NotNil(t, done.EstimatedValue)
 	assert.Equal(t, "10.000000", *done.EstimatedValue)
 	listed, err = restarted.ListWorkItems(ctx, workstore.WorkItemFilter{From: &periodFrom, To: &periodTo})
@@ -331,17 +341,48 @@ func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (stri
 		('runner','spiffe://runner','product','graph.excel.write','1','sha256:excel-v1',1)`)
 	require.NoError(t, err)
 
-	spec := workflow.CanonicalSpec{Key: "walter/quotation", ScopeIdentityKey: "workflow:default/walter", PoolRef: "pool", DefaultModelRef: "model-one", ValueModelRef: "quotation-value",
+	result := terminalResult("completed", "Quotation processed", "Pedido de cotação processado")
+	result.Fields = []workflow.CanonicalResultFieldPresentation{{
+		Path: []string{"classification"}, Label: workflow.CanonicalLocalizedText{EN: "Classification", PT: "Classificação"},
+		Options: []workflow.CanonicalResultValuePresentation{
+			{Value: json.RawMessage(`"engineering"`), Label: workflow.CanonicalLocalizedText{EN: "Engineering", PT: "Engenharia"}},
+			{Value: json.RawMessage(`"pricing"`), Label: workflow.CanonicalLocalizedText{EN: "Pricing", PT: "Preços"}},
+		},
+	}}
+	spec := workflow.CanonicalSpec{
+		Key: "walter/quotation", ScopeIdentityKey: "workflow:default/walter", PoolRef: "pool",
+		DefaultModelRef: "model-one", ValueModelRef: "quotation-value",
 		Source:                workflow.CanonicalSource{Type: "graph_email"},
 		RequestedCapabilities: []workflow.CanonicalCapability{{Tool: "graph.read", MaxEffectClass: "read_only"}, {Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}},
-		Graph: workflow.CanonicalGraph{EntryNode: "process", MaxTransitions: 20,
+		Graph: workflow.CanonicalGraph{
+			EntryNode: "process", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
-				{Key: "process", Label: workflow.CanonicalLocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_information"}, OutputSchema: json.RawMessage(`{"type":"object"}`)},
-				{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Waiting for artifact", PT: "A aguardar artefacto"}, Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "artifact", Title: workflow.CanonicalLocalizedText{EN: "Artifact required", PT: "Artefacto necessário"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination file", PT: "Forneça o ficheiro de destino"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"],"properties":{"information":{"type":"string"}}}`), Presentation: workflow.CanonicalHumanGatePresentation{Outcomes: []workflow.CanonicalLocalizedText{{EN: "Provide information", PT: "Fornecer informação"}}, Fields: []workflow.CanonicalHumanGateFieldPresentation{{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Information", PT: "Informação"}}}}}},
+				{
+					Key: "process", Label: workflow.CanonicalLocalizedText{EN: "Processing quotation", PT: "A processar cotação"},
+					Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"},
+					Outcomes:           []string{"completed", "needs_information"},
+					OutputSchema:       json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"classification":{"type":"string","enum":["engineering","pricing"]}}}`),
+					ResultPresentation: result,
+				},
+				{
+					Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Waiting for artifact", PT: "A aguardar artefacto"},
+					Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"},
+					HumanGate: &workflow.CanonicalHumanGate{
+						Type: "artifact", Title: workflow.CanonicalLocalizedText{EN: "Artifact required", PT: "Artefacto necessário"},
+						Description:    workflow.CanonicalLocalizedText{EN: "Provide the destination file", PT: "Forneça o ficheiro de destino"},
+						ResponseSchema: json.RawMessage(`{"type":"object","required":["information"],"properties":{"information":{"type":"string"}}}`),
+						Presentation: workflow.CanonicalHumanGatePresentation{
+							Outcomes: []workflow.CanonicalLocalizedText{{EN: "Provide information", PT: "Fornecer informação"}},
+							Fields:   []workflow.CanonicalHumanGateFieldPresentation{{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Information", PT: "Informação"}}},
+						},
+					},
+				},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "process", Outcome: "needs_information", To: "information"}, {From: "information", Outcome: "information_provided", To: "process"}},
-			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}}},
-		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Marco", Locale: "en"}}
+			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}},
+		},
+		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Marco", Locale: "en"},
+	}
 	specJSON, _ := json.Marshal(spec)
 	presentation, _ := json.Marshal(spec.Presentation)
 	wfStore := workflow.NewStore(pool)

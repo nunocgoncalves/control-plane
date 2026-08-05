@@ -24,6 +24,7 @@ import type {
   DetailData,
   JSONSchema,
   Locale,
+  ResultFieldPresentation,
   TimelineEvent,
   WorkArtifact,
   WorkItem,
@@ -583,7 +584,18 @@ function DetailPanel({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [close]);
-  const outcomeNode = detail?.nodes.filter((node) => node.summary).at(-1);
+  const outcomeNode = detail?.nodes
+    .filter(
+      (node) =>
+        node.outcome &&
+        node.resultPresentation?.outcomes.some(
+          (outcome) => outcome.outcome === node.outcome,
+        ),
+    )
+    .at(-1);
+  const outcomePresentation = outcomeNode?.resultPresentation?.outcomes.find(
+    (outcome) => outcome.outcome === outcomeNode.outcome,
+  );
   const output = outcomeNode?.output;
   const resultArtifacts =
     detail?.artifacts.filter(
@@ -715,14 +727,12 @@ function DetailPanel({
               {detail.item.state === "done" && (
                 <Section title={c.outcome}>
                   <h3>
-                    {(locale === "en" && outcomeNode?.summary) ||
-                      localized(outcomeNode?.businessLabel, locale) ||
-                      (locale === "pt"
-                        ? "Trabalho concluído"
-                        : "Work completed")}
+                    {localized(outcomePresentation?.summary, locale) ||
+                      c.completedSummary}
                   </h3>
-                  <PlainValue
+                  <PresentedResult
                     value={output}
+                    fields={outcomeNode?.resultPresentation?.fields || []}
                     empty={c.noDetails}
                     locale={locale}
                   />
@@ -957,6 +967,175 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </section>
   );
+}
+function equalJSON(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right))
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => equalJSON(value, right[index]))
+    );
+  if (!left || !right || typeof left !== "object" || typeof right !== "object")
+    return false;
+  const leftObject = safeObject(left);
+  const rightObject = safeObject(right);
+  const leftKeys = Object.keys(leftObject).sort();
+  const rightKeys = Object.keys(rightObject).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        equalJSON(leftObject[key], rightObject[key]),
+    )
+  );
+}
+function PresentedResult({
+  value,
+  fields,
+  empty,
+  locale,
+}: {
+  value: unknown;
+  fields: ResultFieldPresentation[];
+  empty: string;
+  locale: Locale;
+}) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return <p className="muted">{empty}</p>;
+  const visible = directResultFields(fields, []).some((field) =>
+    Object.prototype.hasOwnProperty.call(value, field.path[0]),
+  );
+  if (!visible) return <p className="muted">{empty}</p>;
+  return (
+    <PresentedFields
+      value={safeObject(value)}
+      fields={fields}
+      prefix={[]}
+      locale={locale}
+    />
+  );
+}
+function pathStartsWith(path: string[], prefix: string[]): boolean {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+function directResultFields(
+  fields: ResultFieldPresentation[],
+  prefix: string[],
+): ResultFieldPresentation[] {
+  return fields.filter(
+    (field) =>
+      field.path.length === prefix.length + 1 &&
+      pathStartsWith(field.path, prefix),
+  );
+}
+function PresentedFields({
+  value,
+  fields,
+  prefix,
+  locale,
+  nested = false,
+}: {
+  value: Record<string, unknown>;
+  fields: ResultFieldPresentation[];
+  prefix: string[];
+  locale: Locale;
+  nested?: boolean;
+}) {
+  return (
+    <dl className={`result-grid ${nested ? "nested" : ""}`}>
+      {directResultFields(fields, prefix).flatMap((field) => {
+        const key = field.path.at(-1)!;
+        return Object.prototype.hasOwnProperty.call(value, key)
+          ? [
+              <div key={field.path.join("\u0000")}>
+                <dt>{localized(field.label, locale)}</dt>
+                <dd>
+                  <PresentedFieldValue
+                    value={value[key]}
+                    field={field}
+                    fields={fields}
+                    locale={locale}
+                  />
+                </dd>
+              </div>,
+            ]
+          : [];
+      })}
+    </dl>
+  );
+}
+function PresentedFieldValue({
+  value,
+  field,
+  fields,
+  locale,
+}: {
+  value: unknown;
+  field: ResultFieldPresentation;
+  fields: ResultFieldPresentation[];
+  locale: Locale;
+}) {
+  const option = field.options?.find((candidate) =>
+    equalJSON(candidate.value, value),
+  );
+  if (option) return localized(option.label, locale);
+  if (typeof value === "boolean") return value ? t(locale).yes : t(locale).no;
+  const hasChildren = directResultFields(fields, field.path).length > 0;
+  if (Array.isArray(value)) {
+    if (hasChildren)
+      return (
+        <div className="result-records">
+          {value.flatMap((entry, index) =>
+            entry && typeof entry === "object" && !Array.isArray(entry)
+              ? [
+                  <PresentedFields
+                    key={index}
+                    value={safeObject(entry)}
+                    fields={fields}
+                    prefix={field.path}
+                    locale={locale}
+                    nested
+                  />,
+                ]
+              : [],
+          )}
+        </div>
+      );
+    return (
+      <ul className="result-values">
+        {value.map((entry, index) => {
+          const entryOption = field.options?.find((candidate) =>
+            equalJSON(candidate.value, entry),
+          );
+          return (
+            <li key={index}>
+              {entryOption
+                ? localized(entryOption.label, locale)
+                : typeof entry === "boolean"
+                  ? entry
+                    ? t(locale).yes
+                    : t(locale).no
+                  : String(entry)}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+  if (value && typeof value === "object" && hasChildren)
+    return (
+      <PresentedFields
+        value={safeObject(value)}
+        fields={fields}
+        prefix={field.path}
+        locale={locale}
+        nested
+      />
+    );
+  return value === null || typeof value === "object" ? "—" : String(value);
 }
 function customerValues(value: unknown): unknown[] {
   if (Array.isArray(value)) return value.flatMap(customerValues);

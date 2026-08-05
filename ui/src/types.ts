@@ -89,11 +89,21 @@ export interface Attempt {
   createdAt: string;
   finishedAt?: string;
 }
+export interface ResultPresentation {
+  outcomes: Array<{ outcome: string; summary: LocalizedText }>;
+  fields?: ResultFieldPresentation[];
+}
+export interface ResultFieldPresentation {
+  path: string[];
+  label: LocalizedText;
+  options?: Array<{ value: unknown; label: LocalizedText }>;
+}
 export interface NodeExecution {
   id: string;
   attemptId: string;
   nodeKey: string;
   businessLabel: LocalizedText;
+  resultPresentation?: ResultPresentation;
   visit: number;
   executionSeq: number;
   kind: string;

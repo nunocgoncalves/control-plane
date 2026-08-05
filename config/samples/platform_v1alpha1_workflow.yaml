@@ -29,10 +29,6 @@ spec:
     - tool: graph.email.read
       maxEffectClass: read_only
       actions: [graph.email.read]
-    - tool: graph.excel.write
-      maxEffectClass: idempotent_write
-      actions: [graph.excel.write]
-
   graph:
     entryNode: process-quotation
     maxTransitions: 20
@@ -45,22 +41,35 @@ spec:
         prompt: |
           Inspect the quotation source and process it according to the assigned
           quotation skill. If required information is missing, report the
-          needs_information outcome. Otherwise perform the authorized workbook
-          action and report completed.
+          needs_information outcome. Otherwise produce the authorized structured
+          result and downloadable CSV artifact, then report completed.
         modelRef: qwen3.6-27b
         skills: [walter/quotation-processing]
-        capabilities: [graph.email.read, graph.excel.write]
+        capabilities: [graph.email.read]
         timeout: 10m
         outcomes: [completed, needs_information]
         outputSchema:
           type: object
-          required: [classification, summary]
+          additionalProperties: false
+          required: [classification]
           properties:
             classification:
               type: string
               enum: [engineering, pricing]
-            summary: {type: string}
-            workbookRecord: {type: object}
+        resultPresentation:
+          outcomes:
+            - outcome: completed
+              summary:
+                en: Quotation request processed
+                pt: Pedido de cotação processado
+          fields:
+            - path: [classification]
+              label: {en: Classification, pt: Classificação}
+              options:
+                - value: engineering
+                  label: {en: Engineering, pt: Engenharia}
+                - value: pricing
+                  label: {en: Pricing, pt: Preços}
 
       - key: request-information
         label:
@@ -142,6 +151,12 @@ spec:
         outcomes: [completed]
         outputSchema:
           type: object
+        resultPresentation:
+          outcomes:
+            - outcome: completed
+              summary:
+                en: Exported data processed
+                pt: Dados exportados processados
     terminalOutcomes:
       - node: process-export
         outcome: completed

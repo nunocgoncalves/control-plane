@@ -458,14 +458,14 @@ func scanTimeline(rows pgx.Rows) ([]TimelineEvent, error) {
 	return out, rows.Err()
 }
 
-const nodeExecutionSelect = `SELECT id, attempt_id, node_key, business_label, visit, execution_seq, kind, prompt,
+const nodeExecutionSelect = `SELECT id, attempt_id, node_key, business_label, result_presentation, visit, execution_seq, kind, prompt,
 	context, model_snapshot, skills_snapshot, capabilities_snapshot, workspace_tools, timeout_ms,
 	state, completion_outcome, completion_summary, output, artifact_refs, completion_reported_at,
 	started_at, finished_at, created_at FROM runtime.node_executions`
 
 func scanNodeExecution(row pgx.Row) (NodeExecution, error) {
 	var n NodeExecution
-	err := row.Scan(&n.ID, &n.AttemptID, &n.NodeKey, &n.BusinessLabel, &n.Visit, &n.ExecutionSeq, &n.Kind,
+	err := row.Scan(&n.ID, &n.AttemptID, &n.NodeKey, &n.BusinessLabel, &n.ResultPresentation, &n.Visit, &n.ExecutionSeq, &n.Kind,
 		&n.Prompt, &n.Context, &n.ModelSnapshot, &n.SkillsSnapshot, &n.CapabilitiesSnapshot,
 		&n.WorkspaceTools, &n.TimeoutMS, &n.State, &n.CompletionOutcome, &n.CompletionSummary,
 		&n.Output, &n.ArtifactRefs, &n.CompletionReportedAt, &n.StartedAt, &n.FinishedAt, &n.CreatedAt)
@@ -721,12 +721,16 @@ func insertNodeExecutionTx(ctx context.Context, tx pgx.Tx, attemptID string, nod
 	}
 	id := uuid.NewString()
 	labelJSON, _ := json.Marshal(node.Label)
+	resultPresentationJSON, _ := json.Marshal(node.ResultPresentation)
+	if node.ResultPresentation == nil {
+		resultPresentationJSON = []byte(`{}`)
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runtime.node_executions
-			(id, attempt_id, node_key, business_label, visit, execution_seq, kind, prompt, context,
+			(id, attempt_id, node_key, business_label, result_presentation, visit, execution_seq, kind, prompt, context,
 			 model_snapshot, skills_snapshot, capabilities_snapshot, workspace_tools, timeout_ms)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		id, attemptID, node.Key, labelJSON, visit, seq, node.Kind, nullable(node.Prompt), contextJSON,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		id, attemptID, node.Key, labelJSON, resultPresentationJSON, visit, seq, node.Kind, nullable(node.Prompt), contextJSON,
 		modelJSON, skillsJSON, capsJSON, node.WorkspaceTools, timeoutMS); err != nil {
 		return "", fmt.Errorf("insert node execution: %w", err)
 	}

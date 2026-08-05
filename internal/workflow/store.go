@@ -637,18 +637,44 @@ type CanonicalGraph struct {
 
 // CanonicalNode is an immutable agent task or human gate definition.
 type CanonicalNode struct {
-	Key            string                 `json:"key"`
-	Label          CanonicalLocalizedText `json:"label"`
-	Kind           string                 `json:"kind"`
-	Prompt         string                 `json:"prompt,omitempty"`
-	ModelRef       string                 `json:"modelRef,omitempty"`
-	Skills         []string               `json:"skills,omitempty"`
-	Capabilities   []string               `json:"capabilities,omitempty"`
-	WorkspaceTools bool                   `json:"workspaceTools,omitempty"`
-	Timeout        string                 `json:"timeout,omitempty"`
-	Outcomes       []string               `json:"outcomes"`
-	OutputSchema   json.RawMessage        `json:"outputSchema,omitempty"`
-	HumanGate      *CanonicalHumanGate    `json:"humanGate,omitempty"`
+	Key                string                       `json:"key"`
+	Label              CanonicalLocalizedText       `json:"label"`
+	Kind               string                       `json:"kind"`
+	Prompt             string                       `json:"prompt,omitempty"`
+	ModelRef           string                       `json:"modelRef,omitempty"`
+	Skills             []string                     `json:"skills,omitempty"`
+	Capabilities       []string                     `json:"capabilities,omitempty"`
+	WorkspaceTools     bool                         `json:"workspaceTools,omitempty"`
+	Timeout            string                       `json:"timeout,omitempty"`
+	Outcomes           []string                     `json:"outcomes"`
+	OutputSchema       json.RawMessage              `json:"outputSchema,omitempty"`
+	ResultPresentation *CanonicalResultPresentation `json:"resultPresentation,omitempty"`
+	HumanGate          *CanonicalHumanGate          `json:"humanGate,omitempty"`
+}
+
+// CanonicalResultPresentation is snapshotted onto each terminal node visit.
+type CanonicalResultPresentation struct {
+	Outcomes []CanonicalResultOutcomePresentation `json:"outcomes"`
+	Fields   []CanonicalResultFieldPresentation   `json:"fields,omitempty"`
+}
+
+// CanonicalResultOutcomePresentation is trusted completion copy for one outcome.
+type CanonicalResultOutcomePresentation struct {
+	Outcome string                 `json:"outcome"`
+	Summary CanonicalLocalizedText `json:"summary"`
+}
+
+// CanonicalResultFieldPresentation presents one output property path.
+type CanonicalResultFieldPresentation struct {
+	Path    []string                           `json:"path"`
+	Label   CanonicalLocalizedText             `json:"label"`
+	Options []CanonicalResultValuePresentation `json:"options,omitempty"`
+}
+
+// CanonicalResultValuePresentation localizes one exact JSON enum value.
+type CanonicalResultValuePresentation struct {
+	Value json.RawMessage        `json:"value"`
+	Label CanonicalLocalizedText `json:"label"`
 }
 
 // CanonicalHumanGate is the customer-actionable request contract.

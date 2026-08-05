@@ -193,6 +193,7 @@ type NodeExecution struct {
 	AttemptID            string          `json:"attemptId"`
 	NodeKey              string          `json:"nodeKey"`
 	BusinessLabel        json.RawMessage `json:"businessLabel"`
+	ResultPresentation   json.RawMessage `json:"resultPresentation,omitempty"`
 	Visit                int             `json:"visit"`
 	ExecutionSeq         int             `json:"executionSeq"`
 	Kind                 string          `json:"kind"`
