@@ -167,7 +167,10 @@ type HumanGateSpec struct {
 	// +kubebuilder:validation:Required
 	Description LocalizedText `json:"description"`
 
-	// responseSchema validates the response payload.
+	// responseSchema validates the response payload. V1 Dashboard forms accept
+	// an object with direct properties of type string, boolean, number, integer,
+	// object, or array (or enum); root and top-level property composition or
+	// references are rejected.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	ResponseSchema *apiextensionsv1.JSON `json:"responseSchema,omitempty"`

@@ -450,7 +450,12 @@ link, and localized evidence). Customer APIs serialize only the latter. Each
 workflow node requires English and Portuguese business labels. Human gates
 also require ordered localized labels for outcomes, response fields, and enum
 options; blockers snapshot that presentation so the Dashboard never exposes
-machine identifiers. Attempts and node visits snapshot workflow/persona/stage
+machine identifiers. Their v1 response schemas are constrained to a direct
+object/property form contract that the Dashboard can encode: top-level fields
+must use string, boolean, number, integer, object, array, or enum; root
+composition, top-level property references/composition, and indirectly declared
+required fields are rejected.
+Attempts and node visits snapshot workflow/persona/stage
 presentation for stable cards. Artifact blocker responses accept validated
 `artifactRefs`, link them to the
 human-gate visit, and propagate them as authorized inputs when work resumes.

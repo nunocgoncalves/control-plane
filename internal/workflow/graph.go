@@ -137,6 +137,9 @@ func ValidateGraph(spec CanonicalSpec) error {
 			if err := compileSchema(n.HumanGate.ResponseSchema); err != nil {
 				return fmt.Errorf("graph.nodes[%d].humanGate.responseSchema: %w", i, err)
 			}
+			if err := validateDashboardResponseSchema(n.HumanGate.ResponseSchema); err != nil {
+				return fmt.Errorf("graph.nodes[%d].humanGate.responseSchema: %w", i, err)
+			}
 			if err := validateHumanGatePresentation(n); err != nil {
 				return fmt.Errorf("graph.nodes[%d].humanGate.presentation: %w", i, err)
 			}
@@ -233,6 +236,95 @@ func walk(start string, adj map[string][]string) map[string]struct{} {
 		}
 	}
 	return seen
+}
+
+//nolint:gocyclo // The fail-closed Dashboard schema subset validates each allowed shape explicitly.
+func validateDashboardResponseSchema(raw json.RawMessage) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
+		return nil
+	}
+	var schema map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &schema); err != nil {
+		return fmt.Errorf("must be a JSON object: %w", err)
+	}
+	allowed := map[string]struct{}{
+		"$comment": {}, "$id": {}, "$schema": {}, "additionalProperties": {},
+		"default": {}, "deprecated": {}, "description": {}, "examples": {},
+		"maxProperties": {}, "minProperties": {}, "properties": {}, "readOnly": {},
+		"required": {}, "title": {}, "type": {}, "writeOnly": {},
+	}
+	for keyword := range schema {
+		if _, ok := allowed[keyword]; !ok {
+			return fmt.Errorf("keyword %q is not supported by the v1 Dashboard form", keyword)
+		}
+	}
+	var schemaType string
+	if err := json.Unmarshal(schema["type"], &schemaType); err != nil || schemaType != "object" {
+		return fmt.Errorf("must declare type object for the v1 Dashboard form")
+	}
+	properties, err := responseSchemaProperties(raw)
+	if err != nil {
+		return err
+	}
+	var required []string
+	if value := schema["required"]; len(value) > 0 {
+		if err := json.Unmarshal(value, &required); err != nil {
+			return fmt.Errorf("required must be an array of property names")
+		}
+	}
+	for _, key := range required {
+		if _, ok := properties[key]; !ok {
+			return fmt.Errorf("required property %q must be declared directly in properties", key)
+		}
+	}
+	if value := schema["minProperties"]; len(value) > 0 {
+		var minimum int
+		if err := json.Unmarshal(value, &minimum); err != nil || minimum > len(properties) {
+			return fmt.Errorf("minProperties cannot exceed the directly declared property count")
+		}
+	}
+	if value := schema["maxProperties"]; len(value) > 0 {
+		var maximum int
+		if err := json.Unmarshal(value, &maximum); err != nil || maximum < len(required) {
+			return fmt.Errorf("maxProperties cannot be smaller than the required property count")
+		}
+	}
+	for key, property := range properties {
+		if err := validateDashboardResponseProperty(key, property); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDashboardResponseProperty(key string, raw json.RawMessage) error {
+	var property map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &property); err != nil {
+		return fmt.Errorf("property %q must be a JSON object", key)
+	}
+	for _, keyword := range []string{"$ref", "allOf", "anyOf", "if", "not", "oneOf"} {
+		if _, exists := property[keyword]; exists {
+			return fmt.Errorf("property %q keyword %q is not supported by the v1 Dashboard form", key, keyword)
+		}
+	}
+	if enum := property["enum"]; len(enum) > 0 {
+		var values []json.RawMessage
+		if err := json.Unmarshal(enum, &values); err != nil || len(values) == 0 {
+			return fmt.Errorf("property %q enum must contain at least one value", key)
+		}
+		return nil
+	}
+	var propertyType string
+	if err := json.Unmarshal(property["type"], &propertyType); err != nil {
+		return fmt.Errorf("property %q must declare a direct type or enum", key)
+	}
+	switch propertyType {
+	case "string", "boolean", "number", "integer", "object", "array":
+		return nil
+	default:
+		return fmt.Errorf("property %q type %q is not supported by the v1 Dashboard form", key, propertyType)
+	}
 }
 
 func validateHumanGatePresentation(node CanonicalNode) error {

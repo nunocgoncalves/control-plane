@@ -169,7 +169,11 @@ spec:
                               - outcomes
                               type: object
                             responseSchema:
-                              description: responseSchema validates the response payload.
+                              description: |-
+                                responseSchema validates the response payload. V1 Dashboard forms accept
+                                an object with direct properties of type string, boolean, number, integer,
+                                object, or array (or enum); root and top-level property composition or
+                                references are rejected.
                               x-kubernetes-preserve-unknown-fields: true
                             title:
                               description: title and description are localized customer-facing

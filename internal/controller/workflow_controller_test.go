@@ -148,6 +148,26 @@ func TestWorkflowValidation(t *testing.T) {
 	}}
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, localizedResponse))
 
+	rootScalarResponse := validWalterWorkflow("w", ns, "walter-pool")
+	rootScalarResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"string"}`)
+	err = newReconciler(pool).validateSpec(ctx, rootScalarResponse)
+	assert.ErrorContains(t, err, "must declare type object")
+
+	composedResponse := validWalterWorkflow("w", ns, "walter-pool")
+	composedResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","allOf":[{"required":["amount"]}]}`)
+	err = newReconciler(pool).validateSpec(ctx, composedResponse)
+	assert.ErrorContains(t, err, `keyword "allOf" is not supported`)
+
+	indirectRequiredResponse := validWalterWorkflow("w", ns, "walter-pool")
+	indirectRequiredResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","required":["amount"]}`)
+	err = newReconciler(pool).validateSpec(ctx, indirectRequiredResponse)
+	assert.ErrorContains(t, err, `required property "amount" must be declared directly`)
+
+	indirectPropertyResponse := validWalterWorkflow("w", ns, "walter-pool")
+	indirectPropertyResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","properties":{"amount":{"$ref":"#/$defs/amount"}},"$defs":{"amount":{"type":"number"}}}`)
+	err = newReconciler(pool).validateSpec(ctx, indirectPropertyResponse)
+	assert.ErrorContains(t, err, `keyword "$defs" is not supported`)
+
 	// Unknown source type -> rejected.
 	badSource := validWalterWorkflow("w", ns, "walter-pool")
 	badSource.Spec.Source.Type = "slack"
