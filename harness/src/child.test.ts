@@ -192,6 +192,86 @@ describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () 
     expect(result).toBeDefined();
     expect(result!.type === "result" && result!.message).toContain("no valid assignment");
   });
+
+  it("HOR-434: clean-exits (code 0) after emitting its terminal result instead of lingering for the watchdog", async () => {
+    // Regression for HOR-434: after the child emits its terminal `result` frame
+    // it must exit 0 so the supervisor's child-process resolves the provisional
+    // result via a clean exit. Before the fix, the ref'd `process.stdin`
+    // abort-reader (registered in main) + the fd-5 read stream kept the event
+    // loop alive after the heartbeat interval was cleared, so
+    // the child hung on a completed turn until the supervisor's SIGKILL
+    // escalation reaped it as ABORTED (`child killed by SIGKILL`), discarding
+    // completed work.
+    //
+    // This drives the child through that exact path: stdin stays OPEN (so the
+    // abort-frame listener is held on a ref'd stream), the assignment carries an
+    // INVALID sessionId so `createSession` throws right after the gateway-tool
+    // handshake (after fd 5 is registered), and the child emits a terminal
+    // result. A pre-fix child would NOT exit (the watchdog signal would be
+    // required); the fixed child must exit 0 on its own.
+    const tmp = mkdtempSync(join(tmpdir(), "harness-child-"));
+    const proc = spawn(process.execPath, [CHILD_BIN], {
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        HARNESS_SESSION_DIR: join(tmp, "session"),
+        HARNESS_WORKING_DIR: tmp,
+        HARNESS_PI_DIRS: "",
+        HARNESS_MODEL_MAX_ATTEMPTS: "0",
+        HARNESS_LIVENESS_INTERVAL_MS: "60000",
+        HOME: tmp,
+      },
+    });
+    proc.stderr.on("data", () => {});
+    proc.stdout.on("data", () => {});
+    const exit = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+      proc.once("exit", (c, s) => resolve([c, s]));
+    });
+
+    // Write a real assignment with an invalid sessionId (fails SESSION_ID_RE),
+    // but keep stdin open so the abort-reader/listener is held on a ref'd stream.
+    proc.stdin.write(encodeFrame({ type: "assignment", assignment: assignmentJson({ sessionId: "bad session!" }) }));
+
+    // Wait for the heartbeat => the assignment parsed and fd 5 is now registered.
+    await readFrames(proc, (fs) => fs.some((f) => f.type === "heartbeat"), 4000);
+    // Deliver the one-shot gateway-tool handshake on fd 5 (empty list).
+    proc.stdio[5]!.write(encodeFrame({ type: "gatewayTools", descriptors: [] }));
+
+    // The child should now reach createSession (throws: invalid session id),
+    // emit its terminal FAILED result, and exit 0 on its own.
+    const frames = await readFrames(proc, (fs) => fs.some((f) => f.type === "result"), 4000);
+    const result = frames.find((f) => f.type === "result");
+    expect(result).toBeDefined();
+    // createSession threw (invalid session id) -> the setup-failure catch emits
+    // `emitResult(Outcome.FAILED)` with no message (child.ts). Assert the
+    // FAILED outcome and that it is NOT the earlier "no valid assignment" path.
+    expect(result!.type === "result" && result!.outcome).toBe(3 /* FAILED */);
+    expect(result!.type === "result" && (result!.message ?? "")).not.toContain("no valid assignment");
+
+    // The child must exit on its own (code 0, no signal), not hang until the
+    // watchdog sends a signal. A 20s grace covers the read window; a pre-fix
+    // child would not exit and this would time out with signal/code null.
+    const [code, signal] = await Promise.race([
+      exit,
+      new Promise<[number | null, NodeJS.Signals | null]>((resolve) =>
+        setTimeout(() => resolve([null, null]), 20_000),
+      ),
+    ]);
+    // Mirror the real supervisor (child-process.ts `releaseChildChannels`):
+    // close our fd-5 write end so the child's pending fd-5 read completes (EOF)
+    // and it can clean-exit via the EOF path instead of relying on the bounded
+    // fallback grace. `.destroy()` (not `.end()`) is used deliberately — it
+    // closes the pipe immediately, delivering EOF even if the pipe is
+    // backpressured, matching the production supervisor. The child must exit 0
+    // on its own, then — no watchdog signal.
+    proc.stdio[5]!.on("error", () => {});
+    proc.stdio[5]!.destroy();
+    proc.stdin.on("error", () => {});
+    proc.stdin.destroy();
+    expect(signal).toBeNull();
+    expect(code).toBe(0);
+    rmSync(tmp, { recursive: true, force: true });
+  });
 });
 
 describe("captureShutdownErrors", () => {

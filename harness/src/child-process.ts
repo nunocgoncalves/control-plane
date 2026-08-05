@@ -166,6 +166,38 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
       (rpcRespStream as Writable).on("drain", () => { rpcBacklog = 0; });
       (rpcRespStream as Writable).on("error", () => { /* child gone — exit handler classifies */ });
     }
+
+    // HOR-434: once the child has sent its terminal `result` frame, release the
+    // supervisor→child channels (fd 5 response pipe + fd 0 control) by closing
+    // our write ends. This delivers EOF on the child's fd-5 read — the only way
+    // to reliably complete that pending read on every platform (a child-side
+    // close of fd 5 only cancels the in-flight libuv read on macOS, not Linux).
+    // The child then performs the documented clean exit (HOR-381: COMPLETED
+    // requires a clean child exit), so the provisional result still resolves
+    // exactly as the contract specifies — this only makes that exit achievable
+    // instead of the liveness watchdog SIGKILLing an already-completed turn as
+    // ABORTED. Safe: the child reports its result last, so no further
+    // RPC/control writes are expected; `.destroy()` gives an immediate EOF even
+    // if the pipe is backpressured, and post-result buffered frames are
+    // irrelevant to the child.
+    const releaseChildChannels = (): void => {
+      if (rpcRespStream) {
+        (rpcRespStream as Writable).on("error", () => { /* already released */ });
+        try {
+          (rpcRespStream as Writable).destroy();
+        } catch {
+          /* already closed */
+        }
+      }
+      if (control) {
+        control.on("error", () => { /* already released */ });
+        try {
+          control.destroy();
+        } catch {
+          /* already closed */
+        }
+      }
+    };
     const rpcOnDrain = (listener: () => void): (() => void) => {
       const s = rpcRespStream as Writable | null;
       if (!s) return () => {};
@@ -220,6 +252,9 @@ export function createChildFactory(cfg: HarnessConfig, script: string, launch: L
         }
         if (frame.type === "result") {
           provisional = { outcome: frame.outcome as Outcome, message: frame.message };
+          // HOR-434: the child is done — release its IPC channels so its pending
+          // fd-5 read completes (EOF) and it can clean-exit (see above).
+          releaseChildChannels();
           return;
         }
       });
