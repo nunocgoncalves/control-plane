@@ -90,6 +90,7 @@ const copy = {
     unconfiguredBody:
       "Customer assumptions have not yet been configured, so no financial estimate is shown.",
     assumptions: "Assumptions",
+    resultDetail: "Result detail",
     customValueFormula: "Customer-defined value model",
     perHour: "/hour",
     invalidNumber: "Enter a valid number.",
@@ -187,6 +188,7 @@ const copy = {
     unconfiguredBody:
       "Os pressupostos do cliente ainda não foram configurados, por isso não é apresentada uma estimativa financeira.",
     assumptions: "Pressupostos",
+    resultDetail: "Detalhe do resultado",
     customValueFormula: "Modelo de valor definido pelo cliente",
     perHour: "/hora",
     invalidNumber: "Introduza um número válido.",

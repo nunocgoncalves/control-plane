@@ -123,6 +123,16 @@ function fetchMock(
         workItemId: "item-1",
         attemptId: "attempt-1",
         nodeExecutionId: "node-1",
+        code: "node_completed",
+        params: { summary: "Quotation processed" },
+        createdAt: item.finishedAt,
+      },
+      {
+        cursor: 2,
+        id: "event-2",
+        workItemId: "item-1",
+        attemptId: "attempt-1",
+        nodeExecutionId: "node-1",
         code: "work_completed",
         params: {},
         createdAt: item.finishedAt,
@@ -259,7 +269,9 @@ describe("Platform v1 Dashboard", () => {
       screen.getByText("Quotation request — Could not parse"),
     ).toBeInTheDocument();
     await user.click(screen.getByText("Quotation request — ACME"));
-    expect(await screen.findByText("Processing quotation")).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText("Processing quotation")).length,
+    ).toBeGreaterThan(0);
     expect(
       screen.queryByText(
         /model messages|worker details|tool calls?|system prompts?/i,
@@ -282,7 +294,9 @@ describe("Platform v1 Dashboard", () => {
   it("inspects a completed outcome and saves feedback without starting a revision", async () => {
     const user = await connect();
     await user.click(screen.getByText("Quotation request — ACME"));
-    expect(await screen.findByText("Quotation processed")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Quotation processed" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("pricing")).toBeInTheDocument();
     const itemValueExplanation = screen
       .getAllByText("How this is estimated")
@@ -298,6 +312,14 @@ describe("Platform v1 Dashboard", () => {
       screen.getByText("Tempo de trabalho manual poupado"),
     ).toBeInTheDocument();
     expect(screen.getByText(/\/hora/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Detalhe do resultado 1").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("classification")).not.toBeInTheDocument();
+    expect(screen.queryByText("Quotation processed")).not.toBeInTheDocument();
+    expect(screen.getAllByText("A processar cotação").length).toBeGreaterThan(
+      0,
+    );
     await user.click(screen.getByRole("button", { name: "EN" }));
     expect(
       screen.queryByText(/successful|correct|approved/i),
@@ -344,7 +366,7 @@ describe("Platform v1 Dashboard", () => {
     );
     const user = await connect();
     await user.click(screen.getByText("Quotation request — ACME"));
-    await screen.findByText("Quotation processed");
+    await screen.findByRole("heading", { name: "Quotation processed" });
     await user.click(
       screen.getByRole("button", { name: /Result needs improvement/ }),
     );

@@ -696,6 +696,7 @@ function DetailPanel({
                   <PlainValue
                     value={detail.item.failureSummary}
                     empty={c.noDetails}
+                    locale={locale}
                   />
                 </Section>
               )}
@@ -714,12 +715,17 @@ function DetailPanel({
               {detail.item.state === "done" && (
                 <Section title={c.outcome}>
                   <h3>
-                    {outcomeNode?.summary ||
+                    {(locale === "en" && outcomeNode?.summary) ||
+                      localized(outcomeNode?.businessLabel, locale) ||
                       (locale === "pt"
                         ? "Trabalho concluído"
                         : "Work completed")}
                   </h3>
-                  <PlainValue value={output} empty={c.noDetails} />
+                  <PlainValue
+                    value={output}
+                    empty={c.noDetails}
+                    locale={locale}
+                  />
                 </Section>
               )}
               {resultArtifacts.length > 0 && (
@@ -952,26 +958,41 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     </section>
   );
 }
-function PlainValue({ value, empty }: { value: unknown; empty: string }) {
-  if (
-    value === null ||
-    value === undefined ||
-    (typeof value === "object" && !Object.keys(safeObject(value)).length)
-  )
-    return <p className="muted">{empty}</p>;
-  if (typeof value !== "object") return <p>{String(value)}</p>;
+function customerValues(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value.flatMap(customerValues);
+  if (value && typeof value === "object")
+    return Object.entries(safeObject(value))
+      .filter(([key]) => !/prompt|model|token|tool|worker|runtime/i.test(key))
+      .flatMap(([, item]) => customerValues(item));
+  return value === undefined ? [] : [value];
+}
+function PlainValue({
+  value,
+  empty,
+  locale,
+}: {
+  value: unknown;
+  empty: string;
+  locale: Locale;
+}) {
+  if (value === null || typeof value !== "object")
+    return value === undefined ? (
+      <p className="muted">{empty}</p>
+    ) : (
+      <p>{String(value)}</p>
+    );
+  const values = customerValues(value);
+  if (!values.length) return <p className="muted">{empty}</p>;
   return (
     <dl className="result-grid">
-      {Object.entries(safeObject(value))
-        .filter(([key]) => !/prompt|model|token|tool|worker|runtime/i.test(key))
-        .map(([key, item]) => (
-          <div key={key}>
-            <dt>{key.replaceAll("_", " ")}</dt>
-            <dd>
-              {typeof item === "object" ? JSON.stringify(item) : String(item)}
-            </dd>
-          </div>
-        ))}
+      {values.map((item, index) => (
+        <div key={index}>
+          <dt>
+            {t(locale).resultDetail} {index + 1}
+          </dt>
+          <dd>{String(item)}</dd>
+        </div>
+      ))}
     </dl>
   );
 }
@@ -1008,7 +1029,11 @@ function ValueModelExplanation({
       {model.assumptions !== undefined && model.assumptions !== null && (
         <div className="value-assumptions">
           <strong>{c.assumptions}</strong>
-          <PlainValue value={model.assumptions} empty={c.noDetails} />
+          <PlainValue
+            value={model.assumptions}
+            empty={c.noDetails}
+            locale={locale}
+          />
         </div>
       )}
     </details>
@@ -1057,7 +1082,7 @@ function eventLabel(event: TimelineEvent, locale: Locale): string {
     node_started: ["Work started", "Trabalho iniciado"],
     node_completed: [
       String(event.params.summary || "Business step completed"),
-      String(event.params.summary || "Etapa de negócio concluída"),
+      "Etapa de negócio concluída",
     ],
     work_blocked: ["Waiting for a person", "A aguardar uma pessoa"],
     blocker_resolved: ["Response received", "Resposta recebida"],
