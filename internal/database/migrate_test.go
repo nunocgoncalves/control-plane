@@ -250,6 +250,70 @@ func TestIdentityConstraints(t *testing.T) {
 	assert.False(t, updatedIsNull, "updated_at should be set by trigger")
 }
 
+// TestGatewayWorkloadGrant verifies the `gateway` read-only DB role can access
+// the schemas/tables the inference-gateway workload mTLS auth path reads
+// (HOR-433). HOR-334 granted the role USAGE only on identity/permissions/
+// catalog; HOR-392 later created the toolgateway schema and the runtime schema
+// existed from 000009, but neither was granted to `gateway`. On OPO1 that
+// surfaced as `permission denied for schema toolgateway` (SQLSTATE 42501) ->
+// infrastructure 503 from resolve-pool, aborting every workload model call.
+//
+// Requires Docker (pgvector container).
+func TestGatewayWorkloadGrant(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+
+	pgC, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
+		postgres.WithDatabase("controlplane"),
+		postgres.WithUsername("cp"),
+		postgres.WithPassword("cp"),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pgC.Terminate(ctx) })
+
+	connStr, err := pgC.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool := waitForPool(t, ctx, connStr)
+	t.Cleanup(pool.Close)
+
+	// Production creates the `gateway` role via the Postgres subchart bootstrap
+	// init script before the control-plane migrate runs. Create it here so the
+	// conditional grant applies during MigrateUp.
+	_, err = pool.Exec(ctx, `CREATE ROLE gateway NOLOGIN`)
+	require.NoError(t, err, "create gateway role")
+
+	require.NoError(t, database.MigrateUp(connStr))
+
+	// USAGE on the workload schemas.
+	for _, schema := range []string{"toolgateway", "runtime"} {
+		var ok bool
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT has_schema_privilege('gateway', $1, 'USAGE')`, schema).Scan(&ok))
+		assert.True(t, ok, "gateway role should have USAGE on schema %s", schema)
+	}
+
+	// SELECT on the exact tables internal/workload/store.go reads.
+	tables := []struct {
+		schema, table string
+	}{
+		{"toolgateway", "pools"},
+		{"runtime", "turns"},
+		{"runtime", "run_pool_assignments"},
+		{"runtime", "workflow_runs"},
+		{"runtime", "turn_assignments"},
+	}
+	for _, tt := range tables {
+		var ok bool
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT has_table_privilege('gateway', $1||'.'||$2, 'SELECT')`, tt.schema, tt.table).Scan(&ok))
+		assert.True(t, ok, "gateway role should have SELECT on %s.%s", tt.schema, tt.table)
+	}
+}
+
 // waitForPool retries connecting until the database accepts connections, then
 // returns a ready pool. Fails the test if it never becomes ready.
 func waitForPool(t *testing.T, ctx context.Context, connStr string) *pgxpool.Pool {
