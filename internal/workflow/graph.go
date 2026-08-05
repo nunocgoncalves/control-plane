@@ -272,7 +272,13 @@ func validateResultPresentations(nodes map[string]CanonicalNode, terminals []Can
 			return err
 		}
 		schema := node.OutputSchema
-		if node.Kind == NodeHumanGate {
+		switch node.Kind {
+		case NodeAgentTask:
+			trimmed := bytes.TrimSpace(schema)
+			if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
+				return fmt.Errorf("graph node %q terminal agent_task outputSchema must declare a closed direct object schema", key)
+			}
+		case NodeHumanGate:
 			schema = node.HumanGate.ResponseSchema
 		}
 		if err := validateResultFields(schema, node.ResultPresentation.Fields, fmt.Sprintf("graph node %q resultPresentation.fields", key)); err != nil {

@@ -149,8 +149,11 @@ spec:
         prompt: Process the supplied exported artifact using the assigned discovery mapping.
         skills: [xbs/discovery-mapping]
         outcomes: [completed]
+        # Artifact-only discovery placeholder; replace with discovered closed
+        # properties and matching resultPresentation fields when available.
         outputSchema:
           type: object
+          additionalProperties: false
         resultPresentation:
           outcomes:
             - outcome: completed

@@ -175,6 +175,8 @@ func TestWorkflowValidation(t *testing.T) {
 		schema string
 		error  string
 	}{
+		{name: "missing schema", schema: "", error: "terminal agent_task outputSchema must declare a closed direct object schema"},
+		{name: "empty schema", schema: `{}`, error: "terminal agent_task outputSchema must declare a closed direct object schema"},
 		{name: "root scalar", schema: `{"type":"string"}`, error: "requires a direct object schema"},
 		{name: "root array", schema: `{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"string"},"amount":{"type":"number"}}}}`, error: "requires a direct object schema"},
 		{name: "root enum", schema: `{"enum":["ready","failed"]}`, error: "requires a direct object schema"},
@@ -406,7 +408,7 @@ func TestWorkflowValidation(t *testing.T) {
 			},
 			Graph: v1alpha1.WorkflowGraph{EntryNode: "map", MaxTransitions: 10,
 				Nodes: []v1alpha1.WorkflowNode{{Key: "map", Label: v1alpha1.LocalizedText{EN: "Building shipment map", PT: "A criar mapa de envios"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"},
-					ResultPresentation: terminalResult("completed", "Export processed", "Exportação processada")}},
+					OutputSchema: jsonConfig(`{"type":"object","additionalProperties":false}`), ResultPresentation: terminalResult("completed", "Export processed", "Exportação processada")}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "map", Outcome: "completed"}}},
 			Presentation: v1alpha1.PresentationSpec{WorkflowTitle: "Shipment Map", PersonaName: "XBS Ops", Locale: "pt"},
 		},

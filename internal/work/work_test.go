@@ -25,7 +25,7 @@ func TestGraphValidation_CycleAndCoverage(t *testing.T) {
 	spec := workflow.CanonicalSpec{Key: "dev/review", ScopeIdentityKey: "workflow:default/dev", DefaultModelRef: "model-one",
 		Graph: workflow.CanonicalGraph{EntryNode: "review", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
-				{Key: "review", Label: workflow.CanonicalLocalizedText{EN: "Review", PT: "Rever"}, Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}, ResultPresentation: terminalResult("approved", "Review completed", "Revisão concluída")},
+				{Key: "review", Label: workflow.CanonicalLocalizedText{EN: "Review", PT: "Rever"}, Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}, OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), ResultPresentation: terminalResult("approved", "Review completed", "Revisão concluída")},
 				{Key: "address", Label: workflow.CanonicalLocalizedText{EN: "Address feedback", PT: "Tratar feedback"}, Kind: workflow.NodeAgentTask, Prompt: "address", Outcomes: []string{"addressed"}},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "review", Outcome: "changes", To: "address"}, {From: "address", Outcome: "addressed", To: "review"}},

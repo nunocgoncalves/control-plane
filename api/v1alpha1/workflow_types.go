@@ -143,7 +143,9 @@ type WorkflowNode struct {
 	Outcomes []string `json:"outcomes"`
 
 	// outputSchema validates complete_step.output for agent_task nodes. It is a
-	// JSON Schema document and defaults to an unconstrained object when absent.
+	// JSON Schema document and defaults to an unconstrained object when absent
+	// on non-terminal nodes. Terminal agent tasks must declare a closed direct
+	// object schema aligned with resultPresentation.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	OutputSchema *apiextensionsv1.JSON `json:"outputSchema,omitempty"`
