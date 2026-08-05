@@ -50,7 +50,8 @@ const (
 )
 
 // AgentPoolReconciler maintains a bounded set of isolated warm-worker pods +
-// the shared RWX sandbox PVC + a deny-by-default NetworkPolicy for each
+// the shared sandbox PVC (RWX or RWO per the pool's access mode) + a
+// deny-by-default NetworkPolicy for each
 // AgentPool CR (HOR-245). Per-pod SPIFFE certs are issued by the cert-manager
 // CSI driver (annotated on each pod); the operator never holds the CA key.
 type AgentPoolReconciler struct {
@@ -466,7 +467,8 @@ func (r *AgentPoolReconciler) secretExists(ctx context.Context, ns, name string)
 	return nil
 }
 
-// ensurePVC creates/updates the shared RWX sandbox PVC.
+// ensurePVC creates/updates the shared sandbox PVC (RWX or RWO per the
+// pool's spec.sandbox.accessMode).
 func (r *AgentPoolReconciler) ensurePVC(ctx context.Context, pool *v1alpha1.AgentPool) error {
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: sandboxPVCName(pool), Namespace: pool.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pvc, func() error {
@@ -636,7 +638,8 @@ func (r *AgentPoolReconciler) countReadyWorkers(ctx context.Context, pool *v1alp
 }
 
 // buildWorkerPodSpec renders the warm-worker pod: supervisor container with
-// the cert-manager CSI TLS volume, the shared RWX sandbox PVC, the WAL
+// the cert-manager CSI TLS volume, the shared sandbox PVC (RWX or RWO per
+// the pool spec), the WAL
 // emptyDir, the per-pod config ConfigMap, and read-only piDirs (placeholder
 // mounts; overlay content is HOR-393). The supervisor runs as root (UID 0) to
 // read the CSI driver's root-owned 0600 key and launch the per-turn child as
