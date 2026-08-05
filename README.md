@@ -375,9 +375,10 @@ value-model reference, and a single-active-node directed graph.
 - **Validation runs before execution**: unknown source/model/node kind,
   capability/skill narrowing, malformed JSON Schema, missing/duplicate outcome
   route, unreachable node, non-terminating component, or binding fails with an
-  inspectable `validationStatus: invalid`. v1 source types are `graph_email` (Walter) and
-  `operator_artifact` (XBS) — no customer-specific schema — and a recognized
-  type becomes Ready only when its adapter is installed in the deployment.
+  inspectable `validationStatus: invalid`. v1 source types are `graph_email` (Walter),
+  `operator_artifact` (XBS), and `manual_api` (API-backed operator source, ARCH-026) —
+  no customer-specific schema — and a recognized type becomes Ready only when its
+  adapter is installed in the deployment.
 - `spec.graph` declares one entry node, `agent_task`/`human_gate` nodes,
   outcome-routed edges, explicit terminal outcomes, and a bounded transition
   count. Cycles are supported; parallel branches/joins are not. Every visit is
@@ -455,7 +456,14 @@ Work APIs require a `work`-scope bearer key and operation capability
 
 Work-item creation separates private `source` trigger context from required
 `sourcePresentation` (`kind`, business title/subtitle, optional HTTPS original
-link, and localized evidence). Customer APIs serialize only the latter. Each
+link, and localized evidence). Customer APIs serialize only the latter. The
+authenticated `POST /v1/work-items` endpoint is also the installed adapter for
+the `manual_api` Workflow source (ARCH-026): it is used for controlled operator
+starts of a Ready `manual_api` Workflow, enforces `work:start` and a mandatory
+`Idempotency-Key`, bounds request/source payloads, and does **not** prove Graph
+email ingestion (that remains `graph_email`, unavailable until its HOR-356
+adapter is installed). It has no uploaded form, customer trigger UI, or public
+unauthenticated route. Each
 workflow node requires English and Portuguese business labels. Human gates
 also require ordered localized labels for outcomes, response fields, and enum
 options; blockers snapshot that presentation so the Dashboard never exposes

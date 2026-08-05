@@ -393,3 +393,75 @@ func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (stri
 	require.NoError(t, err)
 	return actorID, scopeID, poolID
 }
+
+// TestWorkStartManualSourceBounded verifies a Ready manual_api Workflow can be
+// started by an authorized work-scope caller, that oversized source data is
+// rejected before any durable work is created (HOR-425 bounded source), and that
+// the private bounded source context reaches only the agent while customer APIs
+// expose only sourcePresentation.
+func TestWorkStartManualSourceBounded(t *testing.T) {
+	pool := testutil.NewPostgresPool(t)
+	ctx := context.Background()
+	store := workstore.NewStore(pool)
+	actorID, scopeID, poolID := seedFoundation(t, ctx, pool)
+
+	result := terminalResult("completed", "Quotation processed", "Pedido de cotação processado")
+	result.Fields = []workflow.CanonicalResultFieldPresentation{{
+		Path: []string{"classification"}, Label: workflow.CanonicalLocalizedText{EN: "Classification", PT: "Classificação"},
+		Options: []workflow.CanonicalResultValuePresentation{
+			{Value: json.RawMessage(`"engineering"`), Label: workflow.CanonicalLocalizedText{EN: "Engineering", PT: "Engenharia"}},
+			{Value: json.RawMessage(`"pricing"`), Label: workflow.CanonicalLocalizedText{EN: "Pricing", PT: "Preços"}},
+		},
+	}}
+	spec := workflow.CanonicalSpec{
+		Key: "walter/manual", ScopeIdentityKey: "workflow:default/walter", PoolRef: "pool",
+		DefaultModelRef: "model-one", Source: workflow.CanonicalSource{Type: "manual_api"},
+		Graph: workflow.CanonicalGraph{EntryNode: "process", MaxTransitions: 20,
+			Nodes: []workflow.CanonicalNode{{Key: "process", Label: workflow.CanonicalLocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Outcomes: []string{"completed"},
+				OutputSchema:       json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"classification":{"type":"string","enum":["engineering","pricing"]}}}`),
+				ResultPresentation: result}},
+			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}}},
+		Presentation: workflow.CanonicalPresentation{WorkflowTitle: "Quotation", PersonaName: "Marco", Locale: "en"},
+	}
+	specJSON, _ := json.Marshal(spec)
+	presentation, _ := json.Marshal(spec.Presentation)
+	wfStore := workflow.NewStore(pool)
+	def, err := wfStore.RegisterDefinition(ctx, workflow.Definition{Key: "walter/manual", Version: "1", Digest: "sha256:manual-v1", SpecJSON: specJSON, ValidationStatus: workflow.ValidationValid, ScopeIdentityID: scopeID, SourceType: "manual_api", PoolKey: "default/pool", Presentation: presentation})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.workflow_pool_bindings(workflow_definition_key,pool_id,permitted_tools)VALUES($1,$2,'[]')`, workflow.DefinitionKey(def.Key, def.Version), poolID)
+	require.NoError(t, err)
+
+	sourcePresentation := workstore.SourcePresentation{Kind: "email", Title: "Quote request", Evidence: []workstore.PresentationField{{Label: workstore.LocalizedText{EN: "Customer", PT: "Cliente"}, Value: "ACME"}}}
+	start := func(source []byte, key string) (workstore.WorkItem, bool, error) {
+		return store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/manual", IdempotencyKey: key, Title: "Quotation — ACME", Source: source, SourcePresentation: sourcePresentation})
+	}
+
+	// Oversized (but valid) source data is rejected before any durable work.
+	oversized, _ := json.Marshal(map[string]any{"data": make([]byte, workstore.MaxSourceBytes)})
+	_, created, err := start(oversized, "manual-1")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "source payload exceeds")
+	assert.False(t, created)
+
+	// A bounded prepared fixture starts and creates exactly one work item.
+	source := json.RawMessage(`{"messageId":"fixture-1","from":"requests@walter.example","subject":"Quotation 4821"}`)
+	item, created, err := start(source, "manual-1")
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, "Quote request", item.SourcePresentation.Title)
+
+	// The private bounded source context reaches only the agent; customer APIs
+	// expose only sourcePresentation.
+	customerJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	assert.NotContains(t, string(customerJSON), "fixture-1")
+	assert.NotContains(t, string(customerJSON), "requests@walter.example")
+
+	// Replaying the same identity/workflow/idempotency key + payload returns the
+	// existing item; a different payload conflicts.
+	_, created, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/manual", IdempotencyKey: "manual-1", Title: "Quotation — ACME", Source: source, SourcePresentation: sourcePresentation})
+	require.NoError(t, err)
+	assert.False(t, created)
+	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/manual", IdempotencyKey: "manual-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"fixture-2"}`), SourcePresentation: sourcePresentation})
+	assert.ErrorIs(t, err, workstore.ErrConflict)
+}

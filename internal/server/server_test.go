@@ -281,6 +281,40 @@ func TestAPI(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, rr.Code, "feedback detail route is item scoped")
 	})
 
+	t.Run("work start enforces authorization, idempotency key, and bounded body", func(t *testing.T) {
+		post := func(auth, body, idem string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodPost, "/v1/work-items", strings.NewReader(body))
+			if auth != "" {
+				req.Header.Set("Authorization", auth)
+			}
+			if idem != "" {
+				req.Header.Set("Idempotency-Key", idem)
+			}
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+			return rr
+		}
+		valid := `{"workflowKey":"walter/manual","title":"Quotation","source":{"m":1},"sourcePresentation":{"kind":"email","title":"Quote","evidence":[]}}`
+
+		// Missing idempotency key -> 400 before any work. // admin/sa scope denies starting work.
+		rr := post(authHeader(aliceWorkKey), valid, "")
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Contains(t, rr.Body.String(), "Idempotency-Key is required")
+
+		// A work-unscoped caller cannot start work.
+		rr = post(authHeader(adminKey), valid, "idem-1")
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+
+		// Malformed input -> 400 without creating work.
+		rr = post(authHeader(aliceWorkKey), `{"workflowKey":`, "idem-1")
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+		// Oversized request body -> 413 before any parse or durable work.
+		big := `{"data":"` + strings.Repeat("a", 4<<20) + `"}`
+		rr = post(authHeader(aliceWorkKey), big, "idem-1")
+		assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
+	})
+
 	t.Run("admin creates immutable transparent value model", func(t *testing.T) {
 		body := `{"ref":"quotation","version":"1","currency":"EUR","baselineSeconds":1200,"loadedHourlyCost":"30.00"}`
 		rr := do(router, http.MethodPost, "/v1/value-models", authHeader(adminKey), strings.NewReader(body))

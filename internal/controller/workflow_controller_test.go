@@ -297,6 +297,36 @@ func TestWorkflowValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no installed source adapter")
 
+	// manual_api is a valid installed API-backed source with no trigger
+	// bindings (ARCH-026). A Ready manual_api Workflow can be started by an
+	// authorized work-scope caller.
+	manual := validWalterWorkflow("w", ns, "walter-pool")
+	manual.Spec.Source = v1alpha1.WorkflowSource{Type: v1alpha1.SourceManualAPI}
+	manualReconciler := newReconciler(pool)
+	manualReconciler.SourceAdapters = StaticSourceAdapterRegistry{v1alpha1.SourceManualAPI: {}}
+	assert.NoError(t, manualReconciler.validateSpec(ctx, manual), "installed manual_api workflow should be representable")
+
+	// manual_api without an installed adapter is rejected before Ready.
+	uninstalledManual := newReconciler(pool)
+	err = uninstalledManual.validateSpec(ctx, manual)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no installed source adapter")
+
+	// A manual-source Workflow must not declare ingress trigger bindings.
+	boundedManual := manual.DeepCopy()
+	boundedManual.Spec.Source.TriggerBindings = []v1alpha1.TriggerBinding{{Name: "inbox", GraphEmail: &v1alpha1.GraphEmailTriggerBinding{MailboxAddress: "inbox@walter.example"}}}
+	err = manualReconciler.validateSpec(ctx, boundedManual)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not declare triggerBindings")
+
+	// A workflow declaring graph_email remains Not Ready while only manual_api
+	// is installed (graph_email's adapter lands with HOR-356).
+	onlyManual := newReconciler(pool)
+	onlyManual.SourceAdapters = StaticSourceAdapterRegistry{v1alpha1.SourceManualAPI: {}}
+	err = onlyManual.validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no installed source adapter")
+
 	// Unknown node kind -> rejected.
 	badNode := validWalterWorkflow("w", ns, "walter-pool")
 	badNode.Spec.Graph.Nodes[0].Kind = "magic"
@@ -450,7 +480,7 @@ func TestWorkflowCanonicalSpecIncludesAllExecutionIdentityInputs(t *testing.T) {
 // newWorkflowTestEnv stands up envtest (RBAC enforced) with the CRDs installed
 // and the WorkflowReconciler running under the manager-role, backed by real
 // Postgres stores (workflow/gateway/identity).
-func newWorkflowTestEnv(t *testing.T) (client.Client, context.Context, *workflow.Store, *gateway.Store, *identity.Store) {
+func newWorkflowTestEnv(t *testing.T, adapters StaticSourceAdapterRegistry) (client.Client, context.Context, *workflow.Store, *gateway.Store, *identity.Store) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -487,14 +517,12 @@ func newWorkflowTestEnv(t *testing.T) (client.Client, context.Context, *workflow
 	})
 	require.NoError(t, err)
 	require.NoError(t, (&WorkflowReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     scheme,
-		Store:      wfStore,
-		Pools:      gwStore,
-		Identities: idStore,
-		SourceAdapters: StaticSourceAdapterRegistry{
-			v1alpha1.SourceGraphEmail: {}, v1alpha1.SourceOperatorArtifact: {},
-		},
+		Client:         mgr.GetClient(),
+		Scheme:         scheme,
+		Store:          wfStore,
+		Pools:          gwStore,
+		Identities:     idStore,
+		SourceAdapters: adapters,
 	}).SetupWithManager(mgr))
 
 	mgrCtx, cancel := context.WithCancel(ctx)
@@ -510,7 +538,9 @@ func newWorkflowTestEnv(t *testing.T) (client.Client, context.Context, *workflow
 // validation status; deleting the CR soft-deletes the materialized state; and
 // recreating the same artifact revives that state and becomes Ready.
 func TestWorkflowReconcile(t *testing.T) {
-	adminClient, ctx, wfStore, gwStore, idStore := newWorkflowTestEnv(t)
+	adminClient, ctx, wfStore, gwStore, idStore := newWorkflowTestEnv(t, StaticSourceAdapterRegistry{
+		v1alpha1.SourceGraphEmail: {}, v1alpha1.SourceOperatorArtifact: {},
+	})
 	ns := "default"
 
 	// Create an AgentPool CR (the policy ceiling) and pre-materialize its pool
@@ -699,4 +729,61 @@ func TestWorkflowReconcile(t *testing.T) {
 	require.Len(t, revivedBindings, 1)
 	_, err = gwStore.GetWorkflowPoolBinding(ctx, workflow.DefinitionKey("walter/quotation", "1"))
 	require.NoError(t, err, "recreation should revive the workflow authorization binding")
+}
+
+// TestWorkflowManualAPISourceReady verifies the manual_api API-backed source
+// (ARCH-026) through the API server + reconciler under RBAC. The generated CRD
+// enum must admit source.type manual_api (an API-server write succeeds), a
+// manual_api Workflow becomes Ready with no trigger bindings, and a graph_email
+// Workflow stays Not Ready/Invalid because only manual_api is installed.
+func TestWorkflowManualAPISourceReady(t *testing.T) {
+	adminClient, ctx, wfStore, gwStore, _ := newWorkflowTestEnv(t, StaticSourceAdapterRegistry{v1alpha1.SourceManualAPI: {}})
+	ns := "default"
+
+	pool := poolWithGrants("walter-pool", ns,
+		v1alpha1.GatewayGrant{Tool: "graph.read", MaxEffectClass: "read_only", AllowedActions: []string{"graph.read"}},
+		v1alpha1.GatewayGrant{Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"},
+	)
+	require.NoError(t, adminClient.Create(ctx, pool))
+	require.NoError(t, adminClient.Create(ctx, &v1alpha1.Model{ObjectMeta: metav1.ObjectMeta{Name: "model-one", Namespace: ns}, Spec: v1alpha1.ModelSpec{ModelID: "model-one", BackendRef: "backend"}}))
+	_, err := gwStore.UpsertPool(ctx, "default/walter-pool", "walter-pool", "spiffe://iterabase.local/pools/test/")
+	require.NoError(t, err)
+
+	// A manual_api Workflow has no trigger bindings (API-backed adapter).
+	manual := validWalterWorkflow("walter-manual", ns, "walter-pool")
+	manual.Spec.Source = v1alpha1.WorkflowSource{Type: v1alpha1.SourceManualAPI}
+	require.NoError(t, adminClient.Create(ctx, manual), "generated CRD enum must admit source.type manual_api")
+	nn := types.NamespacedName{Name: "walter-manual", Namespace: ns}
+
+	// It becomes Ready/valid and materializes a definition with no trigger
+	// bindings and an inspectable immutable identity.
+	require.Eventually(t, func() bool {
+		var got v1alpha1.Workflow
+		if err := adminClient.Get(ctx, nn, &got); err != nil {
+			return false
+		}
+		return got.Status.Ready && got.Status.ValidationStatus == v1alpha1.ValidationValid &&
+			got.Status.VersionDigest != "" && got.Status.DefinitionID != "" && got.Status.ScopeIdentityID != ""
+	}, 15*time.Second, 200*time.Millisecond, "manual_api Workflow should become Ready/valid")
+
+	def, err := wfStore.GetDefinition(ctx, "walter/quotation", "1")
+	require.NoError(t, err)
+	assert.Equal(t, "manual_api", def.SourceType)
+	bindings, err := wfStore.ListTriggerBindings(ctx, def.ID)
+	require.NoError(t, err)
+	assert.Empty(t, bindings, "manual_api source materializes no trigger bindings")
+
+	// graph_email remains Not Ready (invalid) because only manual_api is
+	// installed; its adapter lands with HOR-356.
+	email := validWalterWorkflow("walter-email", ns, "walter-pool")
+	require.NoError(t, adminClient.Create(ctx, email))
+	emailNN := types.NamespacedName{Name: "walter-email", Namespace: ns}
+	require.Eventually(t, func() bool {
+		var g v1alpha1.Workflow
+		if err := adminClient.Get(ctx, emailNN, &g); err != nil {
+			return false
+		}
+		return g.Status.ValidationStatus == v1alpha1.ValidationInvalid &&
+			strings.Contains(g.Status.ValidationMessage, "no installed source adapter")
+	}, 15*time.Second, 200*time.Millisecond, "graph_email must stay Not Ready when its adapter is absent")
 }

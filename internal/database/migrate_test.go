@@ -86,9 +86,9 @@ func TestMigrations(t *testing.T) {
 
 	// HOR-254 must migrate an existing gateway ledger without requiring an
 	// unavailable customer-safe summary backfill. Roll back the three HOR-396
-	// migrations plus HOR-397, HOR-399, and HOR-254, seed a pre-existing write
-	// descriptor/invocation, and apply all six again.
-	require.NoError(t, database.MigrateDown(connStr, 6))
+	// migrations plus HOR-425, HOR-397, HOR-399, and HOR-254, seed a
+	// pre-existing write descriptor/invocation, and apply all seven again.
+	require.NoError(t, database.MigrateDown(connStr, 7))
 	_, err = pool.Exec(ctx, `
 		INSERT INTO toolgateway.tool_versions
 		    (name,version,digest,description,input_schema,effect_class,credential_slots,artifact_capabilities,timeout_ms)
@@ -149,6 +149,19 @@ func TestMigrations(t *testing.T) {
 			SELECT EXISTS (SELECT 1 FROM information_schema.columns
 			WHERE table_schema='runtime' AND table_name='node_executions' AND column_name=$1)`, column).Scan(&exists))
 		assert.True(t, exists, "runtime.node_executions.%s should exist after HOR-396 migration", column)
+	}
+
+	// HOR-425: the workflow source_type contract admits the manual_api source
+	// (ARCH-026) in both the definitions and trigger_bindings tables.
+	for _, constraint := range []struct{ table, name string }{
+		{"workflow.definitions", "definitions_source_type_check"},
+		{"workflow.trigger_bindings", "trigger_bindings_source_type_check"},
+	} {
+		var def string
+		require.NoError(t, pool.QueryRow(ctx, `
+			SELECT pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid=$1::regclass AND conname=$2`, constraint.table, constraint.name).Scan(&def))
+		assert.Contains(t, def, "'manual_api'", "%s should admit manual_api", constraint.name)
 	}
 
 	// Down: schemas should be gone.
