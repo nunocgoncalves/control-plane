@@ -296,7 +296,7 @@ type WorkflowTerminalOutcome struct {
 // WorkflowSource defines the source adapter and trigger bindings.
 // +kubebuilder:object:generate=true
 type WorkflowSource struct {
-	// +kubebuilder:validation:Enum=graph_email;operator_artifact
+	// +kubebuilder:validation:Enum=graph_email;operator_artifact;manual_api
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 	// +optional
@@ -420,6 +420,7 @@ type WorkflowList struct {
 const (
 	SourceGraphEmail       = "graph_email"
 	SourceOperatorArtifact = "operator_artifact"
+	SourceManualAPI        = "manual_api"
 
 	WorkflowNodeAgentTask = "agent_task"
 	WorkflowNodeHumanGate = "human_gate"

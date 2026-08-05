@@ -275,12 +275,18 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 	// schema value; it must not become Ready until this deployment has the
 	// corresponding ingress implementation installed (HOR-252 acceptance).
 	switch wf.Spec.Source.Type {
-	case v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact:
+	case v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact, v1alpha1.SourceManualAPI:
 	default:
-		return fmt.Errorf("spec.source.type must be %q or %q", v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact)
+		return fmt.Errorf("spec.source.type must be %q, %q or %q", v1alpha1.SourceGraphEmail, v1alpha1.SourceOperatorArtifact, v1alpha1.SourceManualAPI)
 	}
 	if r.SourceAdapters == nil || !r.SourceAdapters.IsInstalled(wf.Spec.Source.Type) {
 		return fmt.Errorf("spec.source.type %q has no installed source adapter", wf.Spec.Source.Type)
+	}
+	// A manual-source Workflow is API-backed (ARCH-026): the authenticated
+	// work-item start API is its adapter, so it must declare no ingress trigger
+	// bindings. This stays structurally incapable of persisting raw credentials.
+	if wf.Spec.Source.Type == v1alpha1.SourceManualAPI && len(wf.Spec.Source.TriggerBindings) > 0 {
+		return fmt.Errorf("spec.source.type %q must not declare triggerBindings; the manual source is API-backed", v1alpha1.SourceManualAPI)
 	}
 	// Trigger bindings use a source-specific typed payload and contain no opaque
 	// config field. This makes raw credential persistence structurally
@@ -646,6 +652,11 @@ func triggerBindingKey(sourceType string, b v1alpha1.TriggerBinding) (string, er
 			return "", fmt.Errorf("operatorArtifact.sourceID must be a DNS-1123 subdomain: %s", strings.Join(errs, "; "))
 		}
 		return b.OperatorArtifact.SourceID, nil
+	case v1alpha1.SourceManualAPI:
+		// ARCH-026: the manual source is API-backed and must never carry an
+		// ingress trigger binding. validateSpec rejects non-empty bindings; this
+		// fails closed for any direct/unvalidated call into the binding key path.
+		return "", fmt.Errorf("source type %q does not use trigger bindings", sourceType)
 	default:
 		return "", fmt.Errorf("unknown source type %q", sourceType)
 	}

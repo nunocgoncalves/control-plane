@@ -42,6 +42,9 @@ func (s *Store) Start(ctx context.Context, in StartInput) (WorkItem, bool, error
 	if err := validateSourcePresentation(in.SourcePresentation); err != nil {
 		return WorkItem{}, false, err
 	}
+	if len(in.Source) > MaxSourceBytes {
+		return WorkItem{}, false, fmt.Errorf("%w: source payload exceeds %d bytes", ErrInvalidInput, MaxSourceBytes)
+	}
 	in.ArtifactRefs = append([]ArtifactRef(nil), in.ArtifactRefs...)
 	for i := range in.ArtifactRefs {
 		if in.ArtifactRefs[i].ArtifactID == "" {

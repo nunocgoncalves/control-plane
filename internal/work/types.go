@@ -30,6 +30,11 @@ const (
 	NodeFailed    = "failed"
 )
 
+// MaxSourceBytes bounds a single work-item start source payload (private
+// customer source context) regardless of adapter, so oversized source data is
+// rejected before any durable work is created (HOR-425).
+const MaxSourceBytes = 1 << 20 // 1 MiB; validated in Start
+
 // ArtifactRef is an opaque immutable reference owned by HOR-399.
 type ArtifactRef struct {
 	ArtifactID string          `json:"artifactId"`

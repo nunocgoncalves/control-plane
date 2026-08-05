@@ -263,10 +263,13 @@ func run() int {
 		Store:      workflow.NewStore(pool),
 		Pools:      gateway.NewStore(pool),
 		Identities: identity.NewStore(pool),
-		// Source adapters are registered only when their ingress implementation is
-		// installed. HOR-356/HOR-393 add graph_email/operator_artifact here when
-		// those adapters land; enum recognition alone must not mark a workflow Ready.
-		SourceAdapters: controller.StaticSourceAdapterRegistry{},
+		// manual_api is installed because the existing authenticated work-item
+		// start API is its adapter (ARCH-026). graph_email/operator_artifact stay
+		// unregistered here until HOR-356/HOR-393 land their ingress adapters, so
+		// enum recognition alone never marks an uninstalled source Ready.
+		SourceAdapters: controller.StaticSourceAdapterRegistry{
+			v1alpha1.SourceManualAPI: {},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to set up Workflow reconciler")
 		return 1

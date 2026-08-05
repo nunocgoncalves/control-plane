@@ -15,6 +15,12 @@ import (
 	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
+// maxWorkStartBodyBytes bounds the full work-item start request body before any
+// parsing, so an oversized or malformed start is rejected without starting
+// durable work (HOR-425). Source-specific tighter bounds are enforced inside
+// work.Store.Start.
+const maxWorkStartBodyBytes = 4 << 20 // 4 MiB
+
 func (h *Handler) workReady(w http.ResponseWriter) bool {
 	if h.work == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "work service not configured"})
@@ -75,7 +81,13 @@ func (h *Handler) startWorkItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req startWorkRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxWorkStartBodyBytes)
 	if err := decodeJSON(r, &req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Error: fmt.Sprintf("request body exceeds %d bytes", maxWorkStartBodyBytes)})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid request body"})
 		return
 	}
