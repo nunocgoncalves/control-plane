@@ -22,9 +22,12 @@ spec:
       name: platform-ca
     certMountPath: /etc/harness/tls
 
-  # Shared RWX sandbox PVC. Per-session subdirs are 0700 owned by the session
-  # UID/GID (provisioning by the supervisor, HOR-381). The PVC request is the
-  # per-pool storage quota.
+  # Shared sandbox PVC. ReadWriteMany is required for multi-worker pools
+  # (concurrent per-turn children share it). ReadWriteOnce is supported only
+  # as a single-worker deployment mode (replicas: 1) on an ordinary RWO
+  # StorageClass, and is not the production multi-worker storage backend.
+  # Per-session subdirs are 0700 owned by the session UID/GID (provisioning by
+  # the supervisor, HOR-381). The PVC request is the per-pool storage quota.
   sandbox:
     storageClassName: rwx-fast
     accessMode: ReadWriteMany

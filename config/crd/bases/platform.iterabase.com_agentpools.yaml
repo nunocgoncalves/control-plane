@@ -856,9 +856,14 @@ spec:
                 properties:
                   accessMode:
                     description: |-
-                      accessMode must be ReadWriteMany (the warm pool shares one PVC; per-turn
-                      children of different sessions run concurrently across pods).
+                      accessMode selects the sandbox PVC access mode (HOR-427). ReadWriteMany
+                      is required for multi-worker pools (the warm pool shares one PVC and
+                      per-turn children of different sessions run concurrently across pods).
+                      ReadWriteOnce is permitted only as a single-worker deployment mode
+                      (spec.replicas == 1) on an ordinary RWO StorageClass, and is not the
+                      production multi-worker storage backend.
                     enum:
+                    - ReadWriteOnce
                     - ReadWriteMany
                     type: string
                   mountPath:
@@ -876,8 +881,8 @@ spec:
                     x-kubernetes-int-or-string: true
                   storageClassName:
                     description: |-
-                      storageClassName is the RWX-capable StorageClass. The operator validates
-                      it exists and supports ReadWriteMany.
+                      storageClassName is the StorageClass backing the sandbox PVC. The
+                      operator validates it exists and supports the selected access mode.
                     type: string
                 required:
                 - accessMode

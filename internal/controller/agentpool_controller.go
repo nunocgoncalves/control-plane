@@ -188,9 +188,10 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // validateSpec validates structural correctness (ARCH-018): required fields,
-// RWX access mode, egress mode, no duplicate gateway grants, and existence of
-// referenced Secrets (credential bindings + CA). Semantic validation that a
-// granted tool is registered is the gateway's responsibility (HOR-392/397).
+// sandbox access mode (RWX multi-worker / RWO single-worker with replicas==1),
+// egress mode, no duplicate gateway grants, and existence of referenced
+// Secrets (credential bindings + CA). Semantic validation that a granted tool
+// is registered is the gateway's responsibility (HOR-392/397).
 //
 // nolint:gocyclo
 func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.AgentPool) error {
@@ -206,8 +207,21 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 	if pool.Spec.Sandbox.StorageClassName == "" {
 		return fmt.Errorf("spec.sandbox.storageClassName is required")
 	}
-	if pool.Spec.Sandbox.AccessMode != corev1.ReadWriteMany {
-		return fmt.Errorf("spec.sandbox.accessMode must be ReadWriteMany")
+	switch pool.Spec.Sandbox.AccessMode {
+	case corev1.ReadWriteMany:
+		// RWX is required for interchangeable/concurrent workers and supports
+		// any replica count (HOR-427 preserves existing multi-worker behavior).
+	case corev1.ReadWriteOnce:
+		// RWO is a single-worker deployment mode only: a bound RWO PVC can be
+		// mounted by exactly one node/pod, so more than one replica would break
+		// at schedule time. Reject both creating a multi-replica RWO pool and
+		// changing a live multi-replica pool to RWO before any workload is
+		// rolled out (HOR-427).
+		if pool.Spec.Replicas != 1 {
+			return fmt.Errorf("spec.sandbox.accessMode ReadWriteOnce requires spec.replicas == 1 (single-worker RWO mode); set replicas to 1 or use ReadWriteMany")
+		}
+	default:
+		return fmt.Errorf("spec.sandbox.accessMode must be ReadWriteMany or ReadWriteOnce")
 	}
 	if pool.Spec.Sandbox.Size.IsZero() {
 		return fmt.Errorf("spec.sandbox.size is required and must be positive")
@@ -460,7 +474,7 @@ func (r *AgentPoolReconciler) ensurePVC(ctx context.Context, pool *v1alpha1.Agen
 			return err
 		}
 		sc := pool.Spec.Sandbox.StorageClassName
-		access := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+		access := []corev1.PersistentVolumeAccessMode{pool.Spec.Sandbox.AccessMode}
 		pvc.Spec.AccessModes = access
 		pvc.Spec.StorageClassName = &sc
 		pvc.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: pool.Spec.Sandbox.Size}

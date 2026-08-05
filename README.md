@@ -285,12 +285,14 @@ declares the maximum gateway capability grants + logical credential-slot
 bindings for work dispatched to the pool. No separate Tool/EgressRoute/
 IntegrationBinding CRD exists in v1.
 
-The operator reconciles, per pool: a shared **RWX sandbox PVC** (per-session
-`0700` subdirs owned by the session UID/GID), a **deny-by-default
-NetworkPolicy** (`denied` = kube-dns + the three gateways; `internet` =
-per-pool opt-in for non-cluster egress — customer-system credentialed access
-still routes through the gateway), a **per-pod config ConfigMap** (rendered
-harness boot config), and the **warm-worker pods**.
+The operator reconciles, per pool: a shared **sandbox PVC** (per-session
+`0700` subdirs owned by the session UID/GID; `ReadWriteMany` by default and
+required for multi-worker pools — `ReadWriteOnce` is supported as a
+single-worker deployment mode with `spec.replicas == 1`, HOR-427), a
+**deny-by-default NetworkPolicy** (`denied` = kube-dns + the three gateways;
+`internet` = per-pool opt-in for non-cluster egress — customer-system
+credentialed access still routes through the gateway), a **per-pod config
+ConfigMap** (rendered harness boot config), and the **warm-worker pods**.
 
 **Per-pod SPIFFE certs** are issued by the **cert-manager CSI driver**
 (`csi.cert-manager.io`) annotated on each pod with URI SAN

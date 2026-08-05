@@ -153,17 +153,21 @@ type PoolIdentitySpec struct {
 	CertMountPath string `json:"certMountPath,omitempty"`
 }
 
-// SandboxSpec configures the shared RWX sandbox PVC.
+// SandboxSpec configures the shared sandbox PVC.
 // +kubebuilder:object:generate=true
 type SandboxSpec struct {
-	// storageClassName is the RWX-capable StorageClass. The operator validates
-	// it exists and supports ReadWriteMany.
+	// storageClassName is the StorageClass backing the sandbox PVC. The
+	// operator validates it exists and supports the selected access mode.
 	// +kubebuilder:validation:Required
 	StorageClassName string `json:"storageClassName"`
 
-	// accessMode must be ReadWriteMany (the warm pool shares one PVC; per-turn
-	// children of different sessions run concurrently across pods).
-	// +kubebuilder:validation:Enum=ReadWriteMany
+	// accessMode selects the sandbox PVC access mode (HOR-427). ReadWriteMany
+	// is required for multi-worker pools (the warm pool shares one PVC and
+	// per-turn children of different sessions run concurrently across pods).
+	// ReadWriteOnce is permitted only as a single-worker deployment mode
+	// (spec.replicas == 1) on an ordinary RWO StorageClass, and is not the
+	// production multi-worker storage backend.
+	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadWriteMany
 	// +kubebuilder:validation:Required
 	AccessMode corev1.PersistentVolumeAccessMode `json:"accessMode"`
 

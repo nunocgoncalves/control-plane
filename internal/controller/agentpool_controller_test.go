@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -309,14 +310,32 @@ func TestAgentPoolValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "caSecretRef")
 
-	// Non-RWX access mode -> rejected.
-	badAccess := validAgentPool("b5", ns)
-	badAccess.Spec.Replicas = 1
+	// Single-replica ReadWriteOnce is valid (HOR-427 RWO single-worker mode).
+	rwoOk := validAgentPool("b5", ns)
+	rwoOk.Spec.Replicas = 1
+	rwoOk.Spec.CredentialBindings = nil
+	rwoOk.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
+	assert.NoError(t, newReconciler(ca, creds).validateSpec(ctx, rwoOk))
+
+	// Multi-replica ReadWriteOnce -> rejected before any workload rollout
+	// (HOR-427 fail-closed: RWO is single-worker only). Also covers rejecting
+	// changing a live multi-replica pool to RWO.
+	badAccess := validAgentPool("b5b", ns)
+	badAccess.Spec.Replicas = 2
 	badAccess.Spec.CredentialBindings = nil
 	badAccess.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
 	err = newReconciler(ca, creds).validateSpec(ctx, badAccess)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ReadWriteMany")
+	assert.Contains(t, err.Error(), "replicas == 1")
+
+	// Unknown access mode -> rejected.
+	badMode := validAgentPool("b5c", ns)
+	badMode.Spec.Replicas = 1
+	badMode.Spec.CredentialBindings = nil
+	badMode.Spec.Sandbox.AccessMode = corev1.PersistentVolumeAccessMode("ReadWritePod")
+	err = newReconciler(ca, creds).validateSpec(ctx, badMode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "accessMode must be ReadWriteMany or ReadWriteOnce")
 
 	// Duplicate (toolName, slot) binding -> rejected (ARCH-018/HOR-245).
 	dupBinding := validAgentPool("b6", ns)
@@ -689,4 +708,119 @@ func TestAgentPoolGatewayRevocationIndependentOfAssembly(t *testing.T) {
 	require.NoError(t, adminClient.Get(ctx, poolNN, &final))
 	assert.NotEqual(t, final.Generation, final.Status.ObservedGeneration,
 		"assembly must still be failing (ObservedGeneration pinned), yet revocation converged")
+}
+
+// TestAgentPoolSingleReplicaRWOReconcile exercises the HOR-427 single-worker
+// RWO deployment mode end-to-end under RBAC: a one-replica AgentPool with a
+// ReadWriteOnce sandbox reconciles the sandbox PVC with ReadWriteOnce access
+// mode and exactly one warm-worker pod (the RWO acceptance mode). Requires
+// KUBEBUILDER_ASSETS (envtest).
+func TestAgentPoolSingleReplicaRWOReconcile(t *testing.T) {
+	adminClient, ctx := newAgentPoolTestEnv(t, nil)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns},
+		StringData: map[string]string{"tls.crt": "c", "tls.key": "k"},
+	}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns},
+		StringData: map[string]string{"token": "v"},
+	}))
+
+	pool := validAgentPool("rwo-pool", ns)
+	pool.Spec.Replicas = 1
+	pool.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	// PVC created with the selected ReadWriteOnce access mode.
+	require.Eventually(t, func() bool {
+		var pvc corev1.PersistentVolumeClaim
+		if err := adminClient.Get(ctx, types.NamespacedName{Name: "rwo-pool-sandbox", Namespace: ns}, &pvc); err != nil {
+			return false
+		}
+		access := pvc.Spec.AccessModes
+		return len(access) == 1 && access[0] == corev1.ReadWriteOnce
+	}, 15*time.Second, 200*time.Millisecond, "sandbox PVC should be created as ReadWriteOnce")
+
+	// Exactly one warm-worker pod (RWO is single-worker-only).
+	require.Eventually(t, func() bool {
+		var pods corev1.PodList
+		if err := adminClient.List(ctx, &pods, client.InNamespace(ns), client.MatchingLabels{"platform.iterabase.com/agentpool": "rwo-pool"}); err != nil {
+			return false
+		}
+		return len(pods.Items) == 1
+	}, 15*time.Second, 200*time.Millisecond, "exactly one warm-worker pod should be created for RWO")
+}
+
+// TestAgentPoolRWOMutationPreservesPVC proves the HOR-427 fail-closed contract
+// for RWO<->RWX mutation: toggling the sandbox access mode on a live pool must
+// NOT silently recreate or drop the bound PVC (which would destroy session
+// data). The reconciler's ensurePVC uses CreateOrUpdate, so the PVC object is
+// updated in place and its identity (UID) is preserved across the mutation —
+// the controller never deletes/recreates it. envtest has no provisioner, so the
+// PVC stays unbound; this asserts the no-recreate identity property, not
+// runtime binding. Requires KUBEBUILDER_ASSETS (envtest).
+func TestAgentPoolRWOMutationPreservesPVC(t *testing.T) {
+	adminClient, ctx := newAgentPoolTestEnv(t, nil)
+	ns := "default"
+
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-ca", Namespace: ns},
+		StringData: map[string]string{"tls.crt": "c", "tls.key": "k"},
+	}))
+	require.NoError(t, adminClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "graph-creds", Namespace: ns},
+		StringData: map[string]string{"token": "v"},
+	}))
+
+	pool := validAgentPool("mut-pool", ns)
+	pool.Spec.Replicas = 1
+	pool.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
+	require.NoError(t, adminClient.Create(ctx, pool))
+
+	pvcNN := types.NamespacedName{Name: "mut-pool-sandbox", Namespace: ns}
+	poolNN := types.NamespacedName{Name: "mut-pool", Namespace: ns}
+
+	// RWO PVC created + capture its UID (the identity that must be preserved).
+	var firstUID types.UID
+	require.Eventually(t, func() bool {
+		var pvc corev1.PersistentVolumeClaim
+		if err := adminClient.Get(ctx, pvcNN, &pvc); err != nil {
+			return false
+		}
+		firstUID = pvc.UID
+		return firstUID != "" && len(pvc.Spec.AccessModes) == 1 && pvc.Spec.AccessModes[0] == corev1.ReadWriteOnce
+	}, 15*time.Second, 200*time.Millisecond, "RWO sandbox PVC should be created")
+
+	// Toggle the pool to RWX (replicas stays 1, so the spec is still valid).
+	// PVC accessModes are immutable after creation, so the controller MUST NOT
+	// silently mutate or delete/recreate the PVC: it fails closed, surfacing the
+	// immutable error and preserving the PVC identity (no data loss). This is
+	// the HOR-427 fail-closed contract for RWO<->RWX mutation.
+	require.Eventually(t, func() bool {
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		got.Spec.Sandbox.AccessMode = corev1.ReadWriteMany
+		return adminClient.Update(ctx, &got) == nil
+	}, 15*time.Second, 200*time.Millisecond, "should toggle the pool spec to ReadWriteMany")
+
+	// Fail-closed: the PVC is NOT recreated (same UID), its access mode is NOT
+	// silently rewritten, and the reconcile surfaces the immutability error in
+	// status instead of destroying the bound PVC.
+	require.Eventually(t, func() bool {
+		var pvc corev1.PersistentVolumeClaim
+		if err := adminClient.Get(ctx, pvcNN, &pvc); err != nil {
+			return false
+		}
+		var got v1alpha1.AgentPool
+		if err := adminClient.Get(ctx, poolNN, &got); err != nil {
+			return false
+		}
+		return pvc.UID == firstUID &&
+			len(pvc.Spec.AccessModes) == 1 && pvc.Spec.AccessModes[0] == corev1.ReadWriteOnce &&
+			strings.Contains(got.Status.Message, "immutable")
+	}, 15*time.Second, 200*time.Millisecond, "PVC must not be recreated or silently rewritten; the immutable accessMode error is surfaced (fail-closed)")
 }
