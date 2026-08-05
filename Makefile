@@ -73,7 +73,7 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 ##@ Build
 
 .PHONY: build
-build: vet ## Build manager, api, gateway, and dispatch binaries.
+build: ui-build vet ## Build Dashboard, manager, api, gateway, and dispatch binaries.
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/manager ./cmd/manager
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/api ./cmd/api
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/gateway ./cmd/gateway
@@ -141,6 +141,24 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster in ~/.kube/c
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster in ~/.kube/config.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Dashboard (React/Vite — HOR-396)
+
+.PHONY: ui-deps
+ui-deps: ## Install locked Dashboard dependencies.
+	cd ui && npm ci
+
+.PHONY: ui-build
+ui-build: ## Typecheck and build the embedded Dashboard.
+	cd ui && npm run build
+
+.PHONY: ui-lint
+ui-lint: ## Typecheck the Dashboard.
+	cd ui && npm run lint
+
+.PHONY: ui-test
+ui-test: ## Run Dashboard component, interaction, a11y, and localization tests.
+	cd ui && npm test
 
 ##@ Harness (Node pi harness — HOR-351 / HOR-381 warm-worker refactor)
 
@@ -231,7 +249,8 @@ install-hooks: ## Install git hooks (.githooks/pre-commit).
 
 .PHONY: clean
 clean: ## Remove built binaries and test caches.
-	rm -rf bin/ dist/ cover.out
+	rm -rf bin/ dist/ cover.out ui/dist/assets ui/dist/index.html
+	printf 'HOR-396 UI is built into this directory.\n' > ui/dist/placeholder.txt
 	go clean -testcache
 
 ##@ Dependencies

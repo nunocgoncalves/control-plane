@@ -19,8 +19,8 @@ func TestGraphValidation_CycleAndCoverage(t *testing.T) {
 	spec := workflow.CanonicalSpec{Key: "dev/review", ScopeIdentityKey: "workflow:default/dev", DefaultModelRef: "model-one",
 		Graph: workflow.CanonicalGraph{EntryNode: "review", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
-				{Key: "review", Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}},
-				{Key: "address", Kind: workflow.NodeAgentTask, Prompt: "address", Outcomes: []string{"addressed"}},
+				{Key: "review", Label: workflow.CanonicalLocalizedText{EN: "Review", PT: "Rever"}, Kind: workflow.NodeAgentTask, Prompt: "review", Outcomes: []string{"approved", "changes"}},
+				{Key: "address", Label: workflow.CanonicalLocalizedText{EN: "Address feedback", PT: "Tratar feedback"}, Kind: workflow.NodeAgentTask, Prompt: "address", Outcomes: []string{"addressed"}},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "review", Outcome: "changes", To: "address"}, {From: "address", Outcome: "addressed", To: "review"}},
 			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "review", Outcome: "approved"}},
@@ -55,6 +55,7 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 		RETURNING id`, artifactID, "artifacts/11/"+artifactID, actorID,
 		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Scan(&artifactID))
 	sourceArtifacts := []workstore.ArtifactRef{{ArtifactID: artifactID, Role: "source"}}
+	sourcePresentation := workstore.SourcePresentation{Kind: "outlook", Title: "Quote request", Subtitle: "requests@acme.example", Evidence: []workstore.PresentationField{{Label: workstore.LocalizedText{EN: "Customer", PT: "Cliente"}, Value: "ACME"}}}
 	valueInput := workstore.ValueModelInput{Ref: "quotation-value", Version: "1", Currency: "EUR", BaselineSeconds: 1200, LoadedHourlyCost: "30.00", Assumptions: json.RawMessage(`{"source":"customer"}`), Explanation: json.RawMessage(`{"en":"20 minutes at EUR 30/hour"}`)}
 	_, err := store.CreateValueModel(ctx, valueInput)
 	require.NoError(t, err)
@@ -64,11 +65,22 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, unreferenced.Value.Configured, "an unreferenced registry row is not Dashboard configuration")
 
-	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), ArtifactRefs: sourceArtifacts})
+	item, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), SourcePresentation: sourcePresentation, ArtifactRefs: sourceArtifacts})
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.Equal(t, workstore.StateTodo, item.State)
 	assert.True(t, item.ValueConfigured)
+	assert.Equal(t, "Quote request", item.SourcePresentation.Title)
+	assert.Equal(t, "Marco", item.Presentation.PersonaName)
+	require.NotNil(t, item.CurrentStep)
+	assert.Equal(t, "Processing quotation", item.CurrentStep.Label.EN)
+	customerJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	assert.NotContains(t, string(customerJSON), "messageId", "private trigger context must not reach customer APIs")
+	listed, err := store.ListWorkItems(ctx, workstore.WorkItemFilter{Search: "ACME", From: timePtr(time.Now().Add(-time.Hour)), To: timePtr(time.Now().Add(time.Hour))})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, item.ID, listed[0].ID)
 	dashboard, err := store.Dashboard(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.True(t, dashboard.Value.Configured)
@@ -96,11 +108,11 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	_, err = pool.Exec(ctx, `INSERT INTO toolgateway.workflow_pool_bindings(workflow_definition_key,pool_id,permitted_tools)VALUES($1,$2,$3)`, workflow.DefinitionKey(v2.Key, v2.Version), poolID, caps)
 	require.NoError(t, err)
 
-	same, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"tenant":"acme","messageId":"m-1"}`), ArtifactRefs: sourceArtifacts})
+	same, created, err := store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Quotation — ACME", Source: json.RawMessage(`{"tenant":"acme","messageId":"m-1"}`), SourcePresentation: sourcePresentation, ArtifactRefs: sourceArtifacts})
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.Equal(t, item.ID, same.ID)
-	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Different", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), ArtifactRefs: sourceArtifacts})
+	_, _, err = store.Start(ctx, workstore.StartInput{ActorIdentityID: actorID, WorkflowKey: "walter/quotation", IdempotencyKey: "notification-1", Title: "Different", Source: json.RawMessage(`{"messageId":"m-1","tenant":"acme"}`), SourcePresentation: sourcePresentation, ArtifactRefs: sourceArtifacts})
 	assert.ErrorIs(t, err, workstore.ErrConflict)
 
 	first, turn, dispatch, err := store.PrepareNode(ctx, attemptID)
@@ -158,8 +170,14 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, workstore.StateBlocked, blocked.State)
 	human, err := restarted.OpenBlockerForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "information", human.Kind)
-	_, err = restarted.RespondBlocker(ctx, workstore.BlockerResponseInput{BlockerID: human.ID, ActorIdentityID: actorID, Outcome: "information_provided", Response: json.RawMessage(`{"information":"Lisbon"}`)})
+	assert.Equal(t, "artifact", human.Kind)
+	responseArtifactID := "44444444-4444-4444-8444-444444444444"
+	_, err = pool.Exec(ctx, `
+		INSERT INTO artifact.artifacts
+			(id,storage_key,source_type,created_by_identity_id,mime_type,size_bytes,digest,state,available_at)
+		VALUES ($1,'artifacts/human-response','user_upload',$2,'text/csv',12,'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd','available',now())`, responseArtifactID, actorID)
+	require.NoError(t, err)
+	_, err = restarted.RespondBlocker(ctx, workstore.BlockerResponseInput{BlockerID: human.ID, ActorIdentityID: actorID, Outcome: "information_provided", Response: json.RawMessage(`{"information":"See attached CSV"}`), ArtifactRefs: []workstore.ArtifactRef{{ArtifactID: responseArtifactID, Metadata: json.RawMessage(`{"name":"destination.csv"}`)}}})
 	require.NoError(t, err)
 
 	// Re-entering process is intercepted before dispatch because it previously
@@ -184,9 +202,10 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, 2, second.Visit)
 	assignment, err := restarted.GetAssignmentContext(ctx, second.ID)
 	require.NoError(t, err)
-	require.Len(t, assignment.Materializations, 2)
-	assert.ElementsMatch(t, []string{artifactID, selectedArtifactID}, []string{
+	require.Len(t, assignment.Materializations, 3)
+	assert.ElementsMatch(t, []string{artifactID, selectedArtifactID, responseArtifactID}, []string{
 		assignment.Materializations[0].ArtifactID, assignment.Materializations[1].ArtifactID,
+		assignment.Materializations[2].ArtifactID,
 	})
 	var handoff map[string]any
 	require.NoError(t, json.Unmarshal(second.Context, &handoff))
@@ -201,6 +220,13 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, workstore.StateDone, done.State)
 	require.NotNil(t, done.EstimatedValue)
 	assert.Equal(t, "10.000000", *done.EstimatedValue)
+	artifacts, err := restarted.ListArtifacts(ctx, item.ID)
+	require.NoError(t, err)
+	artifactIDs := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactIDs = append(artifactIDs, artifact.ArtifactID)
+	}
+	assert.Contains(t, artifactIDs, responseArtifactID, "the customer-supplied blocker artifact remains linked")
 
 	feedback, err := restarted.SaveFeedback(ctx, workstore.FeedbackInput{WorkItemID: item.ID, AttemptID: attemptID, ActorIdentityID: actorID, Category: "incorrect_classification", Explanation: "Should be engineering", CorrectedResult: json.RawMessage(`{"classification":"engineering"}`)})
 	require.NoError(t, err)
@@ -255,6 +281,8 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, scopeID, revised.ScopeIdentityID)
 }
 
+func timePtr(value time.Time) *time.Time { return &value }
+
 func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string) {
 	t.Helper()
 	var actorID, scopeID, poolID string
@@ -287,8 +315,8 @@ func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (stri
 		RequestedCapabilities: []workflow.CanonicalCapability{{Tool: "graph.read", MaxEffectClass: "read_only"}, {Tool: "graph.excel.write", MaxEffectClass: "idempotent_write"}},
 		Graph: workflow.CanonicalGraph{EntryNode: "process", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
-				{Key: "process", Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_information"}, OutputSchema: json.RawMessage(`{"type":"object"}`)},
-				{Key: "information", Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "information", Title: workflow.CanonicalLocalizedText{EN: "Information required"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"]}`)}},
+				{Key: "process", Label: workflow.CanonicalLocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_information"}, OutputSchema: json.RawMessage(`{"type":"object"}`)},
+				{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Waiting for artifact", PT: "A aguardar artefacto"}, Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "artifact", Title: workflow.CanonicalLocalizedText{EN: "Artifact required", PT: "Artefacto necessário"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination file", PT: "Forneça o ficheiro de destino"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"]}`)}},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "process", Outcome: "needs_information", To: "information"}, {From: "information", Outcome: "information_provided", To: "process"}},
 			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}}},

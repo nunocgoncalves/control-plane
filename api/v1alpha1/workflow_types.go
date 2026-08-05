@@ -101,6 +101,11 @@ type WorkflowNode struct {
 	// +kubebuilder:validation:MinLength=1
 	Key string `json:"key"`
 
+	// label is the localized business-stage name shown to customers. Both v1
+	// locales are required by controller validation.
+	// +kubebuilder:validation:Required
+	Label LocalizedText `json:"label"`
+
 	// kind selects agent execution or a durable customer blocker.
 	// +kubebuilder:validation:Enum=agent_task;human_gate
 	// +kubebuilder:validation:Required

@@ -54,6 +54,29 @@ func (s *Store) RespondBlocker(ctx context.Context, in BlockerResponseInput) (Bl
 	if err := validateInstance(in.Response, b.ResponseSchema); err != nil {
 		return Blocker{}, fmt.Errorf("%w: response: %v", ErrInvalidInput, err)
 	}
+	if b.Kind == "artifact" && len(in.ArtifactRefs) == 0 {
+		return Blocker{}, fmt.Errorf("%w: artifact blocker requires artifactRefs", ErrInvalidInput)
+	}
+	if b.Kind != "artifact" && len(in.ArtifactRefs) > 0 {
+		return Blocker{}, fmt.Errorf("%w: artifactRefs are allowed only for artifact blockers", ErrInvalidInput)
+	}
+	for i := range in.ArtifactRefs {
+		ref := &in.ArtifactRefs[i]
+		if ref.ArtifactID == "" {
+			return Blocker{}, fmt.Errorf("%w: artifactRefs[%d].artifactId is required", ErrInvalidInput, i)
+		}
+		ref.Role = "input"
+		if len(ref.Metadata) > 0 && !json.Valid(ref.Metadata) {
+			return Blocker{}, fmt.Errorf("%w: artifactRefs[%d].metadata must be valid JSON", ErrInvalidInput, i)
+		}
+		var available bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM artifact.artifacts WHERE id=$1 AND state='available')`, ref.ArtifactID).Scan(&available); err != nil {
+			return Blocker{}, err
+		}
+		if !available {
+			return Blocker{}, fmt.Errorf("%w: artifactRefs[%d] is not available", ErrInvalidInput, i)
+		}
+	}
 	if b.Kind == "consequence_confirmation" {
 		if b.NodeExecutionID == nil {
 			return Blocker{}, fmt.Errorf("%w: blocker has no node execution", ErrInvalidTransition)
@@ -106,7 +129,7 @@ func (s *Store) RespondBlocker(ctx context.Context, in BlockerResponseInput) (Bl
 			return Blocker{}, err
 		}
 	} else {
-		if err := s.completeHumanNodeTx(ctx, tx, b, *b.NodeExecutionID, in.Outcome, in.Response, in.ActorIdentityID); err != nil {
+		if err := s.completeHumanNodeTx(ctx, tx, b, *b.NodeExecutionID, in.Outcome, in.Response, in.ArtifactRefs, in.ActorIdentityID); err != nil {
 			return Blocker{}, err
 		}
 	}
@@ -119,7 +142,7 @@ func (s *Store) RespondBlocker(ctx context.Context, in BlockerResponseInput) (Bl
 	return b, nil
 }
 
-func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, nodeID, outcome string, response json.RawMessage, actorID string) error {
+func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, nodeID, outcome string, response json.RawMessage, artifactRefs []ArtifactRef, actorID string) error {
 	node, err := scanNodeExecution(tx.QueryRow(ctx, nodeExecutionSelect+` WHERE id=$1 FOR UPDATE`, nodeID))
 	if err != nil {
 		return err
@@ -127,18 +150,29 @@ func (s *Store) completeHumanNodeTx(ctx context.Context, tx pgx.Tx, b Blocker, n
 	if node.State != NodeBlocked {
 		return fmt.Errorf("%w: human node state is %s", ErrInvalidTransition, node.State)
 	}
+	refsJSON, _ := json.Marshal(append([]ArtifactRef{}, artifactRefs...))
 	if _, err := tx.Exec(ctx, `
 		UPDATE runtime.node_executions SET state='succeeded',completion_outcome=$2,completion_summary='Human response received',
-		output=$3,completion_reported_at=now(),finished_at=now() WHERE id=$1`, nodeID, outcome, response); err != nil {
+		output=$3,artifact_refs=$4,completion_reported_at=now(),finished_at=now() WHERE id=$1`, nodeID, outcome, response, refsJSON); err != nil {
 		return err
 	}
-	if err := appendTimelineTx(ctx, tx, b.WorkItemID, b.AttemptID, nodeID, "blocker_resolved", map[string]any{"nodeKey": node.NodeKey, "outcome": outcome}, nil, actorID); err != nil {
+	for _, ref := range artifactRefs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO work.artifact_links (artifact_id,work_item_id,attempt_id,node_execution_id,role,metadata)
+			VALUES ($1,$2,$3,$4,'input',$5)
+			ON CONFLICT (artifact_id,work_item_id,attempt_id,node_execution_id,role) DO NOTHING`,
+			ref.ArtifactID, b.WorkItemID, b.AttemptID, nodeID, jsonOrObject(ref.Metadata)); err != nil {
+			return err
+		}
+	}
+	if err := appendTimelineTx(ctx, tx, b.WorkItemID, b.AttemptID, nodeID, "blocker_resolved", map[string]any{"nodeKey": node.NodeKey, "outcome": outcome}, artifactRefs, actorID); err != nil {
 		return err
 	}
 	node.State = NodeSucceeded
 	node.CompletionOutcome = &outcome
 	node.CompletionSummary = strPtr("Human response received")
 	node.Output = response
+	node.ArtifactRefs = refsJSON
 	_, err = s.advanceGraphTx(ctx, tx, graphAdvanceInput{
 		ItemID: b.WorkItemID, AttemptID: b.AttemptID, Node: node, ActorID: actorID,
 	})

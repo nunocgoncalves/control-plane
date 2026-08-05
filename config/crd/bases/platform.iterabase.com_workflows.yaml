@@ -150,6 +150,16 @@ spec:
                           - agent_task
                           - human_gate
                           type: string
+                        label:
+                          description: |-
+                            label is the localized business-stage name shown to customers. Both v1
+                            locales are required by controller validation.
+                          properties:
+                            en:
+                              type: string
+                            pt:
+                              type: string
+                          type: object
                         modelRef:
                           description: modelRef optionally overrides spec.defaultModelRef
                             for this agent node.
@@ -188,6 +198,7 @@ spec:
                       required:
                       - key
                       - kind
+                      - label
                       - outcomes
                       type: object
                     minItems: 1

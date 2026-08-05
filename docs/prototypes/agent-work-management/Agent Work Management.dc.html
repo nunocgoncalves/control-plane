@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <style>
+    /* ── Iterabase design tokens (inlined for portable export) ── */
+    :root{
+      --gph-950:#080B11;--gph-900:#0C1017;--gph-850:#111723;--gph-800:#161E2B;--gph-750:#1C2634;--gph-700:#232F3E;--gph-600:#313F51;--gph-500:#455467;--gph-400:#5E6E82;--gph-300:#8593A4;--gph-200:#B0BBC8;--gph-150:#C7CFD9;--gph-100:#DCE2E9;--gph-50:#EEF1F5;--gph-25:#F6F8FA;--white:#FBFCFD;--pure-white:#FFFFFF;
+      --navy:#0E1A2B;--steel-700:#2C4258;--steel-600:#38556F;--steel-500:#4A6B87;--steel-400:#6488A4;--steel-300:#93AEC4;
+      --blue-700:#0F4FB0;--blue-600:#1666E0;--blue-500:#2D82F7;--blue-400:#5BA0FF;--blue-300:#92BEFF;--blue-200:#C4DAFF;--blue-100:#E5EFFF;
+      --teal-600:#0A8E96;--teal-500:#0FB5BD;--teal-400:#2FD0D6;--teal-100:#D6F6F7;
+      --green-500:#2FA968;--green-100:#DBF1E4;--amber-500:#D9952A;--amber-100:#F8ECCF;--red-500:#E0533D;--red-100:#FADBD3;
+      --bg:var(--gph-25);--surface:var(--pure-white);--surface-sunken:var(--gph-50);--surface-card:var(--pure-white);--surface-inset:var(--gph-25);
+      --border:#E3E8EE;--border-strong:var(--gph-150);--border-faint:#EDF1F5;
+      --text-primary:var(--gph-900);--text-secondary:var(--gph-500);--text-tertiary:var(--gph-400);--text-inverse:var(--white);--text-link:var(--blue-600);
+      --accent:var(--blue-600);--accent-hover:var(--blue-700);--accent-text:var(--pure-white);--accent-quiet:rgba(45,130,247,.10);--accent-line:var(--blue-500);
+      --signal:var(--teal-500);--signal-quiet:rgba(15,181,189,.12);
+      --ok:var(--green-500);--ok-bg:var(--green-100);--warn:var(--amber-500);--warn-bg:var(--amber-100);--crit:var(--red-500);--crit-bg:var(--red-100);
+      --focus-ring:var(--blue-400);--grid-line:rgba(14,26,43,.06);
+      --font-sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;--font-mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+      --text-2xs:11px;--text-xs:12px;--text-sm:13px;--text-base:15px;--text-md:16px;--text-lg:18px;--text-xl:22px;--text-2xl:28px;--text-3xl:36px;
+      --weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;--tracking-tight:-.01em;--tracking-label:.09em;
+      --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;
+      --radius-xs:2px;--radius-sm:4px;--radius-md:6px;--radius-lg:10px;--radius-xl:14px;--radius-full:999px;
+      --shadow-xs:0 1px 1px rgba(8,11,17,.04);--shadow-sm:0 1px 2px rgba(8,11,17,.06),0 1px 1px rgba(8,11,17,.04);--shadow-md:0 2px 8px -2px rgba(8,11,17,.10),0 1px 2px rgba(8,11,17,.06);--shadow-lg:0 12px 28px -8px rgba(8,11,17,.16),0 2px 6px -2px rgba(8,11,17,.08);--shadow-xl:0 28px 60px -16px rgba(8,11,17,.24);
+      --ring-accent:0 0 0 3px rgba(45,130,247,.28);--ring-focus:0 0 0 3px rgba(45,130,247,.35);
+      --duration-fast:120ms;--duration-base:180ms;--ease-out:cubic-bezier(0.22,1,0.36,1);
+    }
+    .ib-btn{font-family:var(--font-sans);font-weight:var(--weight-semibold);display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;letter-spacing:var(--tracking-tight);transition:background var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out),color var(--duration-fast) var(--ease-out),transform var(--duration-fast) var(--ease-out);text-decoration:none}
+    .ib-btn:focus-visible{outline:none;box-shadow:var(--ring-focus)}.ib-btn:active{transform:translateY(0.5px)}.ib-btn[disabled]{opacity:.45;pointer-events:none}
+    .ib-btn--sm{height:30px;padding:0 12px;font-size:var(--text-sm)}.ib-btn--md{height:38px;padding:0 16px;font-size:var(--text-base)}.ib-btn--lg{height:46px;padding:0 22px;font-size:var(--text-md)}
+    .ib-btn svg{width:1.05em;height:1.05em}
+    .ib-btn--primary{background:var(--accent);color:var(--accent-text)}.ib-btn--primary:hover{background:var(--accent-hover)}
+    .ib-btn--secondary{background:var(--surface);color:var(--text-primary);border-color:var(--border-strong)}.ib-btn--secondary:hover{background:var(--surface-sunken);border-color:var(--gph-300)}
+    .ib-btn--ghost{background:transparent;color:var(--text-secondary)}.ib-btn--ghost:hover{background:var(--surface-sunken);color:var(--text-primary)}
+    .ib-iconbtn{display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--text-secondary);border:1px solid transparent;border-radius:var(--radius-sm);cursor:pointer;transition:background var(--duration-fast) var(--ease-out),color var(--duration-fast) var(--ease-out)}
+    .ib-iconbtn:hover{background:var(--surface-sunken);color:var(--text-primary)}.ib-iconbtn--sm{width:30px;height:30px}.ib-iconbtn--md{width:38px;height:38px}
+    .ib-input{font-family:var(--font-sans);font-size:var(--text-base);color:var(--text-primary);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);height:38px;padding:0 12px;width:100%;box-sizing:border-box;transition:border-color var(--duration-fast) var(--ease-out),box-shadow var(--duration-fast) var(--ease-out)}
+    .ib-input::placeholder{color:var(--text-tertiary)}.ib-input:hover{border-color:var(--gph-300)}.ib-input:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring-accent)}
+    .ib-inputwrap{position:relative;display:flex;align-items:center}.ib-inputwrap .ib-input{padding-left:36px}.ib-inputwrap__icon{position:absolute;left:11px;display:flex;color:var(--text-tertiary);pointer-events:none}.ib-inputwrap__icon svg{width:16px;height:16px}
+    .ib-select{font-family:var(--font-sans);font-size:var(--text-base);color:var(--text-primary);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);height:38px;padding:0 32px 0 12px;width:100%;box-sizing:border-box;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-color:var(--surface);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235E6E82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;background-size:15px 15px;transition:border-color var(--duration-fast) var(--ease-out),box-shadow var(--duration-fast) var(--ease-out)}
+    .ib-select:hover{border-color:var(--gph-300)}.ib-select:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring-accent)}
+    .ib-card{background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);font-family:var(--font-sans);color:var(--text-primary)}
+    .ib-card--hover{transition:border-color var(--duration-base) var(--ease-out),box-shadow var(--duration-base) var(--ease-out)}.ib-card--hover:hover{border-color:var(--border-strong);box-shadow:var(--shadow-md)}
+    .ib-toast{display:flex;align-items:flex-start;gap:11px;font-family:var(--font-sans);background:var(--gph-900);color:var(--gph-50);border:1px solid var(--gph-700);border-radius:var(--radius-md);padding:13px 15px;box-shadow:var(--shadow-lg);min-width:280px;max-width:400px}
+    .ib-toast__icon{display:flex;flex:none;margin-top:1px}.ib-toast__icon svg{width:18px;height:18px}.ib-toast--ok .ib-toast__icon{color:var(--green-500)}
+    .ib-toast__title{font-size:var(--text-sm);font-weight:var(--weight-semibold)}.ib-toast__msg{font-size:var(--text-sm);color:var(--gph-300);margin-top:2px}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:var(--font-sans);color:var(--text-primary);-webkit-font-smoothing:antialiased}
+    ::-webkit-scrollbar{width:10px;height:10px}
+    ::-webkit-scrollbar-thumb{background:var(--gph-200);border-radius:8px;border:2px solid var(--bg)}
+    ::-webkit-scrollbar-thumb:hover{background:var(--gph-300)}
+    a{color:var(--text-link);text-decoration:none}
+    a:hover{text-decoration:underline}
+    @keyframes panelIn{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+    @keyframes islandDrop{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+      @keyframes scrimIn{from{opacity:0}to{opacity:1}}
+    @keyframes toastIn{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+    @keyframes popIn{from{transform:translateY(6px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+    @keyframes livePulse{0%{transform:scale(.7);opacity:.7}100%{transform:scale(1.7);opacity:0}}
+    @keyframes cursorClick{0%{transform:scale(1)}45%{transform:scale(.72)}100%{transform:scale(1)}}
+    @keyframes ringOut{0%{transform:scale(.5);opacity:.55}100%{transform:scale(1.9);opacity:0}}
+    @keyframes captionIn{from{transform:translate(-50%,10px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+    @keyframes captionSwap{from{transform:translateY(3px);opacity:0}to{transform:none;opacity:1}}
+    @keyframes endIn{from{transform:scale(.96);opacity:0}to{transform:none;opacity:1}}
+    @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important}}
+  </style>
+  <template id="__bundler_thumbnail">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200">
+      <rect width="320" height="200" fill="#0b0e14"/>
+      <g transform="translate(96 60)" fill="none" stroke="#2f6bff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 6h34l20 28"/><path d="M4 40h40"/><path d="M4 74h34l20-28"/><path d="M58 40h30"/>
+        <circle cx="104" cy="40" r="14" fill="#2f6bff" stroke="none"/>
+        <path d="M99 40l4 4 7-8" stroke="#0b0e14" stroke-width="4"/>
+      </g>
+    </svg>
+  </template>
+</helmet>
+<div style="height:100vh;width:100%;overflow:hidden;background:var(--bg)">
+
+  <sc-if value="{{ islandOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ onIslandClose }}" style="position:fixed;inset:0;z-index:44;background:rgba(8,11,17,.26);animation:scrimIn .18s ease-out"></div>
+  </sc-if>
+
+  <div style="position:fixed;top:0;left:0;right:0;z-index:{{ islandZ }};display:flex;justify-content:center;pointer-events:none;padding:14px 16px 0">
+    <div style="pointer-events:auto;width:{{ islandW }};max-width:calc(100vw - 32px);background:var(--surface);border:1px solid var(--border-strong);border-radius:{{ islandR }};box-shadow:0 20px 48px -16px rgba(11,15,23,.38),0 2px 6px rgba(11,15,23,.07);overflow:hidden;transition:width .26s cubic-bezier(.22,1,.36,1),border-radius .22s ease">
+
+      <div style="display:flex;align-items:center;gap:9px;height:52px;padding:0 9px 0 11px">
+        <div style="width:26px;height:26px;border-radius:7px;background:var(--gph-900);color:#fff;display:flex;align-items:center;justify-content:center;flex:none">{{ ic.mark }}</div>
+        <button onClick="{{ onToggleNav }}" style="{{ contextChipStyle }}" style-hover="background:var(--surface-sunken)">
+          <span style="display:inline-flex;color:var(--text-tertiary)">{{ contextIcon }}</span>
+          <span style="font-size:13px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;max-width:186px;overflow:hidden;text-overflow:ellipsis">{{ contextLabel }}</span>
+          <span style="display:inline-flex;color:var(--gph-300);transition:transform .2s ease;transform:rotate({{ chipRot }})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+        </button>
+        <span style="width:1px;height:20px;background:var(--border);flex:none;margin:0 2px"></span>
+        <div onClick="{{ onSearchFocus }}" style="flex:1;min-width:60px;display:flex;align-items:center;gap:8px;height:40px;cursor:text">
+          <span style="display:inline-flex;color:var(--text-tertiary);flex:none">{{ ic.search }}</span>
+          <input ref="{{ searchRef }}" value="{{ search }}" onInput="{{ onSearch }}" onFocus="{{ onSearchFocus }}" placeholder="{{ t.searchPh }}" style="flex:1;min-width:0;height:34px;border:none;outline:none;background:transparent;font-family:var(--font-sans);font-size:13.5px;color:var(--text-primary)">
+        </div>
+        <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ onClearSearch }}" class="ib-iconbtn ib-iconbtn--sm" style="flex:none">{{ ic.x }}</button>
+        </sc-if>
+        <sc-if value="{{ noQuery }}" hint-placeholder-val="{{ true }}">
+          <span style="flex:none;font-family:var(--font-mono);font-size:10px;letter-spacing:.04em;color:var(--text-tertiary);border:1px solid var(--border);border-radius:4px;padding:2px 5px">{{ t.islandKey }}</span>
+        </sc-if>
+        <span style="width:1px;height:20px;background:var(--border);flex:none;margin:0 2px"></span>
+        <div style="display:flex;align-items:center;gap:7px;flex:none">
+          <span title="{{ t.doShort }}" style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11px;color:var(--teal-600)"><span style="position:relative;width:7px;height:7px;flex:none"><span style="position:absolute;inset:0;border-radius:50%;background:var(--signal)"></span><span style="position:absolute;inset:0;border-radius:50%;background:var(--signal);animation:livePulse 1.8s ease-out infinite"></span></span>{{ liveCount }}</span>
+          <button onClick="{{ onNavBlocked }}" title="{{ t.blShort }}" style="{{ blockedChipStyle }}">{{ blockedCount }}</button>
+          <div style="width:26px;height:26px;border-radius:50%;background:var(--gph-700);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;flex:none">{{ userInitials }}</div>
+        </div>
+      </div>
+
+      <sc-if value="{{ isNavOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="border-top:1px solid var(--border);padding:9px;max-height:62vh;overflow:auto;animation:islandDrop .22s cubic-bezier(.22,1,.36,1)">
+          <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);padding:5px 10px 7px">{{ t.islandGoTo }}</div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <button onClick="{{ onNavDash }}" style="{{ islandDashStyle }}" style-hover="background:var(--surface-sunken)"><span style="display:inline-flex;color:var(--text-tertiary)">{{ ic.dashboard }}</span><span style="font-size:13.5px;font-weight:500">{{ t.navDashboard }}</span></button>
+            <button onClick="{{ onNavWf }}" style="{{ islandWfStyle }}" style-hover="background:var(--surface-sunken)"><span style="display:inline-flex;color:var(--text-tertiary)">{{ ic.workflow }}</span><span style="font-size:13.5px;font-weight:500">{{ t.navWorkflows }}</span></button>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);padding:14px 10px 7px;border-top:1px solid var(--border-faint);margin-top:9px">{{ t.islandWfList }}</div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ islandWfs }}" as="w" hint-placeholder-count="4">
+              <button onClick="{{ w.open }}" style="{{ w.style }}" style-hover="background:var(--surface-sunken)">
+                <div style="width:22px;height:22px;border-radius:50%;background:{{ w.color }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:600;flex:none">{{ w.initials }}</div>
+                <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ w.name }}</span>
+                <sc-if value="{{ w.hasBlocked }}" hint-placeholder-val="{{ false }}"><span style="font-family:var(--font-mono);font-size:10px;color:var(--warn);background:var(--warn-bg);border-radius:4px;padding:1px 5px;flex:none">{{ w.blocked }} {{ t.blShort }}</span></sc-if>
+                <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-secondary);flex:none">{{ w.value }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSearchOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="border-top:1px solid var(--border);padding:9px;max-height:62vh;overflow:auto;animation:islandDrop .22s cubic-bezier(.22,1,.36,1)">
+          <sc-if value="{{ noQuery }}" hint-placeholder-val="{{ true }}">
+            <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);padding:5px 10px 7px">{{ t.islandAttention }}</div>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <sc-for list="{{ attention }}" as="r" hint-placeholder-count="3">
+                <button onClick="{{ r.open }}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px;border:none;border-radius:var(--radius-md);background:transparent;cursor:pointer;font-family:var(--font-sans);color:var(--text-primary)" style-hover="background:var(--surface-sunken)">
+                  <span style="width:7px;height:7px;border-radius:50%;background:{{ r.dot }};flex:none"></span>
+                  <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.title }}</span>
+                  <span style="font-size:12px;color:var(--text-tertiary);flex:none;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.wf }}</span>
+                  <span style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary);flex:none">{{ r.status }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);padding:12px 10px 4px;border-top:1px solid var(--border-faint);margin-top:9px">{{ t.islandHint }}</div>
+          </sc-if>
+          <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ hasResWfs }}" hint-placeholder-val="{{ true }}">
+              <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);padding:5px 10px 7px">{{ t.navWorkflows }}</div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ resWfs }}" as="w" hint-placeholder-count="2">
+                  <button onClick="{{ w.open }}" style="{{ w.style }}" style-hover="background:var(--surface-sunken)">
+                    <div style="width:22px;height:22px;border-radius:50%;background:{{ w.color }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:600;flex:none">{{ w.initials }}</div>
+                    <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ w.name }}</span>
+                    <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-secondary);flex:none">{{ w.value }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ hasResItems }}" hint-placeholder-val="{{ true }}">
+              <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);padding:14px 10px 7px">{{ t.islandItems }}</div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ resItems }}" as="r" hint-placeholder-count="3">
+                  <button onClick="{{ r.open }}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px;border:none;border-radius:var(--radius-md);background:transparent;cursor:pointer;font-family:var(--font-sans);color:var(--text-primary)" style-hover="background:var(--surface-sunken)">
+                    <span style="width:7px;height:7px;border-radius:50%;background:{{ r.dot }};flex:none"></span>
+                    <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.title }}</span>
+                    <span style="font-size:12px;color:var(--text-tertiary);flex:none;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.wf }}</span>
+                    <span style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary);flex:none">{{ r.status }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:18px 10px;font-size:13px;color:var(--text-tertiary)">{{ t.islandNone }}</div>
+            </sc-if>
+          </sc-if>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+
+
+
+    <div style="height:100%;overflow:auto;background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);background-size:28px 28px">
+      <div style="max-width:1360px;margin:0 auto;padding:84px 24px 60px">
+
+        <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+          <section style="display:grid;grid-template-columns:1.15fr 1fr;gap:16px;margin-bottom:24px">
+            <div class="ib-card demo-hero" style="padding:22px 24px;display:flex;flex-direction:column">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.heroLabel }}</span>
+                <button onClick="{{ onHeroValue }}" title="{{ t.valueTitle }}" style="display:inline-flex;align-items:center;gap:4px;background:var(--accent-quiet);color:var(--accent);border:none;border-radius:var(--radius-sm);padding:2px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;cursor:pointer">{{ ic.info13 }}{{ t.estimated }}</button>
+              </div>
+              <div style="font-family:var(--font-mono);font-size:52px;font-weight:500;letter-spacing:-.02em;line-height:1;margin:14px 0 6px">{{ heroValue }}</div>
+              <div style="font-size:14px;color:var(--text-secondary)">{{ heroSub }}</div>
+              <div style="display:flex;gap:10px;margin-top:20px;padding-top:18px;border-top:1px solid var(--border-faint)">
+                <sc-for list="{{ heroCounts }}" as="c" hint-placeholder-count="4">
+                  <div style="flex:1;display:flex;flex-direction:column;gap:5px">
+                    <div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:{{ c.color }}"></span><span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-tertiary)">{{ c.label }}</span></div>
+                    <span style="font-family:var(--font-mono);font-size:22px;font-weight:500;color:var(--text-primary)">{{ c.value }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="ib-card" style="padding:18px 22px;display:flex;flex-direction:column">
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.trendTitle }}</span>
+                <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">{{ t.trendSub }}</span>
+              </div>
+              <div style="flex:1;display:flex;align-items:flex-end;gap:16px;padding-top:22px;min-height:172px">
+                <sc-for list="{{ trend }}" as="b" hint-placeholder-count="6">
+                  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px;height:150px">
+                    <div style="font-family:var(--font-mono);font-size:11px;color:{{ b.labelColor }}">{{ b.val }}</div>
+                    <div style="width:100%;max-width:38px;border-radius:4px 4px 2px 2px;background:{{ b.color }};height:{{ b.h }}"></div>
+                    <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)">{{ b.month }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ isWorkflowDetail }}" hint-placeholder-val="{{ false }}">
+          <section style="margin-bottom:24px">
+            <button onClick="{{ onNavWf }}" style="display:inline-flex;align-items:center;gap:5px;background:none;border:none;color:var(--text-secondary);font-family:var(--font-sans);font-size:13px;cursor:pointer;padding:0;margin-bottom:14px">{{ ic.back }}{{ t.backToWorkflows }}</button>
+            <div class="ib-card" style="padding:24px">
+              <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+                <div style="flex:1;min-width:280px">
+                  <h2 style="margin:0 0 6px;font-size:22px;font-weight:600;letter-spacing:-.01em">{{ wfDetail.name }}</h2>
+                  <p style="margin:0;font-size:14px;color:var(--text-secondary);max-width:60ch;line-height:1.5">{{ wfDetail.purpose }}</p>
+                  <div style="display:flex;align-items:center;gap:9px;margin-top:16px">
+                    <div style="width:30px;height:30px;border-radius:50%;background:{{ wfDetail.avatarColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">{{ wfDetail.initials }}</div>
+                    <div style="line-height:1.2"><div style="font-size:13px;font-weight:500">{{ wfDetail.persona }}</div><div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.wfAssignee }}</div></div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:28px">
+                  <div style="display:flex;flex-direction:column;gap:5px">
+                    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.heroLabel }}</span>
+                    <span style="font-family:var(--font-mono);font-size:28px;font-weight:500">{{ wfDetail.value }}</span>
+                    <button onClick="{{ wfDetail.onValue }}" style="text-align:left;background:none;border:none;padding:0;color:var(--accent);font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;cursor:pointer">{{ t.estimated }} ·</button>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:5px">
+                    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.wfCompleted }}</span>
+                    <span style="font-family:var(--font-mono);font-size:28px;font-weight:500">{{ wfDetail.done }}</span>
+                  </div>
+                </div>
+              </div>
+              <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border-faint)">
+                <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.wfProcess }}</span>
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px">
+                  <sc-for list="{{ wfDetail.steps }}" as="s" hint-placeholder-count="5">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div style="display:flex;align-items:center;gap:8px;background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 12px"><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">{{ s.n }}</span><span style="font-size:13px;font-weight:500">{{ s.label }}</span></div>
+                      <sc-if value="{{ s.arrow }}" hint-placeholder-val="{{ true }}"><span style="color:var(--gph-300)">{{ ic.arrowRight }}</span></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ isWorkflows }}" hint-placeholder-val="{{ false }}">
+          <section>
+            <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:16px">
+              <h2 style="margin:0;font-size:16px;font-weight:600">{{ t.catalogueTitle }}</h2>
+              <span style="font-size:13px;color:var(--text-tertiary)">{{ t.catalogueSub }}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+              <sc-for list="{{ workflows }}" as="w" hint-placeholder-count="8">
+                <div class="ib-card ib-card--hover" onClick="{{ w.open }}" style="padding:20px;cursor:pointer;display:flex;flex-direction:column;gap:14px">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                    <div><h3 style="margin:0 0 4px;font-size:15px;font-weight:600">{{ w.name }}</h3><p style="margin:0;font-size:13px;color:var(--text-secondary);line-height:1.45">{{ w.purpose }}</p></div>
+                    <span style="color:var(--gph-300);flex:none">{{ ic.chevron }}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div style="width:24px;height:24px;border-radius:50%;background:{{ w.avatarColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">{{ w.initials }}</div>
+                    <span style="font-size:12px;color:var(--text-secondary)">{{ w.persona }}</span>
+                  </div>
+                  <div style="display:flex;align-items:flex-end;justify-content:space-between;padding-top:14px;border-top:1px solid var(--border-faint)">
+                    <div style="display:flex;flex-direction:column;gap:3px"><span style="font-family:var(--font-mono);font-size:22px;font-weight:500">{{ w.value }}</span><span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.heroLabel }}</span></div>
+                    <div style="display:flex;gap:12px">
+                      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-family:var(--font-mono);font-size:14px;color:var(--signal)">{{ w.inProgress }}</span><span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.doShort }}</span></div>
+                      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-family:var(--font-mono);font-size:14px;color:{{ w.blockedColor }}">{{ w.blocked }}</span><span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.blShort }}</span></div>
+                      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-family:var(--font-mono);font-size:14px;color:var(--ok)">{{ w.done }}</span><span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.dnShort }}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ showBoard }}" hint-placeholder-val="{{ true }}">
+          <section>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+              <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary);margin-right:2px">{{ t.filtersLabel }}</span>
+              <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}"><span style="position:relative;display:inline-flex;align-items:center"><select class="ib-select" style="width:auto;height:34px;font-size:13px;background-image:none;padding-right:30px" value="{{ filterWf }}" onChange="{{ onFilterWf }}"><option value="all">{{ t.allWorkflows }}</option><sc-for list="{{ wfOptions }}" as="o" hint-placeholder-count="8"><option value="{{ o.key }}">{{ o.name }}</option></sc-for></select><span style="position:absolute;right:9px;top:0;bottom:0;display:flex;align-items:center;pointer-events:none;color:var(--text-tertiary)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></span></sc-if>
+              <span style="position:relative;display:inline-flex;align-items:center"><select class="ib-select" style="width:auto;height:34px;font-size:13px;background-image:none;padding-right:30px" value="{{ filterPersona }}" onChange="{{ onFilterPersona }}"><option value="all">{{ t.allPersonas }}</option><sc-for list="{{ personaOptions }}" as="p" hint-placeholder-count="8"><option value="{{ p.name }}">{{ p.name }}</option></sc-for></select><span style="position:absolute;right:9px;top:0;bottom:0;display:flex;align-items:center;pointer-events:none;color:var(--text-tertiary)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></span>
+              <span style="position:relative;display:inline-flex;align-items:center"><select class="ib-select" style="width:auto;height:34px;font-size:13px;background-image:none;padding-right:30px" value="{{ dateRange }}" onChange="{{ onDateRange }}"><option value="today">{{ t.today }}</option><option value="week">{{ t.thisWeek }}</option><option value="month">{{ t.thisMonth }}</option></select><span style="position:absolute;right:9px;top:0;bottom:0;display:flex;align-items:center;pointer-events:none;color:var(--text-tertiary)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></span>
+              <div style="flex:1"></div>
+              <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">{{ boardCount }}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:start">
+              <sc-for list="{{ columns }}" as="col" hint-placeholder-count="4">
+                <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;padding:2px 4px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:{{ col.color }}"></span>
+                    <span style="font-size:13px;font-weight:600">{{ col.title }}</span>
+                    <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);background:var(--surface-sunken);border-radius:var(--radius-sm);padding:1px 6px">{{ col.count }}</span>
+                  </div>
+                  <sc-for list="{{ col.items }}" as="card" hint-placeholder-count="3">
+                    <div class="ib-card ib-card--hover" onClick="{{ card.open }}" style="padding:13px 14px;cursor:pointer;display:flex;flex-direction:column;gap:9px;border-left:3px solid {{ card.edge }}">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ card.wfLabel }}</span>
+                        <span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);flex:none">{{ card.srcIcon }}{{ card.srcLabel }}</span>
+                      </div>
+                      <div style="font-size:13.5px;font-weight:600;line-height:1.3;letter-spacing:-.01em">{{ card.title }}</div>
+                      <sc-if value="{{ card.isInProgress }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;align-items:center;gap:7px;background:var(--signal-quiet);border-radius:var(--radius-sm);padding:6px 8px">
+                          <span style="position:relative;width:7px;height:7px;flex:none"><span style="position:absolute;inset:0;border-radius:50%;background:var(--signal)"></span><span style="position:absolute;inset:0;border-radius:50%;background:var(--signal);animation:livePulse 1.8s ease-out infinite"></span></span>
+                          <span style="font-size:12px;color:var(--teal-600);font-weight:500">{{ card.step }}</span>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ card.isBlocked }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;align-items:flex-start;gap:7px;background:var(--warn-bg);border-radius:var(--radius-sm);padding:6px 8px">
+                          <span style="color:var(--warn);margin-top:1px;flex:none">{{ ic.alert14 }}</span>
+                          <div style="line-height:1.3"><span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);display:block">{{ card.blockerType }}</span><span style="font-size:12px;color:var(--text-primary);font-weight:500">{{ card.blockerTitle }}</span></div>
+                        </div>
+                      </sc-if>
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                          <div style="width:20px;height:20px;border-radius:50%;background:{{ card.avatarColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex:none">{{ card.initials }}</div>
+                          <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ card.persona }}</span>
+                        </div>
+                        <span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);flex:none">{{ card.timeIcon }}{{ card.time }}</span>
+                      </div>
+                      <sc-if value="{{ card.showValue }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11px;color:var(--ok);border-top:1px solid var(--border-faint);padding-top:8px">{{ ic.value13 }}<span>{{ card.value }}</span><span style="color:var(--text-tertiary);font-size:9px;letter-spacing:.05em;text-transform:uppercase">{{ t.estimated }}</span></div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                  <sc-if value="{{ col.empty }}" hint-placeholder-val="{{ false }}"><div style="border:1px dashed var(--border);border-radius:var(--radius-md);padding:18px;text-align:center;font-size:12px;color:var(--text-tertiary)">{{ t.emptyCol }}</div></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+          <section style="margin-top:32px">
+            <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
+              <h2 style="margin:0;font-size:16px;font-weight:600">{{ t.summariesTitle }}</h2>
+              <button onClick="{{ onNavWf }}" style="background:none;border:none;color:var(--accent);font-size:13px;cursor:pointer;padding:0">{{ t.viewAll }}</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+              <sc-for list="{{ summaries }}" as="w" hint-placeholder-count="4">
+                <div class="ib-card ib-card--hover" onClick="{{ w.open }}" style="padding:16px 18px;cursor:pointer;display:flex;flex-direction:column;gap:10px">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <div style="width:26px;height:26px;border-radius:50%;background:{{ w.avatarColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">{{ w.initials }}</div>
+                    <h3 style="margin:0;font-size:14px;font-weight:600">{{ w.name }}</h3>
+                  </div>
+                  <p style="margin:0;font-size:12.5px;color:var(--text-secondary);line-height:1.45">{{ w.purpose }}</p>
+                  <div style="display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--border-faint)">
+                    <div style="display:flex;align-items:baseline;gap:8px"><span style="font-family:var(--font-mono);font-size:18px;font-weight:500">{{ w.value }}</span><span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.estimated }}</span></div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <span style="font-family:var(--font-mono);font-size:11px;color:var(--signal)">{{ w.inProgress }} {{ t.doShort }}</span><span style="color:var(--gph-200)">·</span>
+                      <span style="font-family:var(--font-mono);font-size:11px;color:{{ w.blockedColor }}">{{ w.blocked }} {{ t.blShort }}</span><span style="color:var(--gph-200)">·</span>
+                      <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary)">{{ w.done }} {{ t.dnShort }}</span>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+
+      </div>
+  </div>
+
+  <sc-if value="{{ panelOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ item.onClose }}" style="position:fixed;inset:0;background:rgba(8,11,17,.42);animation:scrimIn .18s ease-out;z-index:40"></div>
+    <div style="position:fixed;top:0;right:0;bottom:0;width:460px;max-width:92vw;background:var(--surface);border-left:1px solid var(--border);box-shadow:var(--shadow-xl);z-index:41;display:flex;flex-direction:column;animation:panelIn .22s cubic-bezier(.22,1,.36,1)">
+      <div style="flex:none;display:flex;align-items:flex-start;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border)">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+            <span style="{{ item.statusBadgeStyle }}">{{ item.statusLabel }}</span>
+            <button onClick="{{ item.onOpenWorkflow }}" title="{{ t.viewWorkflowTip }}" style="display:inline-flex;align-items:center;gap:4px;background:none;border:none;padding:0;cursor:pointer;font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)" style-hover="text-decoration:underline">{{ item.wfLabel }}{{ ic.arrow11 }}</button>
+          </div>
+          <h2 style="margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em;line-height:1.3">{{ item.title }}</h2>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+            <div style="width:22px;height:22px;border-radius:50%;background:{{ item.avatarColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">{{ item.initials }}</div>
+            <span style="font-size:12px;color:var(--text-secondary)">{{ item.persona }}</span>
+            <span style="color:var(--gph-300)">·</span>
+            <span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">{{ item.srcIcon }}{{ item.srcLabel }}</span>
+          </div>
+        </div>
+        <button onClick="{{ item.onClose }}" class="ib-iconbtn ib-iconbtn--sm">{{ ic.x }}</button>
+      </div>
+
+      <div style="flex:1;overflow:auto;padding:20px">
+
+        <sc-if value="{{ item.isBlocked }}" hint-placeholder-val="{{ false }}">
+          <div style="background:var(--warn-bg);border:1px solid var(--warn);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:20px">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px"><span style="color:var(--warn)">{{ ic.alert }}</span><span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--warn);font-weight:600">{{ item.blockerType }}</span></div>
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ item.blockerTitle }}</div>
+            <div style="font-size:13px;color:var(--text-secondary);line-height:1.5">{{ item.blockerBody }}</div>
+          </div>
+          <sc-if value="{{ item.blockerResolved }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:8px;background:var(--signal-quiet);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:20px"><span style="color:var(--teal-600)">{{ ic.check }}</span><span style="font-size:13px;color:var(--teal-600);font-weight:500">{{ t.blockerResolvedMsg }}</span></div>
+          </sc-if>
+          <sc-if value="{{ item.showBlockerForm }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-bottom:22px">
+              <label style="font-size:13px;font-weight:500;display:block;margin-bottom:7px">{{ item.blockerPrompt }}</label>
+              <textarea value="{{ blockerInput }}" onInput="{{ item.onBlockerInput }}" placeholder="{{ item.blockerPlaceholder }}" style="width:100%;min-height:82px;resize:vertical;font-family:var(--font-sans);font-size:14px;color:var(--text-primary);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:10px 12px"></textarea>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+                <button onClick="{{ item.onResolveBlocker }}" class="ib-btn ib-btn--primary ib-btn--md">{{ ic.send }}{{ item.blockerCta }}</button>
+                <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-tertiary)">{{ ic.teams14 }}{{ t.alsoFromTeams }}</span>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <sc-if value="{{ item.isDone }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:22px">
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secOutcome }}</span>
+            <h3 style="margin:8px 0 6px;font-size:15px;font-weight:600">{{ item.outcomeTitle }}</h3>
+            <p style="margin:0;font-size:13.5px;color:var(--text-secondary);line-height:1.55">{{ item.outcomeBody }}</p>
+          </div>
+          <div style="margin-bottom:22px">
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secResult }}</span>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+              <sc-for list="{{ item.artifacts }}" as="a" hint-placeholder-count="2">
+                <div style="display:flex;align-items:center;gap:11px;border:1px solid var(--border);border-radius:var(--radius-md);padding:11px 13px">
+                  <span style="color:var(--accent);flex:none">{{ a.icon }}</span>
+                  <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.name }}</div><div style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">{{ a.meta }}</div></div>
+                  <span style="color:var(--text-tertiary);flex:none">{{ ic.ext }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ item.hasSource }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:22px">
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secSource }}</span>
+            <div style="display:flex;align-items:center;gap:11px;border:1px solid var(--border);border-radius:var(--radius-md);padding:11px 13px;margin-top:10px;background:var(--surface-inset)">
+              <span style="color:var(--text-secondary);flex:none">{{ item.srcIcon }}</span>
+              <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">{{ item.sourceFrom }}</div><div style="font-size:12px;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ item.sourceSubject }}</div></div>
+              <a href="#" style="font-size:12px;flex:none">{{ t.openOriginal }}</a>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ item.hasFields }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:22px">
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secEvidence }}</span>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;margin-top:10px">
+              <sc-for list="{{ item.fields }}" as="f" hint-placeholder-count="4">
+                <div style="background:var(--surface);padding:9px 12px"><div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:2px">{{ f.k }}</div><div style="font-size:13px;font-weight:500">{{ f.v }}</div></div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="margin-bottom:22px">
+          <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secTimeline }}</span>
+          <div style="margin-top:12px">
+            <sc-for list="{{ item.timeline }}" as="n" hint-placeholder-count="4">
+              <div style="display:flex;gap:12px;align-items:stretch">
+                <div style="width:18px;flex:none;position:relative;display:flex;flex-direction:column;align-items:center">
+                  <sc-if value="{{ n.line }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;top:9px;bottom:-9px;width:2px;background:{{ n.lineColor }};z-index:0"></span></sc-if>
+                  <span style="flex:none;display:flex;position:relative;z-index:1">{{ n.dot }}</span>
+                </div>
+                <div style="padding-bottom:{{ n.pad }}"><div style="font-size:13px;font-weight:500;line-height:18px;color:{{ n.labelColor }}">{{ n.label }}</div><sc-if value="{{ n.time }}" hint-placeholder-val="{{ false }}"><div style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);margin-top:3px">{{ n.time }}</div></sc-if></div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <sc-if value="{{ item.showValue }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div><div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:4px">{{ t.secValue }}</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:500;color:var(--ok)">{{ item.value }}</div></div>
+            <button onClick="{{ item.onValue }}" class="ib-btn ib-btn--ghost ib-btn--sm">{{ ic.info13 }}{{ t.howEstimated }}</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ item.attempts }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:22px">
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.secAttempts }}</span>
+            <div style="display:flex;align-items:stretch;gap:8px;margin-top:12px">
+              <div style="flex:1;background:var(--surface-inset);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px"><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:4px">{{ t.fbOriginal }}</div><div style="font-size:12px;color:var(--text-secondary);line-height:1.4">{{ item.attemptOriginal }}</div></div>
+              <div style="display:flex;align-items:center;color:var(--gph-300)">{{ ic.arrowRight }}</div>
+              <div style="flex:1;background:var(--warn-bg);border:1px solid var(--warn);border-radius:var(--radius-md);padding:10px 12px"><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">{{ t.fbFeedbackWord }}</div><div style="font-size:12px;color:var(--text-primary);line-height:1.4">{{ item.attemptFeedback }}</div></div>
+              <div style="display:flex;align-items:center;color:var(--gph-300)">{{ ic.arrowRight }}</div>
+              <div style="flex:1;background:var(--signal-quiet);border:1px solid var(--signal);border-radius:var(--radius-md);padding:10px 12px"><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--teal-600);margin-bottom:4px">{{ t.fbRevised }}</div><div style="font-size:12px;color:var(--teal-600);line-height:1.4">{{ item.attemptRevised }}</div></div>
+            </div>
+          </div>
+        </sc-if>
+
+      </div>
+
+      <sc-if value="{{ item.showFeedbackFooter }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:none;border-top:1px solid var(--border);padding:16px 20px;background:var(--surface)">
+          <sc-if value="{{ item.fbStageIdle }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:10px">
+              <button onClick="{{ item.onStartFeedback }}" class="ib-btn ib-btn--secondary ib-btn--md" style="flex:1">{{ ic.flag }}{{ t.fbFlag }}</button>
+              <sc-if value="{{ item.flagged }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--teal-600)">{{ ic.check }}{{ t.fbCaptured }}</span></sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ item.fbStageForm }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><span style="font-size:13px;font-weight:600">{{ t.fbWhat }}</span><button onClick="{{ item.onCancelFeedback }}" class="ib-iconbtn ib-iconbtn--sm">{{ ic.x }}</button></div>
+              <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">
+                <sc-for list="{{ item.categories }}" as="c" hint-placeholder-count="4"><button onClick="{{ c.pick }}" style="{{ c.style }}">{{ c.label }}</button></sc-for>
+              </div>
+              <textarea value="{{ feedbackText }}" onInput="{{ item.onFeedbackText }}" placeholder="{{ t.fbExplainPh }}" style="width:100%;min-height:64px;resize:vertical;font-family:var(--font-sans);font-size:13.5px;color:var(--text-primary);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:9px 11px;margin-bottom:12px"></textarea>
+              <div style="display:flex;gap:9px">
+                <button onClick="{{ item.onSaveFeedback }}" class="ib-btn ib-btn--secondary ib-btn--md" style="flex:1">{{ t.fbSave }}</button>
+                <button onClick="{{ item.onOpenRetry }}" class="ib-btn ib-btn--primary ib-btn--md" style="flex:1">{{ ic.retry }}{{ t.fbTryAgain }}</button>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showRetry }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ item.onCancelRetry }}" style="position:fixed;inset:0;background:rgba(8,11,17,.5);animation:scrimIn .18s ease-out;z-index:50;display:flex;align-items:center;justify-content:center;padding:24px">
+      <div onClick="{{ noop }}" style="width:520px;max-width:100%;background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);animation:popIn .2s cubic-bezier(.22,1,.36,1);overflow:hidden">
+        <div style="padding:20px 22px 16px;border-bottom:1px solid var(--border)">
+          <h3 style="margin:0 0 5px;font-size:16px;font-weight:600">{{ t.retryTitle }}</h3>
+          <p style="margin:0;font-size:13px;color:var(--text-secondary);line-height:1.5">{{ item.retrySub }}</p>
+        </div>
+        <div style="padding:20px 22px">
+          <label style="font-size:13px;font-weight:500;display:block;margin-bottom:7px">{{ t.retryGuidance }}</label>
+          <textarea value="{{ guidance }}" onInput="{{ item.onGuidance }}" placeholder="{{ t.retryGuidancePh }}" style="width:100%;min-height:76px;resize:vertical;font-family:var(--font-sans);font-size:14px;color:var(--text-primary);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:10px 12px"></textarea>
+          <div style="display:flex;gap:9px;background:var(--warn-bg);border-radius:var(--radius-md);padding:11px 13px;margin-top:14px">
+            <span style="color:var(--warn);flex:none;margin-top:1px">{{ ic.alert }}</span>
+            <p style="margin:0;font-size:12.5px;color:var(--text-primary);line-height:1.5">{{ item.retryConsequence }}</p>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:9px;padding:16px 22px;border-top:1px solid var(--border);background:var(--surface-inset)">
+          <button onClick="{{ item.onCancelRetry }}" class="ib-btn ib-btn--ghost ib-btn--md">{{ t.cancel }}</button>
+          <button onClick="{{ item.onConfirmRetry }}" style="{{ item.confirmRetryStyle }}" class="ib-btn ib-btn--primary ib-btn--md">{{ ic.retry }}{{ t.retryConfirm }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showValuePopover }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ onCloseValue }}" style="position:fixed;inset:0;background:rgba(8,11,17,.5);animation:scrimIn .18s ease-out;z-index:50;display:flex;align-items:center;justify-content:center;padding:24px">
+      <div onClick="{{ noop }}" style="width:480px;max-width:100%;background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);animation:popIn .2s cubic-bezier(.22,1,.36,1);overflow:hidden">
+        <div style="padding:20px 22px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div><div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:6px">{{ t.valueTitle }}</div><div style="font-family:var(--font-mono);font-size:32px;font-weight:500;color:var(--text-primary)">{{ valuePopover.amount }}</div></div>
+          <button onClick="{{ onCloseValue }}" class="ib-iconbtn ib-iconbtn--sm">{{ ic.x }}</button>
+        </div>
+        <div style="padding:20px 22px">
+          <p style="margin:0 0 16px;font-size:13.5px;color:var(--text-secondary);line-height:1.55">{{ valuePopover.body }}</p>
+          <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px 16px">
+            <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:8px">{{ t.calcLabel }}</div>
+            <div style="font-family:var(--font-mono);font-size:13px;color:var(--text-primary);line-height:1.6">{{ valuePopover.formula }}</div>
+          </div>
+          <p style="margin:14px 0 0;font-size:12px;color:var(--text-tertiary);line-height:1.5">{{ t.valueNote }}</p>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ demo }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:70;pointer-events:none">
+      <div style="position:fixed;left:{{ demo.spotBox.x }};top:{{ demo.spotBox.y }};width:{{ demo.spotBox.w }};height:{{ demo.spotBox.h }};border-radius:14px;box-shadow:0 0 0 9999px rgba(9,12,18,.60);border:1.5px solid rgba(255,255,255,.5);opacity:{{ demo.spotOn }};transition:left .55s cubic-bezier(.22,1,.36,1),top .55s cubic-bezier(.22,1,.36,1),width .55s cubic-bezier(.22,1,.36,1),height .55s cubic-bezier(.22,1,.36,1),opacity .4s ease"></div>
+      <sc-if value="{{ demo.fullScrim }}" hint-placeholder-val="{{ false }}">
+        <div style="position:fixed;inset:0;background:rgba(9,12,18,.66);animation:scrimIn .35s ease"></div>
+      </sc-if>
+
+      <sc-if value="{{ demo.caption }}" hint-placeholder-val="{{ false }}">
+        <div style="position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:72;display:flex;flex-direction:column;align-items:center;gap:12px;animation:captionIn .4s cubic-bezier(.22,1,.36,1)">
+          <div style="display:flex;align-items:center;gap:14px;background:var(--gph-950);color:#fff;border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:14px 20px;box-shadow:0 24px 60px -12px rgba(0,0,0,.6),0 4px 12px rgba(0,0,0,.4);max-width:80vw;transition:width .3s ease">
+            <span style="font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--teal-500);background:rgba(45,212,191,.14);border-radius:6px;padding:3px 8px;flex:none">{{ demo.step }}</span>
+            <div key="{{ demo.beatKey }}" style="display:flex;flex-direction:column;gap:2px;animation:captionSwap .34s cubic-bezier(.22,1,.36,1)">
+              <span style="font-size:15px;font-weight:600;letter-spacing:-.01em">{{ demo.caption }}</span>
+              <sc-if value="{{ demo.sub }}" hint-placeholder-val="{{ false }}"><span style="font-size:12.5px;color:rgba(255,255,255,.74)">{{ demo.sub }}</span></sc-if>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:170px;height:3px;background:rgba(255,255,255,.18);border-radius:2px;overflow:hidden"><div style="height:100%;width:{{ demo.progress }};background:var(--teal-500);border-radius:2px;transition:width .5s linear"></div></div>
+            <button onClick="{{ onSkipDemo }}" style="pointer-events:auto;background:rgba(255,255,255,.08);color:rgba(255,255,255,.75);border:1px solid rgba(255,255,255,.16);border-radius:7px;font-family:var(--font-sans);font-size:12px;font-weight:500;padding:5px 12px;cursor:pointer">{{ t.demoSkip }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ demo.showCursor }}" hint-placeholder-val="{{ true }}">
+        <div style="position:fixed;left:0;top:0;z-index:74;transform:translate({{ demo.cx }},{{ demo.cy }});transition:transform .6s cubic-bezier(.5,.05,.2,1);pointer-events:none">
+          <div style="position:relative;animation:{{ demo.clickAnim }}">
+            <sc-if value="{{ demo.clicking }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;left:-2px;top:-2px;width:34px;height:34px;border-radius:50%;background:var(--accent);animation:ringOut .5s ease-out"></span></sc-if>
+            <span style="position:relative;display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))">{{ ic.cursor }}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ demo.ended }}" hint-placeholder-val="{{ false }}">
+        <div style="position:fixed;inset:0;z-index:73;display:flex;align-items:center;justify-content:center;pointer-events:auto">
+          <div style="width:440px;max-width:90vw;background:var(--surface);border-radius:16px;box-shadow:var(--shadow-xl);padding:34px 32px;text-align:center;animation:endIn .35s cubic-bezier(.22,1,.36,1)">
+            <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-tertiary)">{{ t.demoEndLabel }}</div>
+            <div style="font-family:var(--font-mono);font-size:46px;font-weight:500;letter-spacing:-.02em;margin:12px 0 8px">{{ demoTotal }}</div>
+            <p style="margin:0 auto 26px;font-size:14px;color:var(--text-secondary);line-height:1.5;max-width:32ch">{{ t.demoEndSub }}</p>
+            <div style="display:flex;gap:10px;justify-content:center">
+              <button onClick="{{ onSkipDemo }}" class="ib-btn ib-btn--ghost ib-btn--md">{{ t.demoClose }}</button>
+              <button onClick="{{ onReplayDemo }}" class="ib-btn ib-btn--primary ib-btn--md">{{ ic.retry }}{{ t.demoReplay }}</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;bottom:24px;left:24px;z-index:60;animation:toastIn .22s cubic-bezier(.22,1,.36,1)">
+      <div class="ib-toast ib-toast--ok"><span class="ib-toast__icon">{{ ic.check }}</span><div><div class="ib-toast__title">{{ toast.title }}</div><div class="ib-toast__msg">{{ toast.msg }}</div></div></div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;language&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;en&quot;,&quot;pt&quot;],&quot;default&quot;:&quot;pt&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Localization&quot;},&quot;userName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Pedro Santos&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Signed-in user&quot;},&quot;companyName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;XBS Log&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Signed-in user&quot;}}">
+const ICONS = {
+  mark:'<path d="M4 5h5l3 4"/><path d="M4 12h6"/><path d="M4 19h5l3-4"/><path d="M12 9l4 3-4 3"/><circle cx="18" cy="12" r="2.4"/>',
+  dashboard:'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  workflow:'<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  mail:'<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  teams:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  api:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" x2="15.4" y1="13.5" y2="17.5"/><line x1="15.4" x2="8.6" y1="6.5" y2="10.5"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  checkc:'<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  chevron:'<path d="m9 18 6-6-6-6"/>',
+  back:'<path d="m15 18-6-6 6-6"/>',
+  x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  ext:'<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/>',
+  file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  flag:'<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
+  retry:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  send:'<path d="M14.54 21.69a.5.5 0 0 0 .94-.02l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.02.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/>',
+  arrow:'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  value:'<path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  sheet:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/>',
+  circle:'<circle cx="12" cy="12" r="9"/>',
+  play:'<polygon points="6 3 20 12 6 21 6 3"/>',
+  cursor:'<path d="M4 3l15 6.5-6.2 2.2L9 18z" fill="#0b0e14" stroke="#fff" stroke-width="1.4"/>'
+};
+function ic(name, size, stroke){
+  size = size || 18; stroke = stroke || 1.75;
+  return React.createElement('span', {style:{display:'inline-flex',width:size+'px',height:size+'px',flex:'none'}, dangerouslySetInnerHTML:{__html:'<svg viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="'+stroke+'" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}});
+}
+const SRC = {
+  outlook:{icon:'mail', en:'Outlook', pt:'Outlook'},
+  teams:{icon:'teams', en:'Teams', pt:'Teams'},
+  api:{icon:'api', en:'API', pt:'API'},
+  schedule:{icon:'clock', en:'Scheduled', pt:'Agendado'}
+};
+const P = {
+  Marco:{c:'#1666E0', i:'MA'}, Sofia:{c:'#0FB5BD', i:'SO'}, Nuno:{c:'#4A6B87', i:'NU'},
+  Ana:{c:'#2FA968', i:'AN'}, Leo:{c:'#D9952A', i:'LE'}, Rita:{c:'#E0533D', i:'RI'},
+  Tomas:{c:'#2C4258', i:'TO'}, Beatriz:{c:'#0A8E96', i:'BE'}
+};
+const PNAME = { Tomas:{en:'Tomás', pt:'Tomás'} };
+const T = {
+  en:{
+    tagline:'Operational intelligence', navDashboard:'Dashboard', navWorkflows:'Workflows',
+    islandGoTo:'Go to', islandWfList:'Workflows', islandItems:'Work items', islandAttention:'Needs your attention', islandNone:'No matches', islandHint:'Search by customer, workflow, agent or source', islandKey:'\u2318K',
+    searchPh:'Search customer, document, source…', heroLabel:'Estimated business value created',
+    estimated:'estimated', trendTitle:'Business value created', trendSub:'Last 6 months',
+    filtersLabel:'View', allWorkflows:'All workflows', allPersonas:'All agents',
+    today:'Today', thisWeek:'This week', thisMonth:'This month',
+    summariesTitle:'Workflows', viewAll:'View all', catalogueTitle:'Workflows',
+    catalogueSub:'Each workflow is a repeatable business process run by an agent.',
+    doShort:'in prog.', blShort:'blocked', dnShort:'done',
+    backToWorkflows:'Workflows', wfAssignee:'Agent', wfCompleted:'Completed this month', wfProcess:'Process',
+    secOutcome:'Outcome', secResult:'Result & artifacts', secSource:'Original source', secEvidence:'Extracted details',
+    secTimeline:'Timeline', secValue:'Estimated value created', secAttempts:'Attempt history',
+    openOriginal:'Open original', howEstimated:'How estimated', emptyCol:'No items',
+    alsoFromTeams:'Also resolvable from Teams', blockerResolvedMsg:'Response sent · returning to In progress',
+    fbFlag:'Result needs improvement', fbWhat:'What was wrong?', fbExplainPh:'Add an explanation or corrected result (optional)',
+    fbSave:'Save feedback', fbTryAgain:'Try again', fbCaptured:'Feedback captured',
+    fbOriginal:'Original attempt', fbFeedbackWord:'Feedback', fbRevised:'Revised attempt',
+    retryTitle:'Start a revised attempt?', retryGuidance:'What should be done differently?',
+    retryGuidancePh:'Give actionable guidance for the new attempt (required)',
+    retryConfirm:'Start revised attempt', cancel:'Cancel',
+    valueTitle:'How this is estimated', calcLabel:'Calculation',
+    valueNote:'Configured through your workflow value model. Counts only work meeting the completion rule.',
+    catIncorrect:'Incorrect classification', catMissing:'Missing information', catWrong:'Wrong action', catPoor:'Poor output',
+    tSaved:'Feedback captured', tSavedMsg:'Saved to the improvement trace for this work item.',
+    tRetry:'Revised attempt started', tRetryMsg:'The work item moved back to In progress. Original outcome preserved.',
+    tResolved:'Response sent', tResolvedMsg:'The work item returned to In progress and the agent resumed.',
+    kReceived:'Received', kStarted:'Started', kWaiting:'Waiting', kCompleted:'Completed',
+    demoBtn:'Demo', demoSkip:'Skip', demoEndLabel:'Business value created this month', demoReplay:'Replay', demoClose:'Close',
+    demoEndSub:'Every workflow, watched and measured in one operational view.',
+    viewWorkflowTip:'Open workflow'
+  },
+  pt:{
+    tagline:'Inteligência operacional', navDashboard:'Painel', navWorkflows:'Fluxos de trabalho',
+    islandGoTo:'Ir para', islandWfList:'Fluxos de trabalho', islandItems:'Itens de trabalho', islandAttention:'Precisa da sua atenção', islandNone:'Sem resultados', islandHint:'Procure por cliente, fluxo, agente ou origem', islandKey:'\u2318K',
+    searchPh:'Procurar cliente, documento, origem…', heroLabel:'Valor de negócio estimado criado',
+    estimated:'estimado', trendTitle:'Valor de negócio criado', trendSub:'Últimos 6 meses',
+    filtersLabel:'Vista', allWorkflows:'Todos os fluxos', allPersonas:'Todos os agentes',
+    today:'Hoje', thisWeek:'Esta semana', thisMonth:'Este mês',
+    summariesTitle:'Fluxos de trabalho', viewAll:'Ver todos', catalogueTitle:'Fluxos de trabalho',
+    catalogueSub:'Cada fluxo é um processo de negócio repetível executado por um agente.',
+    doShort:'em curso', blShort:'bloq.', dnShort:'concl.',
+    backToWorkflows:'Fluxos de trabalho', wfAssignee:'Agente', wfCompleted:'Concluídos este mês', wfProcess:'Processo',
+    secOutcome:'Resultado', secResult:'Resultado e artefactos', secSource:'Origem original', secEvidence:'Dados extraídos',
+    secTimeline:'Cronologia', secValue:'Valor estimado criado', secAttempts:'Histórico de tentativas',
+    openOriginal:'Abrir original', howEstimated:'Como é estimado', emptyCol:'Sem itens',
+    alsoFromTeams:'Também resolúvel no Teams', blockerResolvedMsg:'Resposta enviada · a voltar para Em curso',
+    fbFlag:'Resultado precisa de melhoria', fbWhat:'O que estava errado?', fbExplainPh:'Adicione uma explicação ou resultado corrigido (opcional)',
+    fbSave:'Guardar feedback', fbTryAgain:'Tentar de novo', fbCaptured:'Feedback registado',
+    fbOriginal:'Tentativa original', fbFeedbackWord:'Feedback', fbRevised:'Nova tentativa',
+    retryTitle:'Iniciar uma nova tentativa?', retryGuidance:'O que deve ser feito de forma diferente?',
+    retryGuidancePh:'Dê orientação concreta para a nova tentativa (obrigatório)',
+    retryConfirm:'Iniciar nova tentativa', cancel:'Cancelar',
+    valueTitle:'Como é estimado', calcLabel:'Cálculo',
+    valueNote:'Configurado através do seu modelo de valor. Conta apenas trabalho que cumpre a regra de conclusão.',
+    catIncorrect:'Classificação incorreta', catMissing:'Informação em falta', catWrong:'Ação errada', catPoor:'Resultado fraco',
+    tSaved:'Feedback registado', tSavedMsg:'Guardado no registo de melhoria deste item de trabalho.',
+    tRetry:'Nova tentativa iniciada', tRetryMsg:'O item voltou para Em curso. Resultado original preservado.',
+    tResolved:'Resposta enviada', tResolvedMsg:'O item voltou para Em curso e o agente retomou o trabalho.',
+    kReceived:'Recebido', kStarted:'Iniciado', kWaiting:'Em espera', kCompleted:'Concluído',
+    demoBtn:'Demo', demoSkip:'Saltar', demoEndLabel:'Valor de negócio criado este mês', demoReplay:'Repetir', demoClose:'Fechar',
+    demoEndSub:'Cada fluxo de trabalho, monitorizado e medido numa só vista operacional.',
+    viewWorkflowTip:'Abrir fluxo de trabalho'
+  }
+};
+const BTYPE = {
+  info:{en:'Information required', pt:'Informação necessária'},
+  decision:{en:'Decision required', pt:'Decisão necessária'},
+  approval:{en:'Approval required', pt:'Aprovação necessária'},
+  artifact:{en:'Artifact required', pt:'Artefacto necessário'}
+};
+const WF = [
+  {key:'quote', name:{en:'Quotation Processing', pt:'Processamento de cotações'}, persona:'Marco',
+   purpose:{en:'Marco processes inbound quotation requests and updates the pricing workbook.', pt:'O Marco processa pedidos de cotação recebidos e atualiza a folha de preços.'},
+   value:18420, todo:5, done:146,
+   steps:[{en:'Request received',pt:'Pedido recebido'},{en:'Requirements extracted',pt:'Requisitos extraídos'},{en:'Checking pricing information',pt:'A verificar preços'},{en:'Quotation drafted',pt:'Cotação preparada'},{en:'Sent to customer',pt:'Enviada ao cliente'}],
+   basis:{en:'146 completed requests × 18 minutes manual work at €32/hour', pt:'146 pedidos concluídos × 18 minutos de trabalho manual a 32 €/hora'}},
+  {key:'invoice', name:{en:'Invoice Reconciliation', pt:'Reconciliação de faturas'}, persona:'Sofia',
+   purpose:{en:'Sofia matches carrier invoices to shipments and posts discrepancies to the ledger.', pt:'A Sofia concilia faturas de transportadoras com envios e regista discrepâncias no razão.'},
+   value:14200, todo:3, done:208,
+   steps:[{en:'Invoice received',pt:'Fatura recebida'},{en:'Line items extracted',pt:'Linhas extraídas'},{en:'Matched to shipment',pt:'Associada ao envio'},{en:'Discrepancies checked',pt:'Discrepâncias verificadas'},{en:'Posted to ledger',pt:'Registada no razão'}],
+   basis:{en:'208 reconciliations × 12 minutes manual work at €30/hour', pt:'208 reconciliações × 12 minutos de trabalho manual a 30 €/hora'}},
+  {key:'customs', name:{en:'Customs Documentation', pt:'Documentação aduaneira'}, persona:'Nuno',
+   purpose:{en:'Nuno prepares customs declarations and validates HS codes for outbound shipments.', pt:'O Nuno prepara declarações aduaneiras e valida códigos pautais para envios de saída.'},
+   value:12880, todo:6, done:97,
+   steps:[{en:'Documents received',pt:'Documentos recebidos'},{en:'Fields extracted',pt:'Campos extraídos'},{en:'HS codes validated',pt:'Códigos pautais validados'},{en:'Declaration prepared',pt:'Declaração preparada'},{en:'Submitted to customs',pt:'Submetida à alfândega'}],
+   basis:{en:'97 declarations × 26 minutes manual work at €34/hour', pt:'97 declarações × 26 minutos de trabalho manual a 34 €/hora'}},
+  {key:'onboard', name:{en:'Customer Onboarding', pt:'Integração de clientes'}, persona:'Ana',
+   purpose:{en:'Ana verifies new shipper accounts, collects documents, and creates the customer record.', pt:'A Ana verifica novas contas de expedidor, recolhe documentos e cria o registo do cliente.'},
+   value:9640, todo:2, done:34,
+   steps:[{en:'Request received',pt:'Pedido recebido'},{en:'Company details verified',pt:'Dados da empresa verificados'},{en:'Documents collected',pt:'Documentos recolhidos'},{en:'Account created',pt:'Conta criada'},{en:'Welcome sent',pt:'Boas-vindas enviadas'}],
+   basis:{en:'34 onboardings × 55 minutes manual work at €31/hour', pt:'34 integrações × 55 minutos de trabalho manual a 31 €/hora'}},
+  {key:'track', name:{en:'Shipment Track & Trace', pt:'Rastreamento de envios'}, persona:'Leo',
+   purpose:{en:'Leo monitors shipments, confirms ETAs with carriers, and proactively updates customers.', pt:'O Leo monitoriza envios, confirma ETAs com transportadoras e atualiza clientes proativamente.'},
+   value:11300, todo:8, done:412,
+   steps:[{en:'Shipment identified',pt:'Envio identificado'},{en:'Carrier queried',pt:'Transportadora consultada'},{en:'ETA confirmed',pt:'ETA confirmado'},{en:'Customer updated',pt:'Cliente atualizado'}],
+   basis:{en:'412 updates × 6 minutes manual work at €28/hour', pt:'412 atualizações × 6 minutos de trabalho manual a 28 €/hora'}},
+  {key:'support', name:{en:'Support Triage', pt:'Triagem de suporte'}, persona:'Rita',
+   purpose:{en:'Rita classifies inbound support messages, sets priority, and routes them to the right team.', pt:'A Rita classifica mensagens de suporte recebidas, define prioridade e encaminha-as para a equipa certa.'},
+   value:8900, todo:4, done:286,
+   steps:[{en:'Message received',pt:'Mensagem recebida'},{en:'Intent classified',pt:'Intenção classificada'},{en:'Priority set',pt:'Prioridade definida'},{en:'Routed to team',pt:'Encaminhada à equipa'}],
+   basis:{en:'286 messages × 7 minutes manual work at €27/hour', pt:'286 mensagens × 7 minutos de trabalho manual a 27 €/hora'}},
+  {key:'booking', name:{en:'Booking Confirmation', pt:'Confirmação de reservas'}, persona:'Tomas',
+   purpose:{en:'Tomás checks capacity, reserves vessel space, and confirms bookings with shippers.', pt:'O Tomás verifica capacidade, reserva espaço em navio e confirma reservas com expedidores.'},
+   value:10150, todo:3, done:174,
+   steps:[{en:'Request received',pt:'Pedido recebido'},{en:'Capacity checked',pt:'Capacidade verificada'},{en:'Space reserved',pt:'Espaço reservado'},{en:'Confirmation sent',pt:'Confirmação enviada'}],
+   basis:{en:'174 bookings × 14 minutes manual work at €30/hour', pt:'174 reservas × 14 minutos de trabalho manual a 30 €/hora'}},
+  {key:'claims', name:{en:'Claims Intake', pt:'Registo de reclamações'}, persona:'Beatriz',
+   purpose:{en:'Beatriz records freight claims, extracts details, and opens cases for the claims team.', pt:'A Beatriz regista reclamações de frete, extrai detalhes e abre processos para a equipa de reclamações.'},
+   value:6690, todo:2, done:41,
+   steps:[{en:'Claim received',pt:'Reclamação recebida'},{en:'Details extracted',pt:'Detalhes extraídos'},{en:'Documents checked',pt:'Documentos verificados'},{en:'Case opened',pt:'Processo aberto'}],
+   basis:{en:'41 claims × 22 minutes manual work at €33/hour', pt:'41 reclamações × 22 minutos de trabalho manual a 33 €/hora'}}
+];
+const ITEMS = [
+  // TO DO
+  {id:'t1', wf:'quote', title:'Quotation request — Baltic Cargo Group', src:'outlook', status:'todo', prog:0, time:{en:'3m ago',pt:'há 3 min'}},
+  {id:'t2', wf:'invoice', title:'Invoice reconciliation — INV-5521', src:'api', status:'todo', prog:0, time:{en:'12m ago',pt:'há 12 min'}},
+  {id:'t3', wf:'customs', title:'Customs documentation — MSKU7841203', src:'schedule', status:'todo', prog:0, time:{en:'20m ago',pt:'há 20 min'}},
+  {id:'t4', wf:'booking', title:'Booking confirmation — Halberg Metals', src:'outlook', status:'todo', prog:0, time:{en:'31m ago',pt:'há 31 min'}},
+  {id:'t5', wf:'support', title:'Support triage — Delay on order 88231', src:'teams', status:'todo', prog:0, time:{en:'44m ago',pt:'há 44 min'}},
+  // IN PROGRESS
+  {id:'p1', wf:'quote', title:'Quotation request — ACME Logistics', src:'outlook', status:'in_progress', prog:2, time:{en:'started 14m ago',pt:'iniciado há 14 min'}, detailed:true,
+   source:{from:'requests@acme-logistics.com', subject:{en:'RE: Quote — 2 × 40ft HC, Rotterdam → Lisbon', pt:'RE: Cotação — 2 × 40ft HC, Roterdão → Lisboa'}},
+   fields:[{k:{en:'Customer',pt:'Cliente'},v:'ACME Logistics'},{k:{en:'Origin',pt:'Origem'},v:'Rotterdam (NL)'},{k:{en:'Destination',pt:'Destino'},v:'Lisbon (PT)'},{k:{en:'Load',pt:'Carga'},v:'2 × 40ft HC'}]},
+  {id:'p2', wf:'track', title:'Track & trace — BL-2290-PT', src:'schedule', status:'in_progress', prog:1, time:{en:'started 6m ago',pt:'iniciado há 6 min'}},
+  {id:'p3', wf:'customs', title:'Customs documentation — TGHU4521', src:'api', status:'in_progress', prog:2, time:{en:'started 22m ago',pt:'iniciado há 22 min'}},
+  {id:'p4', wf:'invoice', title:'Invoice reconciliation — INV-5498', src:'api', status:'in_progress', prog:2, time:{en:'started 9m ago',pt:'iniciado há 9 min'}},
+  {id:'p5', wf:'booking', title:'Booking confirmation — Nordwind AG', src:'outlook', status:'in_progress', prog:1, time:{en:'started 17m ago',pt:'iniciado há 17 min'}},
+  // BLOCKED
+  {id:'b1', wf:'quote', title:'Quotation request — Northwind Freight', src:'outlook', status:'blocked', prog:1, time:{en:'2h ago',pt:'há 2 h'}, detailed:true,
+   blocker:{type:'info', title:{en:'Missing destination address', pt:'Endereço de destino em falta'},
+     body:{en:'Marco cannot finish the quotation until the delivery destination for the Hamburg shipment is provided.', pt:'O Marco não consegue concluir a cotação sem o destino de entrega do envio de Hamburgo.'},
+     prompt:{en:'Provide the destination address', pt:'Indique o endereço de destino'},
+     placeholder:{en:'e.g. Terminal Sul, Porto de Sines, 7520 Sines', pt:'ex. Terminal Sul, Porto de Sines, 7520 Sines'},
+     cta:{en:'Provide information', pt:'Fornecer informação'}},
+   source:{from:'ops@northwind-freight.com', subject:{en:'Quote request — Hamburg export', pt:'Pedido de cotação — exportação de Hamburgo'}}},
+  {id:'b2', wf:'customs', title:'Customs documentation — OOLU1180', src:'api', status:'blocked', prog:3, time:{en:'40m ago',pt:'há 40 min'},
+   blocker:{type:'approval', title:{en:'High-value declaration needs approval', pt:'Declaração de alto valor precisa de aprovação'},
+     body:{en:'Declared value exceeds €50,000 and requires a person to approve before submission to customs.', pt:'O valor declarado excede 50 000 € e requer aprovação de uma pessoa antes da submissão.'},
+     prompt:{en:'Confirm approval to submit', pt:'Confirme a aprovação para submeter'},
+     placeholder:{en:'Add an approval note (optional)', pt:'Adicione uma nota de aprovação (opcional)'},
+     cta:{en:'Approve declaration', pt:'Aprovar declaração'}}},
+  {id:'b3', wf:'onboard', title:'Customer onboarding — Northstar GmbH', src:'outlook', status:'blocked', prog:2, time:{en:'1h ago',pt:'há 1 h'},
+   blocker:{type:'artifact', title:{en:'Signed carrier agreement required', pt:'Acordo de transportadora assinado necessário'},
+     body:{en:'Ana needs the countersigned carrier agreement before the account can be created.', pt:'A Ana precisa do acordo de transportadora contra-assinado antes de criar a conta.'},
+     prompt:{en:'Upload or confirm the signed agreement', pt:'Carregue ou confirme o acordo assinado'},
+     placeholder:{en:'Paste a document link or note', pt:'Cole uma ligação ou nota do documento'},
+     cta:{en:'Confirm artifact', pt:'Confirmar artefacto'}}},
+  {id:'b4', wf:'support', title:'Support triage — Damaged pallet claim', src:'teams', status:'blocked', prog:1, time:{en:'25m ago',pt:'há 25 min'},
+   blocker:{type:'decision', title:{en:'Route to claims or operations?', pt:'Encaminhar para reclamações ou operações?'},
+     body:{en:'The message mixes a delivery complaint with a damage claim. Rita needs a person to decide the owning team.', pt:'A mensagem mistura uma reclamação de entrega com um pedido de danos. A Rita precisa que alguém decida a equipa responsável.'},
+     prompt:{en:'Choose the owning team', pt:'Escolha a equipa responsável'},
+     placeholder:{en:'e.g. Route to Claims — damage is primary', pt:'ex. Encaminhar para Reclamações — o dano é o principal'},
+     cta:{en:'Submit decision', pt:'Submeter decisão'}}},
+  // DONE
+  {id:'d1', wf:'quote', title:'Quotation request — Meridian Shipping', src:'outlook', status:'done', prog:5, time:{en:'2h ago',pt:'há 2 h'}, value:142, detailed:true,
+   outcome:{title:{en:'Quotation request processed', pt:'Pedido de cotação processado'},
+     body:{en:'Classified as pricing. Customer and shipment details were extracted, and row 184 was added to the pricing workbook.', pt:'Classificado como preços. Os dados do cliente e do envio foram extraídos e a linha 184 foi adicionada à folha de preços.'}},
+   artifacts:[{icon:'sheet', name:{en:'Pricing workbook · row 184', pt:'Folha de preços · linha 184'}, meta:{en:'Updated · Excel', pt:'Atualizada · Excel'}},{icon:'file', name:{en:'Quotation — Meridian Shipping.pdf', pt:'Cotação — Meridian Shipping.pdf'}, meta:{en:'Generated · PDF', pt:'Gerada · PDF'}}],
+   source:{from:'procurement@meridian-shipping.com', subject:{en:'Quote — 1 × 20ft, Sines → Antwerp', pt:'Cotação — 1 × 20ft, Sines → Antuérpia'}},
+   fields:[{k:{en:'Customer',pt:'Cliente'},v:'Meridian Shipping'},{k:{en:'Route',pt:'Rota'},v:'Sines → Antwerp'},{k:{en:'Load',pt:'Carga'},v:'1 × 20ft'},{k:{en:'Quoted',pt:'Cotado'},v:'€1,240'}]},
+  {id:'d2', wf:'invoice', title:'Invoice reconciliation — INV-5470', src:'api', status:'done', prog:5, time:{en:'3h ago',pt:'há 3 h'}, value:38},
+  {id:'d3', wf:'customs', title:'Customs documentation — CMAU9902', src:'api', status:'done', prog:5, time:{en:'4h ago',pt:'há 4 h'}, value:56},
+  {id:'d4', wf:'onboard', title:'Customer onboarding — Fjord Logistics', src:'outlook', status:'done', prog:5, time:{en:'5h ago',pt:'há 5 h'}, value:98},
+  {id:'d5', wf:'track', title:'Track & trace — BL-2277-PT', src:'schedule', status:'done', prog:4, time:{en:'6h ago',pt:'há 6 h'}, value:19},
+  {id:'d6', wf:'quote', title:'Quotation request — Halcyon Traders', src:'outlook', status:'done', prog:5, time:{en:'7h ago',pt:'há 7 h'}, value:131},
+  {id:'d7', wf:'support', title:'Support triage — Reroute request 77120', src:'teams', status:'done', prog:4, time:{en:'8h ago',pt:'há 8 h'}, value:23},
+  {id:'d8', wf:'booking', title:'Booking confirmation — Vega Shipping', src:'outlook', status:'done', prog:4, time:{en:'9h ago',pt:'há 9 h'}, value:44}
+];
+const COLS = [
+  {key:'todo', color:'var(--gph-300)', edge:'var(--gph-200)'},
+  {key:'in_progress', color:'var(--signal)', edge:'var(--signal)'},
+  {key:'blocked', color:'var(--warn)', edge:'var(--warn)'},
+  {key:'done', color:'var(--ok)', edge:'var(--ok)'}
+];
+const DEMOTXT = {
+  en:{ b1c:'Every operation, in one place', b1s:'Live business value across every workflow.',
+    b2c:'Watch work happen live', b2s:'Agents run real processes, step by step.',
+    b3c:'Every step, tracked in real time', b3s:'No black box — see exactly where work stands.',
+    b4c:'Clear blockers in one tap', b4s:'When an agent needs a human, it just asks.',
+    b4c2:'The agent asks a human exactly what it needs.',
+    b4ic:'Answer inline', b4is:'Reply here, or resolve it straight from Teams.',
+    b4rc:'Blocker cleared — work resumes', b4rs:'The item returns to In progress instantly.',
+    b5c:'Every run leaves a result', b5s:'Completed work, ready to inspect.',
+    b5o:'Real outputs, ready to use', b5os:'The artifacts each run produced — files, records, updates.',
+    b5t:'Triggered from anywhere', b5ts:'Email, Teams, an API, or a schedule — same workflow.',
+    b5w:'Jump to the whole workflow', b5ws:'Any run links back to the process it belongs to.',
+    b5p:'See the full process', b5ps:'Every step the agent runs, end to end.',
+    b5v:'And the value it generates', b5vs:'Measured per workflow, not guessed.',
+    b5all:'Every workflow, side by side', b5alls:'Each one owned, measured, and running.' },
+  pt:{ b1c:'Toda a operação, num só lugar', b1s:'Valor de negócio em tempo real em cada fluxo.',
+    b2c:'Veja o trabalho a acontecer', b2s:'Os agentes executam processos reais, passo a passo.',
+    b3c:'Cada passo, rastreado em tempo real', b3s:'Sem caixa negra — veja exatamente onde está o trabalho.',
+    b4c:'Resolva bloqueios num toque', b4s:'Quando um agente precisa de uma pessoa, pergunta.',
+    b4c2:'O agente pede à pessoa exatamente o que precisa.',
+    b4ic:'Responda diretamente', b4is:'Responda aqui, ou resolva a partir do Teams.',
+    b4rc:'Bloqueio resolvido — o trabalho retoma', b4rs:'O item volta para Em curso instantaneamente.',
+    b5c:'Cada execução deixa um resultado', b5s:'Trabalho concluído, pronto a inspecionar.',
+    b5o:'Resultados reais, prontos a usar', b5os:'Os artefactos que cada execução produziu — ficheiros, registos, atualizações.',
+    b5t:'Acionado a partir de qualquer lugar', b5ts:'Email, Teams, uma API ou um agendamento — o mesmo fluxo.',
+    b5w:'Salte para o fluxo completo', b5ws:'Cada execução liga ao processo a que pertence.',
+    b5p:'Veja o processo completo', b5ps:'Cada passo que o agente executa, do início ao fim.',
+    b5v:'E o valor que gera', b5vs:'Medido por fluxo, não estimado no escuro.',
+    b5all:'Todos os fluxos, lado a lado', b5alls:'Cada um com dono, medido e em funcionamento.' }
+};
+const COLT = {
+  todo:{en:'To do',pt:'A fazer'}, in_progress:{en:'In progress',pt:'Em curso'},
+  blocked:{en:'Blocked',pt:'Bloqueado'}, done:{en:'Done',pt:'Concluído'}
+};
+
+class Component extends DCLogic {
+  state = {
+    route:'dashboard', selectedWf:null, openItemId:null, lang:'en', island:null,
+    filterWf:'all', filterPersona:'all', dateRange:'week', search:'',
+    items: ITEMS.map(x=>({...x})),
+    fbStage:'idle', fbCat:null, feedbackText:'', guidance:'', blockerInput:'',
+    showRetry:false, valuePopover:null, toast:null, demo:null
+  };
+  componentWillUnmount(){ clearTimeout(this._autoIv); this.stopDemo(); }
+  q(sel){ try{return document.querySelector(sel);}catch(e){return null;} }
+  qText(sel,re){ return [...document.querySelectorAll(sel)].find(e=>re.test(e.textContent)&&e.offsetParent); }
+  setDemo(patch){ this.setState(s=>({demo:s.demo?{...s.demo,...patch}:s.demo})); }
+  sched(fn,t){ this.demoTimers=this.demoTimers||[]; this.demoTimers.push(setTimeout(()=>{ if(this.state.demo) fn(); },t*2)); }
+  componentDidMount(){ this._islandKeys=e=>{ if(e.key==='Escape'&&this.state.island) this.setState({island:null}); if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); this.setState({island:'search'}); if(this._searchRef&&this._searchRef.current) this._searchRef.current.focus(); } }; window.addEventListener('keydown',this._islandKeys); if(this.props.language && this.props.language!==this.state.lang) this.setState({lang:this.props.language}); if(this.props.autoplay){ this._autoIv=setTimeout(()=>this.startDemo(),700); } }
+  componentDidUpdate(prev){ if(this.props.language && this.props.language!==prev.language){ this.setState({lang:this.props.language}); } }
+  stopDemo(){ (this.demoTimers||[]).forEach(clearTimeout); this.demoTimers=[]; clearInterval(this._heroIv); this.unlockScroll(); this.setState({demo:null, openItemId:null, blockerInput:''}); }
+  lockScroll(){ if(this._scrollLock) return; this._scrollLock=e=>{ e.preventDefault(); }; window.addEventListener('wheel',this._scrollLock,{passive:false}); window.addEventListener('touchmove',this._scrollLock,{passive:false}); this._keyLock=e=>{ if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key)) e.preventDefault(); }; window.addEventListener('keydown',this._keyLock); }
+  unlockScroll(){ if(this._scrollLock){ window.removeEventListener('wheel',this._scrollLock); window.removeEventListener('touchmove',this._scrollLock); this._scrollLock=null; } if(this._keyLock){ window.removeEventListener('keydown',this._keyLock); this._keyLock=null; } }
+  spotEl(el,pad){ if(!el) return null; const b=el.getBoundingClientRect(); pad=pad==null?12:pad; return {x:Math.round(b.left-pad)+'px',y:Math.round(b.top-pad)+'px',w:Math.round(b.width+2*pad)+'px',h:Math.round(b.height+2*pad)+'px'}; }
+  cursorEl(el,ox,oy){ if(!el) return {}; const b=el.getBoundingClientRect(); return {cx:Math.round(b.left+(ox==null?b.width/2:ox))+'px', cy:Math.round(b.top+(oy==null?Math.min(b.height/2,28):oy))+'px'}; }
+  focusEl(el,cap,sub,step,prog,opts){ opts=opts||{}; const c=this.cursorEl(el,opts.ox,opts.oy); this.setDemo({caption:cap,sub:sub||'',step:step,progress:prog,beatKey:step, spot: opts.spot===false?null:this.spotEl(el,opts.pad), fullScrim:false, clicking:false, ...c}); }
+  clickPulse(){ this.setDemo({clicking:true, clickAnim:'cursorClick .5s ease'}); this.sched(()=>this.setDemo({clicking:false, clickAnim:'none'}),520); }
+  typeInto(el,text){ if(!el) return; el.focus(); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; let i=0; const step=()=>{ if(!this.state.demo) return; i+=2; set.call(el,text.slice(0,i)); el.dispatchEvent(new Event('input',{bubbles:true})); if(i<text.length) this.sched(step,26); }; step(); }
+  startDemo(){
+    (this.demoTimers||[]).forEach(clearTimeout); this.demoTimers=[]; clearInterval(this._heroIv); this.lockScroll();
+    const total=WF.reduce((a,w)=>a+w.value,0);
+    const lang=this.props.language||this.state.lang||'en';
+    this.setState({route:'dashboard', openItemId:null, filterWf:'all', filterPersona:'all', dateRange:'week', lang, search:'', showRetry:false, valuePopover:null, toast:null,
+      demo:{playing:true, caption:'', sub:'', step:'01', progress:'8%', spot:null, fullScrim:false, cx:'50vw', cy:'46vh', showCursor:true, clicking:false, clickAnim:'none', ended:false, heroAnim:0, beatKey:'start'}});
+    const S=(fn,t)=>this.sched(fn,t); const D=DEMOTXT[lang]||DEMOTXT.en;
+    // Beat 1 — hero value counts up
+    S(()=>{ const hero=this.q('.demo-hero'); this.focusEl(hero,D.b1c,D.b1s,'01','20%',{ox:80,oy:60,pad:14});
+      const start=performance.now(), dur=2400; clearInterval(this._heroIv);
+      this._heroIv=setInterval(()=>{ if(!this.state.demo){clearInterval(this._heroIv);return;} const p=Math.min(1,(performance.now()-start)/dur); const val=Math.round((1-Math.pow(1-p,3))*total); this.setDemo({heroAnim:val}); if(p>=1){clearInterval(this._heroIv); this.setDemo({heroAnim:null});} },40);
+    },150);
+    // Beat 2 — live in-progress card
+    S(()=>{ const card=this.qText('.ib-card',/ACME Logistics/); this.focusEl(card,D.b2c,D.b2s,'02','40%',{pad:8}); },2400);
+    S(()=>this.clickPulse(),3300);
+    S(()=>{ this.openItem('p1'); const w=(typeof window!=='undefined')?window.innerWidth:1440; const h=(typeof window!=='undefined')?window.innerHeight:900; this.setDemo({spot:{x:Math.round(w-462)+'px',y:'-2px',w:'464px',h:(h+4)+'px'},caption:D.b2c,sub:D.b2s,step:'02',progress:'48%',beatKey:'ippanel',showCursor:false}); },3450);
+    // Beat 3 — live timeline inside the expanded in-progress panel
+    S(()=>{ const sc=[...document.querySelectorAll('div')].filter(d=>{const st=getComputedStyle(d);return st.overflowY==='auto'&&d.scrollHeight>d.clientHeight+8;}).find(d=>d.getBoundingClientRect().left>440); if(sc) sc.scrollTop=sc.scrollHeight;
+      const eb=this.qText('span',/^Timeline$|^Cronologia$/); const blk=eb?eb.parentElement:null; this.setDemo({spot:this.spotEl(blk,10),caption:D.b3c,sub:D.b3s,step:'03',progress:'58%',beatKey:'timeline',showCursor:false}); },3900);
+    // Beat 4 — clear a blocker (fade the spot out during the close, then in on the blocked card)
+    S(()=>{ this.setDemo({spot:null}); },5100);
+    S(()=>{ this.closeItem(); },5450);
+    S(()=>{ const card=this.qText('.ib-card',/Northwind Freight/)||this.qText('.ib-card',/Blocked/); this.focusEl(card,D.b4c,D.b4s,'04','66%',{pad:8}); },5850);
+    S(()=>this.clickPulse(),6700);
+    S(()=>{ this.openItem('b1'); const w=(typeof window!=='undefined')?window.innerWidth:1440; const h=(typeof window!=='undefined')?window.innerHeight:900; this.setDemo({spot:{x:Math.round(w-462)+'px',y:'-2px',w:'464px',h:(h+4)+'px'},caption:D.b4c,sub:D.b4c2,step:'04',progress:'70%',beatKey:'panelopen',showCursor:false}); },6850);
+    // spotlight the blocker box inside the panel once it has slid in
+    S(()=>{ const box=this.qText('div',/Missing destination address|Endereço de destino/)||this.q('[style*="width:460px"]'); this.setDemo({spot:this.spotEl(box,10),caption:D.b4c,sub:D.b4c2,step:'04',progress:'74%'}); },7450);
+    S(()=>{ const ta=this.q('textarea'); const c=this.cursorEl(ta,40,24); this.setDemo({spot:this.spotEl(ta,8),caption:D.b4ic,sub:D.b4is,step:'04',progress:'78%',showCursor:true,...c}); this.typeInto(ta,'Terminal Sul, Porto de Sines, 7520 Sines'); },8200);
+    S(()=>{ const btn=this.qText('button',/Provide information|Fornecer informa/); const c=this.cursorEl(btn,null,18); this.setDemo({spot:this.spotEl(btn,6),...c}); },9400);
+    S(()=>this.clickPulse(),9900);
+    S(()=>{ this.resolveBlocker(); this.setDemo({caption:D.b4rc,sub:D.b4rs,step:'04',progress:'72%',beatKey:'resolved',spot:null,fullScrim:true,showCursor:false}); },10050);
+    S(()=>{ this.closeItem(); },11600);
+    // Beat 5 — drill from a completed run into its workflow
+    const panelScroll=()=>[...document.querySelectorAll('div')].filter(d=>{const st=getComputedStyle(d);return st.overflowY==='auto'&&d.scrollHeight>d.clientHeight+8;}).find(d=>d.getBoundingClientRect().left>440);
+    const secBlock=re=>{ const eb=this.qText('span',re); return eb?eb.parentElement:null; };
+    const fullPanelSpot=()=>{ const w=(typeof window!=='undefined')?window.innerWidth:1440; const h=(typeof window!=='undefined')?window.innerHeight:900; return {x:Math.round(w-462)+'px',y:'-2px',w:'464px',h:(h+4)+'px'}; };
+    S(()=>{ const card=this.qText('.ib-card',/Meridian Shipping/); this.focusEl(card,D.b5c,D.b5s,'05','78%',{pad:8}); },11900);
+    S(()=>this.clickPulse(),12600);
+    S(()=>{ this.openItem('d1'); this.setDemo({spot:fullPanelSpot(),caption:D.b5c,sub:D.b5s,step:'05',progress:'80%',beatKey:'runpanel',showCursor:false}); },12750);
+    // outputs / artifacts first
+    S(()=>{ const sc=panelScroll(); if(sc) sc.scrollTop=0; const blk=secBlock(/Result & artifacts|Resultado e artefactos/); this.setDemo({spot:this.spotEl(blk,8),caption:D.b5o,sub:D.b5os,step:'05',progress:'83%',beatKey:'artifacts'}); },13300);
+    // trigger source — many entry points
+    S(()=>{ const blk=secBlock(/Original source|Origem original/); const sc=panelScroll(); if(sc&&blk){ sc.scrollTop=Math.max(0, blk.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 90); } const b2=secBlock(/Original source|Origem original/); this.setDemo({spot:this.spotEl(b2,8),caption:D.b5t,sub:D.b5ts,step:'05',progress:'86%',beatKey:'trigger'}); },14400);
+    // jump to the workflow via the linked type
+    S(()=>{ const link=this.qText('button',/Quotation Processing|Processamento de cota/); const c=this.cursorEl(link,40,10); this.setDemo({spot:this.spotEl(link,6),caption:D.b5w,sub:D.b5ws,step:'05',progress:'89%',beatKey:'wflink',showCursor:true,...c}); },15500);
+    S(()=>this.clickPulse(),16300);
+    // workflow detail — process only (clear any stray spot during the route change)
+    S(()=>{ this.setState({route:'workflow', selectedWf:'quote', openItemId:null}); if(typeof window!=='undefined')window.scrollTo(0,0); this.setDemo({spot:null,fullScrim:true,showCursor:false}); },16450);
+    S(()=>{ const blk=secBlock(/^Process$|^Processo$/); this.setDemo({spot:this.spotEl(blk,10),fullScrim:false,caption:D.b5p,sub:D.b5ps,step:'05',progress:'92%',beatKey:'wfprocess',showCursor:false}); },16850);
+    // workflow value generated
+    S(()=>{ const eb=this.qText('span',/business value created|valor de neg\u00f3cio estimado/i); const col=eb?eb.parentElement:null; this.setDemo({spot:this.spotEl(col,10),caption:D.b5v,sub:D.b5vs,step:'05',progress:'95%',beatKey:'wfvalue'}); },18000);
+    // back to all workflow types
+    S(()=>{ this.setState({route:'workflows', openItemId:null}); if(typeof window!=='undefined')window.scrollTo(0,0); this.setDemo({spot:null,fullScrim:true,showCursor:false,caption:D.b5all,sub:D.b5alls,step:'05',progress:'98%',beatKey:'catalogue'}); },19200);
+    S(()=>{ const grid=[...document.querySelectorAll('div')].find(d=>/grid-template-columns:\s*repeat\(auto-fill/.test(d.getAttribute('style')||'')); this.setDemo({spot:this.spotEl(grid,8),fullScrim:false,caption:D.b5all,sub:D.b5alls,step:'05',progress:'98%'}); },19500);
+    // Beat 6 — payoff
+    S(()=>{ this.setState({toast:null}); this.setDemo({ended:true,fullScrim:true,showCursor:false,spot:null,caption:'',progress:'100%'}); },21200);
+  }
+  L(v){ const l=this.state.lang; return (v && typeof v==='object' && ('en' in v)) ? (v[l]||v.en) : v; }
+  fmt(n){ return '€'+Number(n).toLocaleString('en-US'); }
+  pname(k){ return (PNAME[k] && PNAME[k][this.state.lang]) || k; }
+  wfById(k){ return WF.find(w=>w.key===k); }
+  showToast(title,msg){ clearTimeout(this._tt); this.setState({toast:{title,msg}}); this._tt=setTimeout(()=>this.setState({toast:null}),3600); }
+  openItem(id){ this.setState({openItemId:id, fbStage:'idle', fbCat:null, feedbackText:'', guidance:'', blockerInput:'', showRetry:false}); }
+  closeItem(){ this.setState({openItemId:null, showRetry:false}); }
+  updateItem(id,patch){ this.setState(s=>({items:s.items.map(it=>it.id===id?{...it,...patch}:it)})); }
+  resolveBlocker(){ const id=this.state.openItemId; this.updateItem(id,{status:'in_progress', prog:2, blockerResolved:true, resolvedFromBlock:true}); this.showToast(T[this.state.lang].tResolved, T[this.state.lang].tResolvedMsg); }
+  saveFeedback(){ const id=this.state.openItemId; this.updateItem(id,{flagged:true}); this.setState({fbStage:'idle'}); this.showToast(T[this.state.lang].tSaved, T[this.state.lang].tSavedMsg); }
+  confirmRetry(){ if(!this.state.guidance.trim()) return; const id=this.state.openItemId; const it=this.state.items.find(x=>x.id===id);
+    this.updateItem(id,{status:'in_progress', prog:2, retried:true, attempt:{ original:it.outcome?it.outcome.title:{en:'Completed outcome',pt:'Resultado concluído'}, feedbackCat:this.state.fbCat, feedback:this.state.feedbackText, guidance:this.state.guidance }});
+    this.setState({showRetry:false, fbStage:'idle'}); this.showToast(T[this.state.lang].tRetry, T[this.state.lang].tRetryMsg); }
+
+  renderVals(){
+    const s=this.state, t=T[s.lang], L=v=>this.L(v);
+    const isDashboard=s.route==='dashboard', isWorkflows=s.route==='workflows', isWorkflowDetail=s.route==='workflow';
+    const userName=(this.props.userName!=null&&String(this.props.userName).trim())?String(this.props.userName).trim():'Carla Vieira';
+    const companyName=(this.props.companyName!=null&&String(this.props.companyName).trim())?String(this.props.companyName).trim():'Meridian Freight';
+    const userInitials=userName.split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('')||'U';
+    const userMeta=companyName;
+    const activeWf = isWorkflowDetail ? s.selectedWf : s.filterWf;
+    const totalValue=WF.reduce((a,w)=>a+w.value,0), totalDone=WF.reduce((a,w)=>a+w.done,0);
+    const cnt=k=>s.items.filter(i=>i.status===k).length;
+
+    const srcIconEl=src=>ic(SRC[src].icon,13);
+    const avatar=persona=>({color:P[persona].c, initials:P[persona].i, name:this.pname(persona)});
+
+    // filtered items
+    let fitems=s.items.filter(i=>{
+      if(activeWf!=='all' && i.wf!==activeWf) return false;
+      const per=this.wfById(i.wf).persona;
+      if(s.filterPersona!=='all' && this.pname(per)!==s.filterPersona) return false;
+      if(s.search.trim()){ const q=s.search.toLowerCase(); if(!(i.title.toLowerCase().includes(q)||this.pname(per).toLowerCase().includes(q)||SRC[i.src].en.toLowerCase().includes(q))) return false; }
+      return true;
+    });
+
+    const cardVM=i=>{
+      const w=this.wfById(i.wf), per=w.persona, av=avatar(per);
+      const kindKey = i.status==='todo'?'kReceived':i.status==='in_progress'?'kStarted':i.status==='blocked'?'kWaiting':'kCompleted';
+      return {
+        id:i.id, open:()=>this.openItem(i.id),
+        title:i.title, wfLabel:L(w.name), edge:COLS.find(c=>c.key===i.status).edge,
+        srcIcon:srcIconEl(i.src), srcLabel:L({en:SRC[i.src].en,pt:SRC[i.src].pt}),
+        isInProgress:i.status==='in_progress', isBlocked:i.status==='blocked', isDone:i.status==='done', isTodo:i.status==='todo',
+        step:L(w.steps[Math.min(i.prog,w.steps.length-1)]),
+        blockerType:i.blocker?L(BTYPE[i.blocker.type]):'', blockerTitle:i.blocker?L(i.blocker.title):'',
+        avatarColor:av.color, initials:av.initials, persona:av.name,
+        timeIcon:ic('clock',12), time:L(i.time),
+        showValue:i.status==='done' && i.value!=null, value:i.value!=null?this.fmt(i.value):''
+      };
+    };
+
+    const columns=COLS.map(c=>{
+      const items=fitems.filter(i=>i.status===c.key).map(cardVM);
+      return {key:c.key, color:c.color, title:L(COLT[c.key]), count:items.length, items, empty:items.length===0};
+    });
+    const boardCount = fitems.length + ' ' + (s.lang==='pt'?'itens visíveis':'items shown');
+
+    // workflow view models
+    const wfVM=w=>{
+      const av=avatar(w.persona);
+      const ip=s.items.filter(i=>i.wf===w.key&&i.status==='in_progress').length;
+      const bl=s.items.filter(i=>i.wf===w.key&&i.status==='blocked').length;
+      return {key:w.key, name:L(w.name), purpose:L(w.purpose), persona:av.name, initials:av.initials, avatarColor:av.color,
+        value:this.fmt(w.value), inProgress:ip, blocked:bl, blockedColor: bl>0?'var(--warn)':'var(--text-tertiary)', done:w.done,
+        counts:(s.lang==='pt'? (ip+' em curso · '+bl+' bloq. · '+w.done+' concl.') : (ip+' in progress · '+bl+' blocked · '+w.done+' done')),
+        open:()=>this.setState({route:'workflow', selectedWf:w.key, openItemId:null}) };
+    };
+    const workflows=WF.map(wfVM);
+    const summaries=WF.slice(0,4).map(wfVM);
+
+    // hero
+    const heroCounts=[
+      {label:L(COLT.todo), value:cnt('todo'), color:'var(--gph-300)'},
+      {label:L(COLT.in_progress), value:cnt('in_progress'), color:'var(--signal)'},
+      {label:L(COLT.blocked), value:cnt('blocked'), color:'var(--warn)'},
+      {label:L(COLT.done), value:'148', color:'var(--ok)'}
+    ];
+    const heroSub = s.lang==='pt' ? (totalDone.toLocaleString('en-US')+' itens concluídos em '+WF.length+' fluxos de trabalho') : (totalDone.toLocaleString('en-US')+' items completed across '+WF.length+' workflows');
+    const months = s.lang==='pt' ? ['Fev','Mar','Abr','Mai','Jun','Jul'] : ['Feb','Mar','Apr','May','Jun','Jul'];
+    const trendVals=[61,66,72,79,86,92], trendPx=[58,66,78,90,104,120];
+    const trend=months.map((m,idx)=>({month:m, val:'€'+trendVals[idx]+'k', h:trendPx[idx]+'px',
+      color: idx===5?'var(--accent)':'var(--gph-200)', labelColor: idx===5?'var(--accent)':'var(--text-tertiary)'}));
+
+    // workflow detail
+    let wfDetail=null;
+    if(isWorkflowDetail){ const w=this.wfById(s.selectedWf); const av=avatar(w.persona);
+      wfDetail={ name:L(w.name), purpose:L(w.purpose), persona:av.name, initials:av.initials, avatarColor:av.color,
+        personaLine:(s.lang==='pt'?'Responsável · ':'Assignee · ')+av.name, value:this.fmt(w.value), done:w.done,
+        onValue:()=>this.setState({valuePopover:{kind:'wf', wf:w.key}}),
+        steps:w.steps.map((st,idx)=>({n:String(idx+1).padStart(2,'0'), label:L(st), arrow: idx<w.steps.length-1})) };
+    }
+
+    // open item panel
+    let item=null; const oi=s.items.find(i=>i.id===s.openItemId);
+    if(oi){ const w=this.wfById(oi.wf), av=avatar(w.persona);
+      const statusColors={todo:['var(--gph-100)','var(--gph-500)'],in_progress:['var(--signal-quiet)','var(--teal-600)'],blocked:['var(--warn-bg)','var(--warn)'],done:['var(--ok-bg)','var(--ok)']};
+      const sc=statusColors[oi.status];
+      const timeline=w.steps.map((st,idx)=>{
+        let kind; if(oi.status==='done') kind='done';
+        else if(idx<oi.prog) kind='done';
+        else if(idx===oi.prog) kind = oi.status==='in_progress'?'active':oi.status==='blocked'?'blocked':'done';
+        else kind='pending';
+        let dot,labelColor,lineColor;
+        if(kind==='done'){ dot=React.createElement('span',{style:{width:'18px',height:'18px',borderRadius:'50%',background:'var(--ok)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center'}}, ic('check',11,2.4)); labelColor='var(--text-primary)'; lineColor='var(--ok)'; }
+        else if(kind==='active'){ dot=React.createElement('span',{style:{position:'relative',width:'18px',height:'18px',display:'flex',alignItems:'center',justifyContent:'center'}}, React.createElement('span',{style:{position:'absolute',inset:'3px',borderRadius:'50%',background:'var(--signal)'}}), React.createElement('span',{style:{position:'absolute',inset:'3px',borderRadius:'50%',background:'var(--signal)',animation:'livePulse 1.8s ease-out infinite'}})); labelColor='var(--teal-600)'; lineColor='var(--border)'; }
+        else if(kind==='blocked'){ dot=React.createElement('span',{style:{width:'18px',height:'18px',borderRadius:'50%',background:'var(--warn)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center'}}, ic('alert',11,2.2)); labelColor='var(--warn)'; lineColor='var(--border)'; }
+        else { dot=React.createElement('span',{style:{width:'18px',height:'18px',borderRadius:'50%',border:'2px solid var(--gph-200)',background:'var(--surface)',boxSizing:'border-box'}}); labelColor='var(--text-tertiary)'; lineColor='var(--border)'; }
+        return {label:L(st), dot, labelColor, lineColor, line: idx<w.steps.length-1, pad: idx<w.steps.length-1?'22px':'2px', time: (kind==='active'||(oi.status==='done'&&idx===w.steps.length-1))?L(oi.time):null};
+      });
+      const cats=[['catIncorrect'],['catMissing'],['catWrong'],['catPoor']].map(([k],idx)=>{
+        const key=k; const selected=s.fbCat===key;
+        return {label:t[key], pick:()=>this.setState({fbCat:key}),
+          style:'font-family:var(--font-sans);font-size:12.5px;cursor:pointer;padding:6px 11px;border-radius:var(--radius-full);border:1px solid '+(selected?'var(--accent)':'var(--border-strong)')+';background:'+(selected?'var(--accent-quiet)':'var(--surface)')+';color:'+(selected?'var(--accent)':'var(--text-secondary)')+';font-weight:500'};
+      });
+      item={
+        onClose:()=>this.closeItem(),
+        onOpenWorkflow:()=>this.setState({route:'workflow', selectedWf:oi.wf, openItemId:null}),
+        statusLabel:L(COLT[oi.status]),
+        statusBadgeStyle:'display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:500;padding:3px 8px;border-radius:var(--radius-sm);background:'+sc[0]+';color:'+sc[1],
+        wfLabel:L(w.name), title:oi.title, avatarColor:av.color, initials:av.initials, persona:av.name,
+        srcIcon:ic(SRC[oi.src].icon,14), srcLabel:L({en:SRC[oi.src].en,pt:SRC[oi.src].pt}),
+        isBlocked:oi.status==='blocked' && !oi.blockerResolved, isDone:oi.status==='done',
+        blockerType:oi.blocker?L(BTYPE[oi.blocker.type]):'', blockerTitle:oi.blocker?L(oi.blocker.title):'', blockerBody:oi.blocker?L(oi.blocker.body):'',
+        blockerPrompt:oi.blocker?L(oi.blocker.prompt):'', blockerPlaceholder:oi.blocker?L(oi.blocker.placeholder):'', blockerCta:oi.blocker?L(oi.blocker.cta):'',
+        showBlockerForm:oi.status==='blocked' && !oi.blockerResolved, blockerResolved:!!oi.blockerResolved,
+        onBlockerInput:e=>this.setState({blockerInput:e.target.value}), onResolveBlocker:()=>this.resolveBlocker(),
+        outcomeTitle:oi.outcome?L(oi.outcome.title):(s.lang==='pt'?'Trabalho concluído':'Work completed'),
+        outcomeBody:oi.outcome?L(oi.outcome.body):(s.lang==='pt'?'Este item de trabalho foi concluído pela persona.':'This work item was completed by the persona.'),
+        artifacts:(oi.artifacts||[]).map(a=>({icon:ic(a.icon,18), name:L(a.name), meta:L(a.meta)})),
+        hasSource:!!oi.source, sourceFrom:oi.source?oi.source.from:'', sourceSubject:oi.source?L(oi.source.subject):'',
+        hasFields:!!(oi.fields&&oi.fields.length), fields:(oi.fields||[]).map(f=>({k:L(f.k),v:f.v})),
+        timeline,
+        showValue:oi.status==='done' && oi.value!=null, value:oi.value!=null?this.fmt(oi.value):'',
+        onValue:()=>this.setState({valuePopover:{kind:'item', wf:oi.wf, value:oi.value}}),
+        attempts:!!oi.attempt,
+        attemptOriginal:oi.attempt?L(oi.attempt.original):'', attemptFeedback:oi.attempt?(t[oi.attempt.feedbackCat]||L(oi.attempt.feedback)||''):'', attemptRevised:oi.attempt?(s.lang==='pt'?'A processar de novo com a sua orientação':'Reprocessing with your guidance'):'',
+        showFeedbackFooter:oi.status==='done',
+        fbStageIdle:s.fbStage==='idle', fbStageForm:s.fbStage==='form', flagged:!!oi.flagged,
+        onStartFeedback:()=>this.setState({fbStage:'form'}), onCancelFeedback:()=>this.setState({fbStage:'idle'}),
+        categories:cats, onFeedbackText:e=>this.setState({feedbackText:e.target.value}),
+        onSaveFeedback:()=>this.saveFeedback(), onOpenRetry:()=>this.setState({showRetry:true}),
+        onCancelRetry:()=>this.setState({showRetry:false}),
+        retrySub:(s.lang==='pt'?'Uma nova tentativa usa o contexto original mais o seu feedback. O resultado original é preservado.':'A new attempt uses the original context plus your feedback. The original outcome is preserved.'),
+        retryConsequence:(s.lang==='pt'?'Esta nova tentativa pode reenviar a cotação ao cliente. As ações externas consequentes serão confirmadas antes de executar.':'This attempt may re-send the quotation to the customer. Consequential external actions will be confirmed before running.'),
+        onGuidance:e=>this.setState({guidance:e.target.value}), onConfirmRetry:()=>this.confirmRetry(),
+        confirmRetryStyle:(s.guidance.trim()?'':'opacity:.45;pointer-events:none;')
+      };
+    }
+
+    // value popover content
+    let valuePopover=null;
+    if(s.valuePopover){ const vp=s.valuePopover;
+      if(vp.kind==='item'){ const w=this.wfById(vp.wf);
+        valuePopover={amount:this.fmt(vp.value), body:(s.lang==='pt'?'Estimativa ao nível do item para este trabalho concluído, com base no modelo de valor do fluxo.':'Item-level estimate for this completed work, based on the workflow value model.'), formula:L(w.basis)};
+      } else if(vp.kind==='wf'){ const w=this.wfById(vp.wf);
+        valuePopover={amount:this.fmt(w.value), body:(s.lang==='pt'?'Valor total estimado criado por este fluxo de trabalho este mês.':'Total estimated value created by this workflow this month.'), formula:L(w.basis)};
+      } else {
+        valuePopover={amount:this.fmt(totalValue), body:(s.lang==='pt'?'Total do portfólio somando o valor estimado de todos os fluxos de trabalho este mês.':'Portfolio total summing estimated value across all workflows this month.'), formula:(s.lang==='pt'?WF.length+' fluxos · '+totalDone.toLocaleString('en-US')+' itens concluídos × tempo manual base × custo de mão de obra':WF.length+' workflows · '+totalDone.toLocaleString('en-US')+' completed items × baseline manual time × loaded labor cost')};
+      }
+    }
+
+    let demoVM=null;
+    if(s.demo){ if(s.demo.spot) this._lastSpot=s.demo.spot; const box=s.demo.spot||this._lastSpot||{x:'50vw',y:'50vh',w:'0px',h:'0px'}; demoVM={...s.demo, spotBox:box, spotOn:s.demo.spot?1:0}; }
+    if(!this._searchRef) this._searchRef=React.createRef();
+    const q=s.search.trim().toLowerCase(), hasQuery=!!q;
+    const rowBase='display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px;border:none;border-radius:var(--radius-md);cursor:pointer;font-family:var(--font-sans);color:var(--text-primary);background:';
+    const wfRow=w=>{ const av=avatar(w.persona);
+      const bl=s.items.filter(i=>i.wf===w.key&&i.status==='blocked'&&!i.blockerResolved).length;
+      const on=s.route==='workflow'&&s.selectedWf===w.key;
+      return {key:w.key, name:L(w.name), initials:av.initials, color:av.color, value:this.fmt(w.value),
+        blocked:bl, hasBlocked:bl>0, style:rowBase+(on?'var(--accent-quiet)':'transparent'),
+        open:()=>{ this.setState({route:'workflow', selectedWf:w.key, openItemId:null, island:null}); }};
+    };
+    const dotFor={todo:'var(--gph-400)', in_progress:'var(--signal)', blocked:'var(--warn)', done:'var(--ok)'};
+    const itemRow=i=>{ const w=this.wfById(i.wf);
+      return {id:i.id, title:i.title, wf:L(w.name), status:L(COLT[i.status]), dot:dotFor[i.status],
+        open:()=>{ this.openItem(i.id); this.setState({island:null}); }};
+    };
+    const resWfs=hasQuery?WF.filter(w=>L(w.name).toLowerCase().includes(q)||L(w.purpose).toLowerCase().includes(q)).slice(0,4).map(wfRow):[];
+    const resItems=hasQuery?s.items.filter(i=>{ const w=this.wfById(i.wf);
+      return i.title.toLowerCase().includes(q)||L(w.name).toLowerCase().includes(q)||SRC[i.src].en.toLowerCase().includes(q)||this.pname(w.persona).toLowerCase().includes(q); }).slice(0,7).map(itemRow):[];
+    const attention=s.items.filter(i=>i.status==='blocked'&&!i.blockerResolved).map(itemRow);
+    const chipBase='display:flex;align-items:center;gap:7px;height:34px;padding:0 8px 0 10px;border-radius:var(--radius-md);border:1px solid ';
+    const islandVM={
+      islandOpen:s.island||null, isNavOpen:s.island==='nav', isSearchOpen:s.island==='search',
+      islandW:s.island?'800px':'740px', islandR:s.island?'14px':'26px',
+      islandZ:(oi||s.valuePopover||s.showRetry)?38:45,
+      searchRef:this._searchRef, hasQuery, noQuery:!hasQuery,
+      hasResWfs:resWfs.length>0, hasResItems:resItems.length>0, noResults:hasQuery&&!resWfs.length&&!resItems.length,
+      resWfs, resItems, attention, islandWfs:WF.map(wfRow),
+      contextIcon: (isWorkflows||isWorkflowDetail)?ic('workflow',15):ic('dashboard',15),
+      contextLabel: isWorkflowDetail?(wfDetail?wfDetail.name:''):(isWorkflows?t.navWorkflows:t.navDashboard),
+      contextChipStyle: chipBase+(s.island==='nav'?'var(--accent);background:var(--accent-quiet);color:var(--accent)':'var(--border);background:var(--surface)')+';cursor:pointer;font-family:var(--font-sans)',
+      chipRot: s.island==='nav'?'180deg':'0deg',
+      liveCount: s.items.filter(i=>i.status==='in_progress').length,
+      blockedCount: attention.length,
+      blockedChipStyle:'display:inline-flex;align-items:center;height:22px;padding:0 8px;border:none;border-radius:var(--radius-sm);cursor:pointer;font-family:var(--font-mono);font-size:11px;'+(attention.length?'background:var(--warn-bg);color:var(--warn)':'background:var(--surface-sunken);color:var(--text-tertiary)'),
+      islandDashStyle: rowBase+(isDashboard?'var(--accent-quiet)':'transparent'),
+      islandWfStyle: rowBase+((isWorkflows||isWorkflowDetail)?'var(--accent-quiet)':'transparent'),
+      onToggleNav:()=>this.setState(st=>({island: st.island==='nav'?null:'nav'})),
+      onSearchFocus:()=>{ this.setState({island:'search'}); if(this._searchRef.current) this._searchRef.current.focus(); },
+      onSearch:e=>this.setState({search:e.target.value, island:'search'}),
+      onIslandClose:()=>this.setState({island:null}),
+      onClearSearch:()=>{ this.setState({search:''}); if(this._searchRef.current) this._searchRef.current.focus(); },
+      onNavBlocked:()=>this.setState({island:'search', search:''})
+    };
+    const navStyle=active=>'display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius-md);border:none;cursor:pointer;font-family:var(--font-sans);font-size:14px;font-weight:500;text-align:left;background:'+(active?'var(--accent-quiet)':'transparent')+';color:'+(active?'var(--accent)':'var(--text-secondary)');
+    const langBtn=active=>'padding:0 12px;height:32px;border:none;cursor:pointer;font-family:var(--font-mono);font-size:12px;font-weight:500;background:'+(active?'var(--gph-900)':'var(--surface)')+';color:'+(active?'#fff':'var(--text-secondary)');
+
+    return {
+      userName, userMeta, userInitials,
+      t, lang:s.lang, ic:{
+        mark:ic('mark',18,1.9), dashboard:ic('dashboard',18), workflow:ic('workflow',18), search:ic('search',16),
+        chevron:ic('chevron',18), back:ic('back',15), x:ic('x',16), arrowRight:ic('arrow',15), ext:ic('ext',15),
+        info13:ic('info',13), alert14:ic('alert',14), alert:ic('alert',16), check:ic('check',16), value13:ic('value',13),
+        flag:ic('flag',15), retry:ic('retry',15), send:ic('send',15), teams14:ic('teams',13),
+        play:ic('play',14), cursor:ic('cursor',28,1.4), arrow11:ic('arrow',11,2)
+      },
+      demo:demoVM, demoTotal:this.fmt(totalValue),
+      onStartDemo:()=>this.startDemo(), onSkipDemo:()=>this.stopDemo(), onReplayDemo:()=>this.startDemo(),
+      isDashboard, isWorkflows, isWorkflowDetail, showBoard: isDashboard||isWorkflowDetail,
+      pageTitle: isWorkflows||isWorkflowDetail ? (isWorkflowDetail? (wfDetail?wfDetail.name:'') : t.navWorkflows) : t.navDashboard,
+      navDashStyle:navStyle(isDashboard), navWfStyle:navStyle(isWorkflows||isWorkflowDetail),
+      onNavDash:()=>this.setState({route:'dashboard', openItemId:null, island:null}), onNavWf:()=>this.setState({route:'workflows', openItemId:null, island:null}),
+      search:s.search, onSearch:e=>this.setState({search:e.target.value}),
+      filterWf:s.filterWf, filterPersona:s.filterPersona, dateRange:s.dateRange,
+      onFilterWf:e=>this.setState({filterWf:e.target.value}), onFilterPersona:e=>this.setState({filterPersona:e.target.value}), onDateRange:e=>this.setState({dateRange:e.target.value}),
+      wfOptions:WF.map(w=>({key:w.key, name:L(w.name)})), personaOptions:WF.map(w=>({name:this.pname(w.persona)})),
+      heroValue:(s.demo && s.demo.heroAnim!=null)?this.fmt(s.demo.heroAnim):this.fmt(totalValue), heroSub, heroCounts, trend,
+      onHeroValue:()=>this.setState({valuePopover:{kind:'portfolio'}}),
+      columns, boardCount, workflows, summaries, wfDetail,
+      panelOpen:!!oi, item,
+      showRetry:s.showRetry && !!oi, showValuePopover:!!s.valuePopover, valuePopover,
+      onCloseValue:()=>this.setState({valuePopover:null}), noop:e=>e.stopPropagation(),
+      toast:s.toast, ...islandVM
+    };
+  }
+}
+</script>
+</body>
+</html>

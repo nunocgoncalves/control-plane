@@ -56,11 +56,12 @@ func (h *Handler) authorizeWork(w http.ResponseWriter, r *http.Request, action s
 }
 
 type startWorkRequest struct {
-	WorkflowKey     string                  `json:"workflowKey"`
-	WorkflowVersion string                  `json:"workflowVersion,omitempty"`
-	Title           string                  `json:"title"`
-	Source          json.RawMessage         `json:"source"`
-	ArtifactRefs    []workstore.ArtifactRef `json:"artifactRefs,omitempty"`
+	WorkflowKey        string                       `json:"workflowKey"`
+	WorkflowVersion    string                       `json:"workflowVersion,omitempty"`
+	Title              string                       `json:"title"`
+	Source             json.RawMessage              `json:"source"`
+	SourcePresentation workstore.SourcePresentation `json:"sourcePresentation"`
+	ArtifactRefs       []workstore.ArtifactRef      `json:"artifactRefs,omitempty"`
 }
 
 func (h *Handler) startWorkItem(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +79,7 @@ func (h *Handler) startWorkItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid request body"})
 		return
 	}
-	item, created, err := h.work.Start(r.Context(), workstore.StartInput{ActorIdentityID: actor.ID, WorkflowKey: req.WorkflowKey, WorkflowVersion: req.WorkflowVersion, IdempotencyKey: key, Title: req.Title, Source: req.Source, ArtifactRefs: req.ArtifactRefs})
+	item, created, err := h.work.Start(r.Context(), workstore.StartInput{ActorIdentityID: actor.ID, WorkflowKey: req.WorkflowKey, WorkflowVersion: req.WorkflowVersion, IdempotencyKey: key, Title: req.Title, Source: req.Source, SourcePresentation: req.SourcePresentation, ArtifactRefs: req.ArtifactRefs})
 	if err != nil {
 		writeWorkError(w, err)
 		return
@@ -95,7 +96,18 @@ func (h *Handler) listWorkItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.work.ListWorkItems(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("search"), limit)
+	filter := workstore.WorkItemFilter{State: r.URL.Query().Get("state"), Search: r.URL.Query().Get("search"), Limit: limit}
+	for key, target := range map[string]**time.Time{"from": &filter.From, "to": &filter.To} {
+		if value := r.URL.Query().Get(key); value != "" {
+			parsed, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, errorBody{Error: key + " must be RFC3339"})
+				return
+			}
+			*target = &parsed
+		}
+	}
+	items, err := h.work.ListWorkItems(r.Context(), filter)
 	if err != nil {
 		writeWorkError(w, err)
 		return
@@ -135,6 +147,18 @@ func (h *Handler) listWorkNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, nodes)
 }
+func (h *Handler) listWorkArtifacts(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeWork(w, r, "read") {
+		return
+	}
+	artifacts, err := h.work.ListArtifacts(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, artifacts)
+}
+
 func (h *Handler) listWorkTimeline(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeWork(w, r, "read") {
 		return
@@ -173,9 +197,10 @@ func (h *Handler) getWorkBlocker(w http.ResponseWriter, r *http.Request) {
 }
 
 type blockerResponseRequest struct {
-	Outcome                string          `json:"outcome"`
-	Response               json.RawMessage `json:"response"`
-	ConfirmedInvocationIDs []string        `json:"confirmedInvocationIds,omitempty"`
+	Outcome                string                  `json:"outcome"`
+	Response               json.RawMessage         `json:"response"`
+	ArtifactRefs           []workstore.ArtifactRef `json:"artifactRefs,omitempty"`
+	ConfirmedInvocationIDs []string                `json:"confirmedInvocationIds,omitempty"`
 }
 
 func (h *Handler) respondWorkBlocker(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +213,7 @@ func (h *Handler) respondWorkBlocker(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid request body"})
 		return
 	}
-	b, err := h.work.RespondBlocker(r.Context(), workstore.BlockerResponseInput{BlockerID: chi.URLParam(r, "id"), ActorIdentityID: actor.ID, Outcome: req.Outcome, Response: req.Response, ConfirmedInvocationIDs: req.ConfirmedInvocationIDs})
+	b, err := h.work.RespondBlocker(r.Context(), workstore.BlockerResponseInput{BlockerID: chi.URLParam(r, "id"), ActorIdentityID: actor.ID, Outcome: req.Outcome, Response: req.Response, ArtifactRefs: req.ArtifactRefs, ConfirmedInvocationIDs: req.ConfirmedInvocationIDs})
 	if err != nil {
 		writeWorkError(w, err)
 		return

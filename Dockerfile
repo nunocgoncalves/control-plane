@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: compile all three binaries (CGO-free) with version LDFLAGS.
+FROM node:24-alpine AS ui-builder
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ ./
+RUN npm run build
+
+# Build stage: compile all four binaries (CGO-free) with version LDFLAGS.
 FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
@@ -9,6 +16,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY --from=ui-builder /ui/dist ./ui/dist
 
 ARG VERSION=dev
 ARG COMMIT=none

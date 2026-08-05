@@ -84,8 +84,8 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 			Graph: v1alpha1.WorkflowGraph{
 				EntryNode: "process", MaxTransitions: 20,
 				Nodes: []v1alpha1.WorkflowNode{
-					{Key: "process", Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"}, Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"}, OutputSchema: jsonConfig(`{"type":"object"}`)},
-					{Key: "review", Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review"}, Description: v1alpha1.LocalizedText{EN: "Review the result"}}},
+					{Key: "process", Label: v1alpha1.LocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"}, Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"}, OutputSchema: jsonConfig(`{"type":"object"}`)},
+					{Key: "review", Label: v1alpha1.LocalizedText{EN: "Reviewing result", PT: "A rever resultado"}, Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review", PT: "Revisão"}, Description: v1alpha1.LocalizedText{EN: "Review the result", PT: "Reveja o resultado"}}},
 				},
 				Edges:            []v1alpha1.WorkflowEdge{{From: "process", Outcome: "needs_review", To: "review"}, {From: "review", Outcome: "changes_requested", To: "process"}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "process", Outcome: "completed"}, {Node: "review", Outcome: "approved"}},
@@ -124,6 +124,12 @@ func TestWorkflowValidation(t *testing.T) {
 	// Valid Walter workflow passes.
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool")))
 
+	missingBusinessLabel := validWalterWorkflow("w", ns, "walter-pool")
+	missingBusinessLabel.Spec.Graph.Nodes[0].Label.PT = ""
+	err := newReconciler(pool).validateSpec(ctx, missingBusinessLabel)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "label requires en and pt")
+
 	// Unknown source type -> rejected.
 	badSource := validWalterWorkflow("w", ns, "walter-pool")
 	badSource.Spec.Source.Type = "slack"
@@ -132,7 +138,7 @@ func TestWorkflowValidation(t *testing.T) {
 	// Recognized but not installed source adapter -> rejected before Ready.
 	missingAdapter := newReconciler(pool)
 	missingAdapter.SourceAdapters = StaticSourceAdapterRegistry{v1alpha1.SourceOperatorArtifact: {}}
-	err := missingAdapter.validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool"))
+	err = missingAdapter.validateSpec(ctx, validWalterWorkflow("w", ns, "walter-pool"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no installed source adapter")
 
@@ -253,7 +259,7 @@ func TestWorkflowValidation(t *testing.T) {
 				},
 			},
 			Graph: v1alpha1.WorkflowGraph{EntryNode: "map", MaxTransitions: 10,
-				Nodes:            []v1alpha1.WorkflowNode{{Key: "map", Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"}}},
+				Nodes:            []v1alpha1.WorkflowNode{{Key: "map", Label: v1alpha1.LocalizedText{EN: "Building shipment map", PT: "A criar mapa de envios"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Build the shipment map", Outcomes: []string{"completed"}}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "map", Outcome: "completed"}}},
 			Presentation: v1alpha1.PresentationSpec{WorkflowTitle: "Shipment Map", PersonaName: "XBS Ops", Locale: "pt"},
 		},

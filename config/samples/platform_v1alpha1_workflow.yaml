@@ -38,6 +38,9 @@ spec:
     maxTransitions: 20
     nodes:
       - key: process-quotation
+        label:
+          en: Processing quotation
+          pt: A processar cotação
         kind: agent_task
         prompt: |
           Inspect the quotation source and process it according to the assigned
@@ -60,6 +63,9 @@ spec:
             workbookRecord: {type: object}
 
       - key: request-information
+        label:
+          en: Waiting for information
+          pt: A aguardar informação
         kind: human_gate
         outcomes: [information_provided]
         humanGate:
@@ -121,6 +127,9 @@ spec:
     maxTransitions: 10
     nodes:
       - key: process-export
+        label:
+          en: Processing exported data
+          pt: A processar dados exportados
         kind: agent_task
         prompt: Process the supplied exported artifact using the assigned discovery mapping.
         skills: [xbs/discovery-mapping]

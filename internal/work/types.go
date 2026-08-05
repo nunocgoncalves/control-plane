@@ -39,13 +39,38 @@ type ArtifactRef struct {
 
 // StartInput is the idempotent workflow-start command used by adapters.
 type StartInput struct {
-	ActorIdentityID string
-	WorkflowKey     string
-	WorkflowVersion string
-	IdempotencyKey  string
-	Title           string
-	Source          json.RawMessage
-	ArtifactRefs    []ArtifactRef
+	ActorIdentityID    string
+	WorkflowKey        string
+	WorkflowVersion    string
+	IdempotencyKey     string
+	Title              string
+	Source             json.RawMessage
+	SourcePresentation SourcePresentation
+	ArtifactRefs       []ArtifactRef
+}
+
+// LocalizedText carries approved customer copy. Callers render their requested
+// locale and fall back to the other value when customer-authored copy is
+// available in only one language.
+type LocalizedText struct {
+	EN string `json:"en,omitempty"`
+	PT string `json:"pt,omitempty"`
+}
+
+// PresentationField is one safe business datum shown as source evidence.
+type PresentationField struct {
+	Label LocalizedText `json:"label"`
+	Value string        `json:"value"`
+}
+
+// SourcePresentation is the immutable customer-safe source projection. Source
+// remains private trigger context and is never serialized by customer APIs.
+type SourcePresentation struct {
+	Kind        string              `json:"kind"`
+	Title       string              `json:"title"`
+	Subtitle    string              `json:"subtitle,omitempty"`
+	OriginalURL string              `json:"originalUrl,omitempty"`
+	Evidence    []PresentationField `json:"evidence,omitempty"`
 }
 
 // RevisionInput creates a new attempt on an existing work item.
@@ -63,6 +88,7 @@ type BlockerResponseInput struct {
 	ActorIdentityID        string
 	Outcome                string
 	Response               json.RawMessage
+	ArtifactRefs           []ArtifactRef
 	ConfirmedInvocationIDs []string
 }
 
@@ -84,26 +110,63 @@ type CompletionReport struct {
 	ArtifactRefs []ArtifactRef   `json:"artifactRefs,omitempty"`
 }
 
+// WorkItemFilter selects the relevant Dashboard period and text/state scope.
+type WorkItemFilter struct {
+	State  string
+	Search string
+	From   *time.Time
+	To     *time.Time
+	Limit  int
+}
+
 // WorkItem is the customer-safe current-state projection.
 type WorkItem struct {
-	ID               string          `json:"id"`
-	WorkflowKey      string          `json:"workflowKey"`
-	ScopeIdentityID  string          `json:"-"`
-	Title            string          `json:"title"`
-	Source           json.RawMessage `json:"source"`
-	CurrentAttemptID string          `json:"currentAttemptId"`
-	State            string          `json:"state"`
-	RuntimeState     string          `json:"-"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
-	StartedAt        *time.Time      `json:"startedAt,omitempty"`
-	FinishedAt       *time.Time      `json:"finishedAt,omitempty"`
-	ValueConfigured  bool            `json:"valueConfigured"`
-	ValueModel       json.RawMessage `json:"valueModel,omitempty"`
-	EstimatedValue   *string         `json:"estimatedValue,omitempty"`
-	ValueCurrency    *string         `json:"valueCurrency,omitempty"`
-	ValueDisputed    bool            `json:"valueDisputed"`
-	FailureSummary   json.RawMessage `json:"failureSummary,omitempty"`
+	ID                 string             `json:"id"`
+	WorkflowKey        string             `json:"workflowKey"`
+	ScopeIdentityID    string             `json:"-"`
+	Title              string             `json:"title"`
+	Source             json.RawMessage    `json:"-"`
+	SourcePresentation SourcePresentation `json:"source"`
+	Presentation       WorkPresentation   `json:"presentation"`
+	CurrentStep        *BusinessStep      `json:"currentStep,omitempty"`
+	Blocker            *BlockerSummary    `json:"blocker,omitempty"`
+	CurrentAttemptID   string             `json:"currentAttemptId"`
+	State              string             `json:"state"`
+	RuntimeState       string             `json:"-"`
+	CreatedAt          time.Time          `json:"createdAt"`
+	UpdatedAt          time.Time          `json:"updatedAt"`
+	StartedAt          *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt         *time.Time         `json:"finishedAt,omitempty"`
+	ValueConfigured    bool               `json:"valueConfigured"`
+	ValueModel         json.RawMessage    `json:"valueModel,omitempty"`
+	EstimatedValue     *string            `json:"estimatedValue,omitempty"`
+	ValueCurrency      *string            `json:"valueCurrency,omitempty"`
+	ValueDisputed      bool               `json:"valueDisputed"`
+	FailureSummary     json.RawMessage    `json:"failureSummary,omitempty"`
+}
+
+// WorkPresentation is snapshotted from the immutable workflow definition for
+// the attempt, so cards never depend on mutable operator configuration.
+type WorkPresentation struct {
+	WorkflowTitle string `json:"workflowTitle"`
+	PersonaName   string `json:"personaName"`
+	PersonaAvatar string `json:"personaAvatar,omitempty"`
+	Locale        string `json:"locale,omitempty"`
+}
+
+// BusinessStep is the current workflow stage without prompt/model details.
+type BusinessStep struct {
+	Key       string        `json:"key"`
+	Label     LocalizedText `json:"label"`
+	State     string        `json:"state"`
+	StartedAt *time.Time    `json:"startedAt,omitempty"`
+}
+
+// BlockerSummary provides enough customer-safe context for a board card.
+type BlockerSummary struct {
+	ID    string          `json:"id"`
+	Kind  string          `json:"kind"`
+	Title json.RawMessage `json:"title"`
 }
 
 // Attempt is one immutable graph/version snapshot and one runtime run.
@@ -116,6 +179,7 @@ type Attempt struct {
 	DefinitionDigest        string          `json:"-"`
 	GraphSnapshot           json.RawMessage `json:"-"`
 	ModelsSnapshot          json.RawMessage `json:"-"`
+	PresentationSnapshot    json.RawMessage `json:"-"`
 	RevisedFromAttemptID    *string         `json:"revisedFromAttemptId,omitempty"`
 	ActionableGuidance      *string         `json:"actionableGuidance,omitempty"`
 	ConsequenceConfirmation json.RawMessage `json:"-"`
@@ -128,6 +192,7 @@ type NodeExecution struct {
 	ID                   string          `json:"id"`
 	AttemptID            string          `json:"attemptId"`
 	NodeKey              string          `json:"nodeKey"`
+	BusinessLabel        json.RawMessage `json:"businessLabel"`
 	Visit                int             `json:"visit"`
 	ExecutionSeq         int             `json:"executionSeq"`
 	Kind                 string          `json:"kind"`
@@ -179,6 +244,20 @@ type Feedback struct {
 	CreatedBy        string          `json:"createdBy"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	RevisedAttemptID *string         `json:"revisedAttemptId,omitempty"`
+}
+
+// WorkArtifact is an immutable artifact linked to the work history. Name and
+// other customer labels come only from safe link metadata, never storage keys.
+type WorkArtifact struct {
+	ArtifactID      string          `json:"artifactId"`
+	AttemptID       string          `json:"attemptId"`
+	NodeExecutionID *string         `json:"nodeExecutionId,omitempty"`
+	Role            string          `json:"role"`
+	Metadata        json.RawMessage `json:"metadata"`
+	MIMEType        string          `json:"mimeType"`
+	SizeBytes       *int64          `json:"sizeBytes,omitempty"`
+	Digest          *string         `json:"digest,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
 }
 
 // TimelineEvent is a customer-safe, resumable business event.

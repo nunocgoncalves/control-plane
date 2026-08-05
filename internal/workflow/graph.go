@@ -54,6 +54,9 @@ func ValidateGraph(spec CanonicalSpec) error {
 		if _, exists := nodes[n.Key]; exists {
 			return fmt.Errorf("graph.nodes[%d].key %q is duplicated", i, n.Key)
 		}
+		if n.Label.EN == "" || n.Label.PT == "" {
+			return fmt.Errorf("graph.nodes[%d].label requires en and pt text", i)
+		}
 		if len(n.Outcomes) == 0 {
 			return fmt.Errorf("graph.nodes[%d].outcomes must not be empty", i)
 		}

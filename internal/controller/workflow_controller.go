@@ -363,7 +363,10 @@ func (r *WorkflowReconciler) validateSpec(ctx context.Context, wf *v1alpha1.Work
 	if wf.Spec.DefaultModelRef != "" {
 		modelRefs[wf.Spec.DefaultModelRef] = struct{}{}
 	}
-	for _, node := range wf.Spec.Graph.Nodes {
+	for i, node := range wf.Spec.Graph.Nodes {
+		if node.Label.EN == "" || node.Label.PT == "" {
+			return fmt.Errorf("spec.graph.nodes[%d].label requires en and pt text", i)
+		}
 		if node.ModelRef != "" {
 			modelRefs[node.ModelRef] = struct{}{}
 		}
@@ -539,7 +542,8 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 	}
 	for _, n := range wf.Spec.Graph.Nodes {
 		cn := workflow.CanonicalNode{
-			Key: n.Key, Kind: n.Kind, Prompt: n.Prompt, ModelRef: n.ModelRef,
+			Key: n.Key, Label: workflow.CanonicalLocalizedText{EN: n.Label.EN, PT: n.Label.PT},
+			Kind: n.Kind, Prompt: n.Prompt, ModelRef: n.ModelRef,
 			Skills: n.Skills, Capabilities: n.Capabilities,
 			WorkspaceTools: n.WorkspaceTools, Outcomes: n.Outcomes,
 			OutputSchema: rawJSON(n.OutputSchema),

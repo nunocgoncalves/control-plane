@@ -19,6 +19,15 @@ jobs:
         with:
           go-version: "1.26.x"
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: install Dashboard deps
+        run: make ui-deps
+
       - name: gofmt
         run: make fmt-check
 
@@ -32,6 +41,25 @@ jobs:
 
       - name: test
         run: make test
+
+  # Customer work-management Dashboard (HOR-396).
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: install deps
+        run: make ui-deps
+      - name: typecheck
+        run: make ui-lint
+      - name: component, interaction, a11y, and localization tests
+        run: make ui-test
+      - name: production build
+        run: make ui-build
 
   # Node pi harness (HOR-351): typecheck + tests against the committed generated stubs.
   harness:

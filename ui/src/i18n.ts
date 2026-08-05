@@ -1,0 +1,53 @@
+import type { Locale, LocalizedText, WorkState } from "./types";
+
+const copy = {
+  en: {
+    dashboard: "Dashboard", connectTitle: "Connect to the Dashboard", connectBody: "Enter an authorized work key to open this private deployment.",
+    apiKey: "Work API key", connect: "Connect", connecting: "Connecting…", disconnect: "Disconnect", invalidKey: "The key could not open the Dashboard.",
+    search: "Search customer, document, source…", date: "Period", today: "Today", week: "This week", month: "This month", custom: "Custom", from: "From", to: "To",
+    hero: "Estimated business value created", estimated: "estimated", notConfigured: "Value model not configured", valueHelp: "How this is estimated",
+    trend: "Business value created", noTrend: "No value recorded for this period", board: "Work", itemsShown: "items shown", empty: "No items",
+    failed: "Could not complete", failedHelp: "These items need Iterabase attention and sit outside normal work.", open: "Open",
+    todo: "To do", in_progress: "In progress", blocked: "Blocked", done: "Done", failedState: "Could not complete",
+    outcome: "Outcome", result: "Result and evidence", source: "Original source", evidence: "Extracted details", timeline: "Timeline", attempts: "Attempt history",
+    openOriginal: "Open original", download: "Download", value: "Estimated value created", disputed: "Disputed and deducted", close: "Close",
+    blockerResponse: "Your response", submitResponse: "Send response", uploadArtifact: "Choose the required artifact", responseSent: "Response sent. Work is returning to In progress.",
+    feedback: "Result needs improvement", whatWrong: "What was wrong?", explanation: "Explanation or corrected result (optional)", saveFeedback: "Save feedback",
+    tryAgain: "Try again with feedback", guidance: "What should be done differently?", guidanceRequired: "Actionable guidance is required.",
+    consequences: "Review possible repeated actions", consequenceWarning: "A revised attempt may repeat these external actions. Confirm each action to continue.",
+    startRevision: "Start revised attempt", feedbackSaved: "Feedback captured without starting new work.", revisionStarted: "Revised attempt started; original history is preserved.",
+    incorrect_classification: "Incorrect classification", missing_information: "Missing information", wrong_action: "Wrong action", poor_output: "Poor output",
+    retry: "Try again", cancel: "Cancel", loading: "Loading…", refreshError: "Dashboard data could not be refreshed.", noDetails: "No business details recorded.",
+    artifact: "Artifact", bytes: "bytes", attempt: "Attempt", original: "Original", revised: "Revised", unconfiguredBody: "Customer assumptions have not yet been configured, so no financial estimate is shown.",
+  },
+  pt: {
+    dashboard: "Painel", connectTitle: "Ligar ao Painel", connectBody: "Introduza uma chave de trabalho autorizada para abrir esta instalação privada.",
+    apiKey: "Chave da API de trabalho", connect: "Ligar", connecting: "A ligar…", disconnect: "Desligar", invalidKey: "A chave não conseguiu abrir o Painel.",
+    search: "Procurar cliente, documento, origem…", date: "Período", today: "Hoje", week: "Esta semana", month: "Este mês", custom: "Personalizado", from: "De", to: "Até",
+    hero: "Valor de negócio estimado criado", estimated: "estimado", notConfigured: "Modelo de valor não configurado", valueHelp: "Como é estimado",
+    trend: "Valor de negócio criado", noTrend: "Sem valor registado neste período", board: "Trabalho", itemsShown: "itens visíveis", empty: "Sem itens",
+    failed: "Não foi possível concluir", failedHelp: "Estes itens precisam da atenção da Iterabase e estão fora do trabalho normal.", open: "Abrir",
+    todo: "A fazer", in_progress: "Em curso", blocked: "Bloqueado", done: "Concluído", failedState: "Não foi possível concluir",
+    outcome: "Resultado", result: "Resultado e evidência", source: "Origem original", evidence: "Dados extraídos", timeline: "Cronologia", attempts: "Histórico de tentativas",
+    openOriginal: "Abrir original", download: "Transferir", value: "Valor estimado criado", disputed: "Contestado e deduzido", close: "Fechar",
+    blockerResponse: "A sua resposta", submitResponse: "Enviar resposta", uploadArtifact: "Escolha o artefacto necessário", responseSent: "Resposta enviada. O trabalho vai voltar para Em curso.",
+    feedback: "Resultado precisa de melhoria", whatWrong: "O que estava errado?", explanation: "Explicação ou resultado corrigido (opcional)", saveFeedback: "Guardar feedback",
+    tryAgain: "Tentar de novo com feedback", guidance: "O que deve ser feito de forma diferente?", guidanceRequired: "É necessária orientação concreta.",
+    consequences: "Rever possíveis ações repetidas", consequenceWarning: "Uma nova tentativa pode repetir estas ações externas. Confirme cada ação para continuar.",
+    startRevision: "Iniciar nova tentativa", feedbackSaved: "Feedback registado sem iniciar novo trabalho.", revisionStarted: "Nova tentativa iniciada; o histórico original foi preservado.",
+    incorrect_classification: "Classificação incorreta", missing_information: "Informação em falta", wrong_action: "Ação errada", poor_output: "Resultado fraco",
+    retry: "Tentar novamente", cancel: "Cancelar", loading: "A carregar…", refreshError: "Não foi possível atualizar os dados do Painel.", noDetails: "Sem detalhes de negócio registados.",
+    artifact: "Artefacto", bytes: "bytes", attempt: "Tentativa", original: "Original", revised: "Nova", unconfiguredBody: "Os pressupostos do cliente ainda não foram configurados, por isso não é apresentada uma estimativa financeira.",
+  },
+} as const;
+
+export type Copy = typeof copy.en;
+export const t = (locale: Locale): Copy => copy[locale] as Copy;
+export function localized(value: LocalizedText | undefined, locale: Locale): string {
+  if (!value) return "";
+  return value[locale] || value.en || value.pt || "";
+}
+export function stateLabel(state: WorkState, locale: Locale): string {
+  const c = t(locale);
+  return state === "failed" ? c.failedState : c[state];
+}

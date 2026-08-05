@@ -19,6 +19,7 @@ import (
 	"github.com/nunocgoncalves/control-plane/internal/identity"
 	"github.com/nunocgoncalves/control-plane/internal/permissions"
 	workstore "github.com/nunocgoncalves/control-plane/internal/work"
+	dashboardui "github.com/nunocgoncalves/control-plane/ui"
 )
 
 // Services are the dependencies injected into the HTTP API.
@@ -80,6 +81,12 @@ func New(svc Services) http.Handler {
 		})
 	})
 
+	// The private Dashboard is static and same-origin. It performs its own
+	// operator-key connection before calling the authenticated /v1 work APIs.
+	ui := dashboardui.Handler()
+	r.Get("/", ui.ServeHTTP)
+	r.Handle("/assets/*", ui)
+
 	r.Get("/healthz", healthz)
 	r.Get("/readyz", readyz(svc.Pool, svc.Artifacts))
 
@@ -106,6 +113,7 @@ func New(svc Services) http.Handler {
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/attempts", h.listWorkAttempts)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-attempts/{id}/nodes", h.listWorkNodes)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/timeline", h.listWorkTimeline)
+	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/artifacts", h.listWorkArtifacts)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/consequences", h.getWorkConsequences)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/blocker", h.getWorkBlocker)
 	r.With(h.auth(identity.ScopeWork)).Get("/v1/work-items/{id}/feedback", h.listWorkFeedback)

@@ -35,3 +35,5 @@ go.work
 # Node dependencies and build output
 node_modules/
 tool-runner/dist/
+ui/dist/*
+!ui/dist/placeholder.txt

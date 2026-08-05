@@ -30,6 +30,16 @@ import (
 	workstore "github.com/nunocgoncalves/control-plane/internal/work"
 )
 
+func TestDashboardStatic(t *testing.T) {
+	router := server.New(server.Services{})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Header().Get("Content-Security-Policy"), "connect-src 'self'")
+	assert.Equal(t, "no-cache", rr.Header().Get("Cache-Control"))
+}
+
 func TestHealthz(t *testing.T) {
 	router := server.New(server.Services{})
 

@@ -39,6 +39,9 @@ func (s *Store) Start(ctx context.Context, in StartInput) (WorkItem, bool, error
 	if in.ActorIdentityID == "" || in.WorkflowKey == "" || in.IdempotencyKey == "" || in.Title == "" {
 		return WorkItem{}, false, fmt.Errorf("%w: actor, workflowKey, idempotency key, and title are required", ErrInvalidInput)
 	}
+	if err := validateSourcePresentation(in.SourcePresentation); err != nil {
+		return WorkItem{}, false, err
+	}
 	in.ArtifactRefs = append([]ArtifactRef(nil), in.ArtifactRefs...)
 	for i := range in.ArtifactRefs {
 		if in.ArtifactRefs[i].ArtifactID == "" {
@@ -97,13 +100,14 @@ func (s *Store) Start(ctx context.Context, in StartInput) (WorkItem, bool, error
 	}
 	itemID := uuid.NewString()
 	attemptID := uuid.NewString()
+	sourcePresentation, _ := json.Marshal(in.SourcePresentation)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work.work_items
-			(id, workflow_key, scope_identity_id, title, source, start_identity_id,
+			(id, workflow_key, scope_identity_id, title, source, source_presentation, start_identity_id,
 			 start_idempotency_key, start_payload_hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		itemID, in.WorkflowKey, resolved.Definition.ScopeIdentityID, in.Title, jsonOrObject(in.Source),
-		in.ActorIdentityID, in.IdempotencyKey, payloadHash); err != nil {
+		sourcePresentation, in.ActorIdentityID, in.IdempotencyKey, payloadHash); err != nil {
 		return WorkItem{}, false, fmt.Errorf("insert work item: %w", err)
 	}
 	if err := s.createAttemptTx(ctx, tx, createAttemptInput{
@@ -184,11 +188,11 @@ func (s *Store) createAttemptTx(ctx context.Context, tx pgx.Tx, in createAttempt
 		INSERT INTO work.attempts
 			(id, work_item_id, number, definition_id, definition_key, definition_version,
 			 definition_digest, graph_snapshot, skills_snapshot, capabilities_snapshot,
-			 models_snapshot, value_model_id, value_model_snapshot, revised_from_attempt_id,
+			 models_snapshot, presentation_snapshot, value_model_id, value_model_snapshot, revised_from_attempt_id,
 			 revision_feedback_id, actionable_guidance, consequence_confirmation)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		in.ID, in.WorkItemID, in.Number, def.ID, def.Key, def.Version, def.Digest,
-		graphJSON, skillsJSON, capsJSON, modelsJSON, nullable(valueModelID), nullableJSON(valueSnapshot),
+		graphJSON, skillsJSON, capsJSON, modelsJSON, jsonOrObject(def.Presentation), nullable(valueModelID), nullableJSON(valueSnapshot),
 		nullable(in.RevisedFromAttemptID), nullable(in.RevisionFeedbackID), nullable(in.ActionableGuidance), confirmationJSON); err != nil {
 		return fmt.Errorf("insert attempt: %w", err)
 	}
@@ -245,80 +249,102 @@ func (s *Store) createAttemptTx(ctx context.Context, tx pgx.Tx, in createAttempt
 	return nil
 }
 
+const workItemSelect = `
+	SELECT c.id, c.workflow_key, c.scope_identity_id, c.title, c.source, wi.source_presentation,
+	       a.presentation_snapshot, c.current_attempt_id, c.customer_state, c.runtime_state,
+	       c.created_at, c.updated_at, c.started_at, c.finished_at,
+	       a.customer_failure_summary, a.value_model_id IS NOT NULL, a.value_model_snapshot,
+	       v.amount::text, v.currency,
+	       EXISTS (SELECT 1 FROM work.value_ledger d WHERE d.work_item_id=c.id AND d.kind='feedback_deduction'),
+	       step.node_key, step.business_label, step.state, step.started_at,
+	       blocker.id::text, blocker.kind, blocker.title
+	FROM work.current_work_items c
+	JOIN work.work_items wi ON wi.id=c.id
+	JOIN work.attempts a ON a.id=c.current_attempt_id
+	LEFT JOIN LATERAL (
+		SELECT SUM(amount) amount, MIN(currency) currency FROM work.value_ledger WHERE work_item_id=c.id
+	) v ON true
+	LEFT JOIN LATERAL (
+		SELECT node_key,business_label,state,started_at FROM runtime.node_executions
+		WHERE attempt_id=c.current_attempt_id ORDER BY execution_seq DESC LIMIT 1
+	) step ON true
+	LEFT JOIN LATERAL (
+		SELECT id,kind,title FROM work.blockers WHERE work_item_id=c.id AND state='open'
+	) blocker ON true`
+
 // GetWorkItem returns the customer-safe current projection and value status.
 func (s *Store) GetWorkItem(ctx context.Context, id string) (WorkItem, error) {
-	row := s.pool.QueryRow(ctx, `
-		SELECT c.id, c.workflow_key, c.scope_identity_id, c.title, c.source,
-		       c.current_attempt_id, c.customer_state, c.runtime_state,
-		       c.created_at, c.updated_at, c.started_at, c.finished_at,
-		       a.customer_failure_summary, a.value_model_id IS NOT NULL, a.value_model_snapshot,
-		       v.amount::text, v.currency,
-		       EXISTS (SELECT 1 FROM work.value_ledger d WHERE d.work_item_id=c.id AND d.kind='feedback_deduction')
-		FROM work.current_work_items c
-		JOIN work.attempts a ON a.id=c.current_attempt_id
-		LEFT JOIN LATERAL (
-			SELECT SUM(amount) amount, MIN(currency) currency FROM work.value_ledger WHERE work_item_id=c.id
-		) v ON true
-		WHERE c.id=$1`, id)
-	var out WorkItem
-	var failure []byte
-	if err := row.Scan(&out.ID, &out.WorkflowKey, &out.ScopeIdentityID, &out.Title, &out.Source,
-		&out.CurrentAttemptID, &out.State, &out.RuntimeState, &out.CreatedAt, &out.UpdatedAt,
-		&out.StartedAt, &out.FinishedAt, &failure, &out.ValueConfigured, &out.ValueModel,
-		&out.EstimatedValue, &out.ValueCurrency, &out.ValueDisputed); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return WorkItem{}, ErrNotFound
-		}
-		return WorkItem{}, err
+	out, err := scanWorkItem(s.pool.QueryRow(ctx, workItemSelect+` WHERE c.id=$1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkItem{}, ErrNotFound
 	}
-	out.FailureSummary = failure
-	return out, nil
+	return out, err
 }
 
-// ListWorkItems returns cursor-stable customer work ordered newest first.
-func (s *Store) ListWorkItems(ctx context.Context, state, search string, limit int) ([]WorkItem, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
+// ListWorkItems returns customer work ordered newest first for the selected
+// Dashboard period. Search is restricted to customer-safe presentation data.
+func (s *Store) ListWorkItems(ctx context.Context, filter WorkItemFilter) ([]WorkItem, error) {
+	if filter.Limit <= 0 || filter.Limit > 200 {
+		filter.Limit = 200
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT c.id, c.workflow_key, c.scope_identity_id, c.title, c.source,
-		       c.current_attempt_id, c.customer_state, c.runtime_state,
-		       c.created_at, c.updated_at, c.started_at, c.finished_at,
-		       a.customer_failure_summary, a.value_model_id IS NOT NULL, a.value_model_snapshot,
-		       v.amount::text, v.currency,
-		       EXISTS (SELECT 1 FROM work.value_ledger d WHERE d.work_item_id=c.id AND d.kind='feedback_deduction')
-		FROM work.current_work_items c
-		JOIN work.attempts a ON a.id=c.current_attempt_id
-		LEFT JOIN LATERAL (
-			SELECT SUM(amount) amount, MIN(currency) currency FROM work.value_ledger WHERE work_item_id=c.id
-		) v ON true
+	rows, err := s.pool.Query(ctx, workItemSelect+`
 		WHERE ($1='' OR c.customer_state=$1)
-		  AND ($2='' OR c.title ILIKE '%' || $2 || '%' OR c.source::text ILIKE '%' || $2 || '%')
-		ORDER BY c.created_at DESC, c.id DESC LIMIT $3`, state, search, limit)
+		  AND ($2='' OR c.title ILIKE '%' || $2 || '%' OR wi.source_presentation::text ILIKE '%' || $2 || '%')
+		  AND (c.customer_state NOT IN ('done','failed') OR $3::timestamptz IS NULL OR COALESCE(c.finished_at,c.created_at) >= $3)
+		  AND (c.customer_state NOT IN ('done','failed') OR $4::timestamptz IS NULL OR COALESCE(c.finished_at,c.created_at) < $4)
+		ORDER BY c.created_at DESC, c.id DESC LIMIT $5`, filter.State, filter.Search, filter.From, filter.To, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]WorkItem, 0)
 	for rows.Next() {
-		var item WorkItem
-		var failure []byte
-		if err := rows.Scan(&item.ID, &item.WorkflowKey, &item.ScopeIdentityID, &item.Title, &item.Source,
-			&item.CurrentAttemptID, &item.State, &item.RuntimeState, &item.CreatedAt, &item.UpdatedAt,
-			&item.StartedAt, &item.FinishedAt, &failure, &item.ValueConfigured, &item.ValueModel,
-			&item.EstimatedValue, &item.ValueCurrency, &item.ValueDisputed); err != nil {
+		item, err := scanWorkItem(rows)
+		if err != nil {
 			return nil, err
 		}
-		item.FailureSummary = failure
 		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
+func scanWorkItem(row pgx.Row) (WorkItem, error) {
+	var out WorkItem
+	var sourcePresentation, presentation, failure []byte
+	var stepKey, stepState, blockerID, blockerKind *string
+	var stepLabel, blockerTitle []byte
+	var stepStartedAt *time.Time
+	if err := row.Scan(&out.ID, &out.WorkflowKey, &out.ScopeIdentityID, &out.Title, &out.Source,
+		&sourcePresentation, &presentation, &out.CurrentAttemptID, &out.State, &out.RuntimeState,
+		&out.CreatedAt, &out.UpdatedAt, &out.StartedAt, &out.FinishedAt, &failure,
+		&out.ValueConfigured, &out.ValueModel, &out.EstimatedValue, &out.ValueCurrency, &out.ValueDisputed,
+		&stepKey, &stepLabel, &stepState, &stepStartedAt, &blockerID, &blockerKind, &blockerTitle); err != nil {
+		return WorkItem{}, err
+	}
+	if err := json.Unmarshal(sourcePresentation, &out.SourcePresentation); err != nil {
+		return WorkItem{}, err
+	}
+	if err := json.Unmarshal(presentation, &out.Presentation); err != nil {
+		return WorkItem{}, err
+	}
+	if stepKey != nil {
+		step := BusinessStep{Key: *stepKey, State: *stepState, StartedAt: stepStartedAt}
+		if err := json.Unmarshal(stepLabel, &step.Label); err != nil {
+			return WorkItem{}, err
+		}
+		out.CurrentStep = &step
+	}
+	if blockerID != nil {
+		out.Blocker = &BlockerSummary{ID: *blockerID, Kind: *blockerKind, Title: blockerTitle}
+	}
+	out.FailureSummary = failure
+	return out, nil
+}
+
 func (s *Store) ListAttempts(ctx context.Context, itemID string) ([]Attempt, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, work_item_id, number, definition_key, definition_version, definition_digest,
-		       graph_snapshot, models_snapshot, revised_from_attempt_id, actionable_guidance,
+		       graph_snapshot, models_snapshot, presentation_snapshot, revised_from_attempt_id, actionable_guidance,
 		       consequence_confirmation, created_at, finished_at
 		FROM work.attempts WHERE work_item_id=$1 ORDER BY number`, itemID)
 	if err != nil {
@@ -329,8 +355,9 @@ func (s *Store) ListAttempts(ctx context.Context, itemID string) ([]Attempt, err
 	for rows.Next() {
 		var a Attempt
 		if err := rows.Scan(&a.ID, &a.WorkItemID, &a.Number, &a.DefinitionKey, &a.DefinitionVersion,
-			&a.DefinitionDigest, &a.GraphSnapshot, &a.ModelsSnapshot, &a.RevisedFromAttemptID,
-			&a.ActionableGuidance, &a.ConsequenceConfirmation, &a.CreatedAt, &a.FinishedAt); err != nil {
+			&a.DefinitionDigest, &a.GraphSnapshot, &a.ModelsSnapshot, &a.PresentationSnapshot,
+			&a.RevisedFromAttemptID, &a.ActionableGuidance, &a.ConsequenceConfirmation,
+			&a.CreatedAt, &a.FinishedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -351,6 +378,38 @@ func (s *Store) ListNodeExecutions(ctx context.Context, attemptID string) ([]Nod
 			return nil, err
 		}
 		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// ListArtifacts returns immutable item-scoped links with safe metadata needed
+// for result/source downloads.
+func (s *Store) ListArtifacts(ctx context.Context, itemID string) ([]WorkArtifact, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM work.work_items WHERE id=$1)`, itemID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT l.artifact_id,l.attempt_id::text,l.node_execution_id::text,l.role,l.metadata,
+		       a.mime_type,a.size_bytes,a.digest,l.created_at
+		FROM work.artifact_links l JOIN artifact.artifacts a ON a.id=l.artifact_id
+		WHERE l.work_item_id=$1 AND a.state='available'
+		ORDER BY l.created_at,l.id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]WorkArtifact, 0)
+	for rows.Next() {
+		var a WorkArtifact
+		if err := rows.Scan(&a.ArtifactID, &a.AttemptID, &a.NodeExecutionID, &a.Role, &a.Metadata,
+			&a.MIMEType, &a.SizeBytes, &a.Digest, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }
@@ -399,18 +458,33 @@ func scanTimeline(rows pgx.Rows) ([]TimelineEvent, error) {
 	return out, rows.Err()
 }
 
-const nodeExecutionSelect = `SELECT id, attempt_id, node_key, visit, execution_seq, kind, prompt,
+const nodeExecutionSelect = `SELECT id, attempt_id, node_key, business_label, visit, execution_seq, kind, prompt,
 	context, model_snapshot, skills_snapshot, capabilities_snapshot, workspace_tools, timeout_ms,
 	state, completion_outcome, completion_summary, output, artifact_refs, completion_reported_at,
 	started_at, finished_at, created_at FROM runtime.node_executions`
 
 func scanNodeExecution(row pgx.Row) (NodeExecution, error) {
 	var n NodeExecution
-	err := row.Scan(&n.ID, &n.AttemptID, &n.NodeKey, &n.Visit, &n.ExecutionSeq, &n.Kind,
+	err := row.Scan(&n.ID, &n.AttemptID, &n.NodeKey, &n.BusinessLabel, &n.Visit, &n.ExecutionSeq, &n.Kind,
 		&n.Prompt, &n.Context, &n.ModelSnapshot, &n.SkillsSnapshot, &n.CapabilitiesSnapshot,
 		&n.WorkspaceTools, &n.TimeoutMS, &n.State, &n.CompletionOutcome, &n.CompletionSummary,
 		&n.Output, &n.ArtifactRefs, &n.CompletionReportedAt, &n.StartedAt, &n.FinishedAt, &n.CreatedAt)
 	return n, err
+}
+
+func validateSourcePresentation(in SourcePresentation) error {
+	if strings.TrimSpace(in.Kind) == "" || strings.TrimSpace(in.Title) == "" {
+		return fmt.Errorf("%w: sourcePresentation.kind and title are required", ErrInvalidInput)
+	}
+	if in.OriginalURL != "" && !strings.HasPrefix(in.OriginalURL, "https://") {
+		return fmt.Errorf("%w: sourcePresentation.originalUrl must use https", ErrInvalidInput)
+	}
+	for i, field := range in.Evidence {
+		if (field.Label.EN == "" && field.Label.PT == "") || strings.TrimSpace(field.Value) == "" {
+			return fmt.Errorf("%w: sourcePresentation.evidence[%d] requires a label and value", ErrInvalidInput, i)
+		}
+	}
+	return nil
 }
 
 func startPayloadHash(in StartInput) (string, error) {
@@ -436,12 +510,13 @@ func startPayloadHash(in StartInput) (string, error) {
 		artifacts = append(artifacts, canonicalArtifact{ArtifactID: ref.ArtifactID, Role: ref.Role, Metadata: metadata})
 	}
 	canonical := struct {
-		WorkflowKey string              `json:"workflowKey"`
-		Version     string              `json:"version"`
-		Title       string              `json:"title"`
-		Source      any                 `json:"source"`
-		Artifacts   []canonicalArtifact `json:"artifacts,omitempty"`
-	}{in.WorkflowKey, in.WorkflowVersion, in.Title, source, artifacts}
+		WorkflowKey        string              `json:"workflowKey"`
+		Version            string              `json:"version"`
+		Title              string              `json:"title"`
+		Source             any                 `json:"source"`
+		SourcePresentation SourcePresentation  `json:"sourcePresentation"`
+		Artifacts          []canonicalArtifact `json:"artifacts,omitempty"`
+	}{in.WorkflowKey, in.WorkflowVersion, in.Title, source, in.SourcePresentation, artifacts}
 	b, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("canonical start payload: %w", err)
@@ -645,12 +720,13 @@ func insertNodeExecutionTx(ctx context.Context, tx pgx.Tx, attemptID string, nod
 		timeoutMS = d.Milliseconds()
 	}
 	id := uuid.NewString()
+	labelJSON, _ := json.Marshal(node.Label)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runtime.node_executions
-			(id, attempt_id, node_key, visit, execution_seq, kind, prompt, context,
+			(id, attempt_id, node_key, business_label, visit, execution_seq, kind, prompt, context,
 			 model_snapshot, skills_snapshot, capabilities_snapshot, workspace_tools, timeout_ms)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		id, attemptID, node.Key, visit, seq, node.Kind, nullable(node.Prompt), contextJSON,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		id, attemptID, node.Key, labelJSON, visit, seq, node.Kind, nullable(node.Prompt), contextJSON,
 		modelJSON, skillsJSON, capsJSON, node.WorkspaceTools, timeoutMS); err != nil {
 		return "", fmt.Errorf("insert node execution: %w", err)
 	}

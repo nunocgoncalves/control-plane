@@ -73,6 +73,7 @@ internal/controller/ CRD reconcilers (Git -> DB bridge): identitymapping, permis
 internal/runtime/   durable turn + graph runtime state and technical event log — HOR-246/254
 internal/work/      work items, graph orchestration, blockers, feedback, value, business events — HOR-254
 internal/server/    chi HTTP routes (health, identity/admin, work REST + SSE)
+ui/                 React/Vite customer Dashboard embedded in the API — HOR-396
 internal/logging/   shared slog logger + logr bridge
 internal/version/   build-time version metadata
 internal/testutil/  shared Postgres test helper (testcontainers)
@@ -80,13 +81,15 @@ config/             kubebuilder Kustomize — DEV/envtest only (prod = forge Hel
 proto/              harness RPC contract (buf) — HOR-351
 harness/            Node pi harness (the agent) — HOR-351; see harness/README.md
 internal/harnessrpc/ generated Go Connect stubs (HOR-249 consumes) — HOR-351
-Dockerfile          manager + api + gateway image (one image, three entrypoints)
+Dockerfile          Dashboard + manager/api/gateway/dispatch image (one image, four entrypoints)
 ```
 
 ## Develop
 
 ```bash
-make build              # build bin/manager + bin/api + bin/gateway
+make ui-deps            # install locked Dashboard dependencies
+make ui-test            # component/interaction/accessibility/localization tests
+make build              # build Dashboard + all Go binaries
 make run-manager        # run the operator locally
 make run-gateway        # run the tool gateway (serve); needs DATABASE_URL + mTLS certs
 make migrate-up         # apply DB migrations
@@ -430,6 +433,7 @@ Work APIs require a `work`-scope bearer key and operation capability
 | `GET` | `/v1/work-items/{id}/attempts` | Preserved attempt history |
 | `GET` | `/v1/work-attempts/{id}/nodes` | Append-only graph-node visits and structured outputs |
 | `GET` | `/v1/work-items/{id}/timeline` | Customer-safe business timeline |
+| `GET` | `/v1/work-items/{id}/artifacts` | Immutable item/attempt artifact links and download metadata |
 | `GET` | `/v1/work-items/{id}/consequences` | Customer-safe external-action tokens required by a revision |
 | `GET` | `/v1/work-items/{id}/blocker` | Current actionable request |
 | `POST` | `/v1/work-blockers/{id}/responses` | Resolve human/consequence gate |
@@ -439,6 +443,19 @@ Work APIs require a `work`-scope bearer key and operation capability
 | `GET` | `/v1/work-dashboard` | State counts plus explainable estimated value/trend |
 | `GET` | `/v1/work-events` | Resumable SSE (`Last-Event-ID`) of business-safe events |
 | `POST` | `/v1/value-models` | Admin-only immutable value-model version creation |
+
+Work-item creation separates private `source` trigger context from required
+`sourcePresentation` (`kind`, business title/subtitle, optional HTTPS original
+link, and localized evidence). Customer APIs serialize only the latter. Each
+workflow node requires English and Portuguese business labels; attempts and
+node visits snapshot workflow/persona/stage presentation for stable cards.
+Artifact blocker responses accept validated `artifactRefs`, link them to the
+human-gate visit, and propagate them as authorized inputs when work resumes.
+
+The private Dashboard is served at `/`. The operator supplies a work-scope API
+key after loading the page; the key is retained only in JavaScript memory and
+is never put in a URL, cookie, local storage, or session storage. Walter access
+remains SSH port-forwarding/screen sharing per the Platform-v1 release boundary.
 
 `runtime.events` and gateway ledgers remain technical/operator records and are
 never returned by customer work APIs. `work.timeline_events` is append-only and

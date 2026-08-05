@@ -12,3 +12,9 @@
 
 # Re-include embedded SQL migrations (go:embed in internal/database)
 !**/*.sql
+
+# Dashboard source is built in its own Node stage, then copied into the Go
+# builder for embedding. Local dependencies/build output never enter context.
+!ui/**
+ui/node_modules/**
+ui/dist/**
