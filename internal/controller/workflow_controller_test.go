@@ -85,7 +85,7 @@ func validWalterWorkflow(name, ns, poolName string) *v1alpha1.Workflow {
 				EntryNode: "process", MaxTransitions: 20,
 				Nodes: []v1alpha1.WorkflowNode{
 					{Key: "process", Label: v1alpha1.LocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: v1alpha1.WorkflowNodeAgentTask, Prompt: "Process the quotation", Skills: []string{"walter-quotation"}, Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_review"}, OutputSchema: jsonConfig(`{"type":"object"}`)},
-					{Key: "review", Label: v1alpha1.LocalizedText{EN: "Reviewing result", PT: "A rever resultado"}, Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review", PT: "Revisão"}, Description: v1alpha1.LocalizedText{EN: "Review the result", PT: "Reveja o resultado"}}},
+					{Key: "review", Label: v1alpha1.LocalizedText{EN: "Reviewing result", PT: "A rever resultado"}, Kind: v1alpha1.WorkflowNodeHumanGate, Outcomes: []string{"approved", "changes_requested"}, HumanGate: &v1alpha1.HumanGateSpec{Type: v1alpha1.HumanGateDecision, Title: v1alpha1.LocalizedText{EN: "Review", PT: "Revisão"}, Description: v1alpha1.LocalizedText{EN: "Review the result", PT: "Reveja o resultado"}, Presentation: v1alpha1.HumanGatePresentation{Outcomes: []v1alpha1.LocalizedText{{EN: "Approve", PT: "Aprovar"}, {EN: "Request changes", PT: "Pedir alterações"}}}}},
 				},
 				Edges:            []v1alpha1.WorkflowEdge{{From: "process", Outcome: "needs_review", To: "review"}, {From: "review", Outcome: "changes_requested", To: "process"}},
 				TerminalOutcomes: []v1alpha1.WorkflowTerminalOutcome{{Node: "process", Outcome: "completed"}, {Node: "review", Outcome: "approved"}},
@@ -129,6 +129,24 @@ func TestWorkflowValidation(t *testing.T) {
 	err := newReconciler(pool).validateSpec(ctx, missingBusinessLabel)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label requires en and pt")
+
+	missingOutcomeLabel := validWalterWorkflow("w", ns, "walter-pool")
+	missingOutcomeLabel.Spec.Graph.Nodes[1].HumanGate.Presentation.Outcomes = nil
+	err = newReconciler(pool).validateSpec(ctx, missingOutcomeLabel)
+	assert.ErrorContains(t, err, "one localized label for each declared outcome")
+
+	missingFieldLabel := validWalterWorkflow("w", ns, "walter-pool")
+	missingFieldLabel.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","properties":{"route":{"type":"string","enum":["claims","operations"]}}}`)
+	err = newReconciler(pool).validateSpec(ctx, missingFieldLabel)
+	assert.ErrorContains(t, err, `property "route" requires localized presentation`)
+
+	localizedResponse := validWalterWorkflow("w", ns, "walter-pool")
+	localizedResponse.Spec.Graph.Nodes[1].HumanGate.ResponseSchema = jsonConfig(`{"type":"object","properties":{"route":{"type":"string","enum":["claims","operations"]}}}`)
+	localizedResponse.Spec.Graph.Nodes[1].HumanGate.Presentation.Fields = []v1alpha1.HumanGateFieldPresentation{{
+		Key: "route", Label: v1alpha1.LocalizedText{EN: "Route", PT: "Destino"},
+		Options: []v1alpha1.LocalizedText{{EN: "Claims", PT: "Reclamações"}, {EN: "Operations", PT: "Operações"}},
+	}}
+	assert.NoError(t, newReconciler(pool).validateSpec(ctx, localizedResponse))
 
 	// Unknown source type -> rejected.
 	badSource := validWalterWorkflow("w", ns, "walter-pool")

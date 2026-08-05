@@ -558,6 +558,20 @@ func buildCanonicalSpec(wf *v1alpha1.Workflow) workflow.CanonicalSpec {
 				Description:    workflow.CanonicalLocalizedText{EN: n.HumanGate.Description.EN, PT: n.HumanGate.Description.PT},
 				ResponseSchema: rawJSON(n.HumanGate.ResponseSchema),
 			}
+			for _, label := range n.HumanGate.Presentation.Outcomes {
+				cn.HumanGate.Presentation.Outcomes = append(cn.HumanGate.Presentation.Outcomes,
+					workflow.CanonicalLocalizedText{EN: label.EN, PT: label.PT})
+			}
+			for _, field := range n.HumanGate.Presentation.Fields {
+				canonicalField := workflow.CanonicalHumanGateFieldPresentation{
+					Key: field.Key, Label: workflow.CanonicalLocalizedText{EN: field.Label.EN, PT: field.Label.PT},
+				}
+				for _, label := range field.Options {
+					canonicalField.Options = append(canonicalField.Options,
+						workflow.CanonicalLocalizedText{EN: label.EN, PT: label.PT})
+				}
+				cn.HumanGate.Presentation.Fields = append(cn.HumanGate.Presentation.Fields, canonicalField)
+			}
 		}
 		spec.Graph.Nodes = append(spec.Graph.Nodes, cn)
 	}

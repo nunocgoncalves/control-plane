@@ -404,6 +404,10 @@ describe("Platform v1 Dashboard", () => {
         properties: { note: { type: "string", title: "Note" } },
       },
       allowedOutcomes: ["provided"],
+      responsePresentation: {
+        outcomes: [{ en: "Provide", pt: "Fornecer" }],
+        fields: [{ key: "note", label: { en: "Note", pt: "Nota" } }],
+      },
       state: "open",
     };
     vi.mocked(fetch).mockImplementation((input, init) => {
@@ -457,6 +461,7 @@ describe("Platform v1 Dashboard", () => {
       id: "item-decision",
       currentAttemptId: "attempt-decision",
       state: "blocked",
+      source: { ...item.source, kind: "legacy_crm" },
       blocker: {
         id: "blocker-decision",
         kind: "decision",
@@ -475,15 +480,52 @@ describe("Platform v1 Dashboard", () => {
       },
       responseSchema: {
         type: "object",
-        required: ["amount", "quantity", "details", "items"],
+        required: ["amount", "quantity", "details", "items", "route"],
         properties: {
           amount: { type: "number", title: "Amount" },
           quantity: { type: "integer", title: "Quantity" },
           details: { type: "object", title: "Details" },
           items: { type: "array", title: "Items" },
+          route: {
+            type: "string",
+            title: "Routing strategy",
+            enum: ["claims_queue", "operations_queue"],
+          },
         },
       },
       allowedOutcomes: ["approved", "rejected"],
+      responsePresentation: {
+        outcomes: [
+          { en: "Authorize", pt: "Autorizar" },
+          { en: "Decline", pt: "Recusar" },
+        ],
+        fields: [
+          {
+            key: "amount",
+            label: { en: "Proposed amount", pt: "Montante proposto" },
+          },
+          {
+            key: "quantity",
+            label: { en: "Item count", pt: "Número de itens" },
+          },
+          {
+            key: "details",
+            label: { en: "Business details", pt: "Detalhes de negócio" },
+          },
+          {
+            key: "items",
+            label: { en: "Included items", pt: "Itens incluídos" },
+          },
+          {
+            key: "route",
+            label: { en: "Destination", pt: "Destino" },
+            options: [
+              { en: "Send to claims", pt: "Encaminhar para reclamações" },
+              { en: "Send to operations", pt: "Encaminhar para operações" },
+            ],
+          },
+        ],
+      },
       state: "open",
     };
     vi.mocked(fetch).mockImplementation((input, init) => {
@@ -502,18 +544,24 @@ describe("Platform v1 Dashboard", () => {
     await screen.findByRole("heading", { name: "Escolha a entrega" });
     const outcome = screen.getByLabelText("Decisão solicitada");
     expect(
-      screen.getByRole("option", { name: "Aprovado" }),
+      screen.getByRole("option", { name: "Autorizar" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Recusar" })).toBeInTheDocument();
+    expect(screen.getAllByText("Origem externa").length).toBeGreaterThan(0);
     expect(
-      screen.getByRole("option", { name: "Rejeitado" }),
-    ).toBeInTheDocument();
+      screen.queryByText("legacy crm", { exact: false }),
+    ).not.toBeInTheDocument();
     await user.selectOptions(outcome, "rejected");
-    await user.type(screen.getByLabelText("Montante"), "12.5");
-    await user.type(screen.getByLabelText("Quantidade"), "3");
-    await user.click(screen.getByLabelText("Detalhes"));
+    await user.type(screen.getByLabelText("Montante proposto"), "12.5");
+    await user.type(screen.getByLabelText("Número de itens"), "3");
+    await user.click(screen.getByLabelText("Detalhes de negócio"));
     await user.paste('{"priority":"high"}');
-    await user.click(screen.getByLabelText("Itens"));
+    await user.click(screen.getByLabelText("Itens incluídos"));
     await user.paste('["quote"]');
+    await user.selectOptions(screen.getByLabelText("Destino"), "0");
+    expect(
+      screen.getByRole("option", { name: "Encaminhar para reclamações" }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Enviar resposta" }));
     await waitFor(() =>
       expect(
@@ -536,6 +584,7 @@ describe("Platform v1 Dashboard", () => {
       quantity: 3,
       details: { priority: "high" },
       items: ["quote"],
+      route: "claims_queue",
     });
   });
 
@@ -564,6 +613,9 @@ describe("Platform v1 Dashboard", () => {
       },
       responseSchema: { type: "object" },
       allowedOutcomes: ["confirmed"],
+      responsePresentation: {
+        outcomes: [{ en: "Confirm", pt: "Confirmar" }],
+      },
       requiredConsequences: [
         {
           invocationId: "invocation-1",

@@ -570,11 +570,12 @@ func createHumanBlockerTx(ctx context.Context, tx pgx.Tx, itemID, attemptID, nod
 	title, _ := json.Marshal(node.HumanGate.Title)
 	description, _ := json.Marshal(node.HumanGate.Description)
 	outcomes, _ := json.Marshal(node.Outcomes)
+	presentation, _ := json.Marshal(node.HumanGate.Presentation)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO work.blockers
-			(work_item_id,attempt_id,node_execution_id,kind,title,description,response_schema,allowed_outcomes)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, itemID, attemptID, nodeID, node.HumanGate.Type,
-		title, description, jsonOrObject(node.HumanGate.ResponseSchema), outcomes)
+			(work_item_id,attempt_id,node_execution_id,kind,title,description,response_schema,allowed_outcomes,response_presentation)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, itemID, attemptID, nodeID, node.HumanGate.Type,
+		title, description, jsonOrObject(node.HumanGate.ResponseSchema), outcomes, presentation)
 	return err
 }
 
@@ -583,10 +584,11 @@ func createConsequenceBlockerTx(ctx context.Context, tx pgx.Tx, itemID, attemptI
 	description, _ := json.Marshal(map[string]string{"en": "This step may repeat external actions from an earlier visit.", "pt": "Este passo pode repetir ações externas de uma visita anterior."})
 	required, _ := json.Marshal(consequences)
 	outcomes := []byte(`["confirmed"]`)
+	presentation := []byte(`{"outcomes":[{"en":"Confirm","pt":"Confirmar"}]}`)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO work.blockers
-			(work_item_id,attempt_id,node_execution_id,kind,title,description,response_schema,allowed_outcomes,required_consequences)
-		VALUES ($1,$2,$3,'consequence_confirmation',$4,$5,'{}',$6,$7)`, itemID, attemptID, nodeID, title, description, outcomes, required)
+			(work_item_id,attempt_id,node_execution_id,kind,title,description,response_schema,allowed_outcomes,response_presentation,required_consequences)
+		VALUES ($1,$2,$3,'consequence_confirmation',$4,$5,'{}',$6,$7,$8)`, itemID, attemptID, nodeID, title, description, outcomes, presentation, required)
 	return err
 }
 

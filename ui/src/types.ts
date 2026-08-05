@@ -131,8 +131,18 @@ export interface Blocker {
   description: LocalizedText;
   responseSchema: JSONSchema;
   allowedOutcomes: string[];
+  responsePresentation: HumanGatePresentation;
   requiredConsequences?: Consequence[];
   state: string;
+}
+export interface HumanGatePresentation {
+  outcomes: LocalizedText[];
+  fields?: HumanGateFieldPresentation[];
+}
+export interface HumanGateFieldPresentation {
+  key: string;
+  label: LocalizedText;
+  options?: LocalizedText[];
 }
 export interface JSONSchema {
   type?: string;

@@ -171,6 +171,34 @@ type HumanGateSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	ResponseSchema *apiextensionsv1.JSON `json:"responseSchema,omitempty"`
+
+	// presentation supplies localized labels for every outcome and every
+	// customer-visible response field/enum option.
+	// +kubebuilder:validation:Required
+	Presentation HumanGatePresentation `json:"presentation"`
+}
+
+// HumanGatePresentation keeps machine outcomes/schema keys out of customer UI.
+// Labels follow the declaration order of WorkflowNode.outcomes and enum values.
+// +kubebuilder:object:generate=true
+type HumanGatePresentation struct {
+	// +kubebuilder:validation:MinItems=1
+	Outcomes []LocalizedText `json:"outcomes"`
+	// +optional
+	Fields []HumanGateFieldPresentation `json:"fields,omitempty"`
+}
+
+// HumanGateFieldPresentation localizes one top-level response-schema property.
+// +kubebuilder:object:generate=true
+type HumanGateFieldPresentation struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+	// +kubebuilder:validation:Required
+	Label LocalizedText `json:"label"`
+	// options follows the field enum order when the schema declares one.
+	// +optional
+	Options []LocalizedText `json:"options,omitempty"`
 }
 
 // LocalizedText carries approved English/Portuguese customer copy.

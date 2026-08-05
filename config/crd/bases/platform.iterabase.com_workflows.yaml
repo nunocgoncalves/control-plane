@@ -113,6 +113,61 @@ spec:
                                 pt:
                                   type: string
                               type: object
+                            presentation:
+                              description: |-
+                                presentation supplies localized labels for every outcome and every
+                                customer-visible response field/enum option.
+                              properties:
+                                fields:
+                                  items:
+                                    description: HumanGateFieldPresentation localizes
+                                      one top-level response-schema property.
+                                    properties:
+                                      key:
+                                        minLength: 1
+                                        type: string
+                                      label:
+                                        description: LocalizedText carries approved
+                                          English/Portuguese customer copy.
+                                        properties:
+                                          en:
+                                            type: string
+                                          pt:
+                                            type: string
+                                        type: object
+                                      options:
+                                        description: options follows the field enum
+                                          order when the schema declares one.
+                                        items:
+                                          description: LocalizedText carries approved
+                                            English/Portuguese customer copy.
+                                          properties:
+                                            en:
+                                              type: string
+                                            pt:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    required:
+                                    - key
+                                    - label
+                                    type: object
+                                  type: array
+                                outcomes:
+                                  items:
+                                    description: LocalizedText carries approved English/Portuguese
+                                      customer copy.
+                                    properties:
+                                      en:
+                                        type: string
+                                      pt:
+                                        type: string
+                                    type: object
+                                  minItems: 1
+                                  type: array
+                              required:
+                              - outcomes
+                              type: object
                             responseSchema:
                               description: responseSchema validates the response payload.
                               x-kubernetes-preserve-unknown-fields: true
@@ -135,6 +190,7 @@ spec:
                               type: string
                           required:
                           - description
+                          - presentation
                           - title
                           - type
                           type: object

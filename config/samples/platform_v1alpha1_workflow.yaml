@@ -81,6 +81,12 @@ spec:
             required: [information]
             properties:
               information: {type: string, minLength: 1}
+          presentation:
+            outcomes:
+              - {en: Information provided, pt: Informação fornecida}
+            fields:
+              - key: information
+                label: {en: Information, pt: Informação}
 
     edges:
       - from: process-quotation

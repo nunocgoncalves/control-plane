@@ -447,9 +447,12 @@ Work APIs require a `work`-scope bearer key and operation capability
 Work-item creation separates private `source` trigger context from required
 `sourcePresentation` (`kind`, business title/subtitle, optional HTTPS original
 link, and localized evidence). Customer APIs serialize only the latter. Each
-workflow node requires English and Portuguese business labels; attempts and
-node visits snapshot workflow/persona/stage presentation for stable cards.
-Artifact blocker responses accept validated `artifactRefs`, link them to the
+workflow node requires English and Portuguese business labels. Human gates
+also require ordered localized labels for outcomes, response fields, and enum
+options; blockers snapshot that presentation so the Dashboard never exposes
+machine identifiers. Attempts and node visits snapshot workflow/persona/stage
+presentation for stable cards. Artifact blocker responses accept validated
+`artifactRefs`, link them to the
 human-gate visit, and propagate them as authorized inputs when work resumes.
 
 The private Dashboard is served at `/`. The operator supplies a work-scope API

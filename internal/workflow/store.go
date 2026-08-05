@@ -653,10 +653,24 @@ type CanonicalNode struct {
 
 // CanonicalHumanGate is the customer-actionable request contract.
 type CanonicalHumanGate struct {
-	Type           string                 `json:"type"`
-	Title          CanonicalLocalizedText `json:"title"`
-	Description    CanonicalLocalizedText `json:"description"`
-	ResponseSchema json.RawMessage        `json:"responseSchema,omitempty"`
+	Type           string                         `json:"type"`
+	Title          CanonicalLocalizedText         `json:"title"`
+	Description    CanonicalLocalizedText         `json:"description"`
+	ResponseSchema json.RawMessage                `json:"responseSchema,omitempty"`
+	Presentation   CanonicalHumanGatePresentation `json:"presentation"`
+}
+
+// CanonicalHumanGatePresentation is snapshotted with each actionable blocker.
+type CanonicalHumanGatePresentation struct {
+	Outcomes []CanonicalLocalizedText              `json:"outcomes"`
+	Fields   []CanonicalHumanGateFieldPresentation `json:"fields,omitempty"`
+}
+
+// CanonicalHumanGateFieldPresentation localizes one top-level schema field.
+type CanonicalHumanGateFieldPresentation struct {
+	Key     string                   `json:"key"`
+	Label   CanonicalLocalizedText   `json:"label"`
+	Options []CanonicalLocalizedText `json:"options,omitempty"`
 }
 
 // CanonicalLocalizedText is business copy in approved v1 locales.

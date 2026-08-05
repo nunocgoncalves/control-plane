@@ -33,7 +33,7 @@ func (s *Store) RespondBlocker(ctx context.Context, in BlockerResponseInput) (Bl
 	defer func() { _ = tx.Rollback(ctx) }()
 	b, err := scanBlocker(tx.QueryRow(ctx, `
 		SELECT id,work_item_id,attempt_id,node_execution_id,kind,title,description,response_schema,
-		       allowed_outcomes,required_consequences,state,response_outcome,response,created_at,resolved_at
+		       allowed_outcomes,response_presentation,required_consequences,state,response_outcome,response,created_at,resolved_at
 		FROM work.blockers WHERE id=$1 FOR UPDATE`, in.BlockerID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Blocker{}, ErrNotFound
@@ -395,7 +395,7 @@ func sourceArtifactsTx(ctx context.Context, tx pgx.Tx, itemID string) ([]Artifac
 
 func scanBlocker(row pgx.Row) (Blocker, error) {
 	var b Blocker
-	err := row.Scan(&b.ID, &b.WorkItemID, &b.AttemptID, &b.NodeExecutionID, &b.Kind, &b.Title, &b.Description, &b.ResponseSchema, &b.AllowedOutcomes, &b.RequiredConsequences, &b.State, &b.ResponseOutcome, &b.Response, &b.CreatedAt, &b.ResolvedAt)
+	err := row.Scan(&b.ID, &b.WorkItemID, &b.AttemptID, &b.NodeExecutionID, &b.Kind, &b.Title, &b.Description, &b.ResponseSchema, &b.AllowedOutcomes, &b.ResponsePresentation, &b.RequiredConsequences, &b.State, &b.ResponseOutcome, &b.Response, &b.CreatedAt, &b.ResolvedAt)
 	return b, err
 }
 func equalStrings(a, b []string) bool {

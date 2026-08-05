@@ -225,6 +225,7 @@ type Blocker struct {
 	Description          json.RawMessage `json:"description"`
 	ResponseSchema       json.RawMessage `json:"responseSchema"`
 	AllowedOutcomes      json.RawMessage `json:"allowedOutcomes"`
+	ResponsePresentation json.RawMessage `json:"responsePresentation"`
 	RequiredConsequences json.RawMessage `json:"requiredConsequences"`
 	State                string          `json:"state"`
 	ResponseOutcome      *string         `json:"responseOutcome,omitempty"`

@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
@@ -126,14 +128,17 @@ func ValidateGraph(spec CanonicalSpec) error {
 			default:
 				return fmt.Errorf("graph.nodes[%d].humanGate.type %q is invalid", i, n.HumanGate.Type)
 			}
-			if n.HumanGate.Title.EN == "" && n.HumanGate.Title.PT == "" {
-				return fmt.Errorf("graph.nodes[%d].humanGate.title requires en or pt text", i)
+			if n.HumanGate.Title.EN == "" || n.HumanGate.Title.PT == "" {
+				return fmt.Errorf("graph.nodes[%d].humanGate.title requires en and pt text", i)
 			}
-			if n.HumanGate.Description.EN == "" && n.HumanGate.Description.PT == "" {
-				return fmt.Errorf("graph.nodes[%d].humanGate.description requires en or pt text", i)
+			if n.HumanGate.Description.EN == "" || n.HumanGate.Description.PT == "" {
+				return fmt.Errorf("graph.nodes[%d].humanGate.description requires en and pt text", i)
 			}
 			if err := compileSchema(n.HumanGate.ResponseSchema); err != nil {
 				return fmt.Errorf("graph.nodes[%d].humanGate.responseSchema: %w", i, err)
+			}
+			if err := validateHumanGatePresentation(n); err != nil {
+				return fmt.Errorf("graph.nodes[%d].humanGate.presentation: %w", i, err)
 			}
 		default:
 			return fmt.Errorf("graph.nodes[%d].kind %q is unknown", i, n.Kind)
@@ -228,6 +233,72 @@ func walk(start string, adj map[string][]string) map[string]struct{} {
 		}
 	}
 	return seen
+}
+
+func validateHumanGatePresentation(node CanonicalNode) error {
+	presentation := node.HumanGate.Presentation
+	if len(presentation.Outcomes) != len(node.Outcomes) {
+		return fmt.Errorf("outcomes must provide one localized label for each declared outcome")
+	}
+	for i, label := range presentation.Outcomes {
+		if label.EN == "" || label.PT == "" {
+			return fmt.Errorf("outcomes[%d] requires en and pt text", i)
+		}
+	}
+
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	trimmed := bytes.TrimSpace(node.HumanGate.ResponseSchema)
+	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) {
+		if err := json.Unmarshal(trimmed, &schema); err != nil {
+			return fmt.Errorf("read response-schema properties: %w", err)
+		}
+	}
+	fields := make(map[string]CanonicalHumanGateFieldPresentation, len(presentation.Fields))
+	for i, field := range presentation.Fields {
+		if field.Key == "" {
+			return fmt.Errorf("fields[%d].key is required", i)
+		}
+		if _, exists := fields[field.Key]; exists {
+			return fmt.Errorf("field %q is duplicated", field.Key)
+		}
+		if field.Label.EN == "" || field.Label.PT == "" {
+			return fmt.Errorf("field %q label requires en and pt text", field.Key)
+		}
+		fields[field.Key] = field
+	}
+	for key := range fields {
+		if _, exists := schema.Properties[key]; !exists {
+			return fmt.Errorf("field %q does not exist in responseSchema.properties", key)
+		}
+	}
+	keys := make([]string, 0, len(schema.Properties))
+	for key := range schema.Properties {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		presentationField, exists := fields[key]
+		if !exists {
+			return fmt.Errorf("responseSchema property %q requires localized presentation", key)
+		}
+		var property struct {
+			Enum []json.RawMessage `json:"enum"`
+		}
+		if err := json.Unmarshal(schema.Properties[key], &property); err != nil {
+			return fmt.Errorf("responseSchema property %q must be an object", key)
+		}
+		if len(presentationField.Options) != len(property.Enum) {
+			return fmt.Errorf("field %q options must provide one localized label for each enum value", key)
+		}
+		for i, label := range presentationField.Options {
+			if label.EN == "" || label.PT == "" {
+				return fmt.Errorf("field %q options[%d] requires en and pt text", key, i)
+			}
+		}
+	}
+	return nil
 }
 
 func compileSchema(raw []byte) error {

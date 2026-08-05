@@ -185,6 +185,7 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	human, err := restarted.OpenBlockerForItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "artifact", human.Kind)
+	assert.JSONEq(t, `{"outcomes":[{"en":"Provide information","pt":"Fornecer informação"}]}`, string(human.ResponsePresentation))
 	responseArtifactID := "44444444-4444-4444-8444-444444444444"
 	_, err = pool.Exec(ctx, `
 		INSERT INTO artifact.artifacts
@@ -336,7 +337,7 @@ func seedFoundation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (stri
 		Graph: workflow.CanonicalGraph{EntryNode: "process", MaxTransitions: 20,
 			Nodes: []workflow.CanonicalNode{
 				{Key: "process", Label: workflow.CanonicalLocalizedText{EN: "Processing quotation", PT: "A processar cotação"}, Kind: workflow.NodeAgentTask, Prompt: "Process quotation", Capabilities: []string{"graph.read", "graph.excel.write"}, Outcomes: []string{"completed", "needs_information"}, OutputSchema: json.RawMessage(`{"type":"object"}`)},
-				{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Waiting for artifact", PT: "A aguardar artefacto"}, Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "artifact", Title: workflow.CanonicalLocalizedText{EN: "Artifact required", PT: "Artefacto necessário"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination file", PT: "Forneça o ficheiro de destino"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"]}`)}},
+				{Key: "information", Label: workflow.CanonicalLocalizedText{EN: "Waiting for artifact", PT: "A aguardar artefacto"}, Kind: workflow.NodeHumanGate, Outcomes: []string{"information_provided"}, HumanGate: &workflow.CanonicalHumanGate{Type: "artifact", Title: workflow.CanonicalLocalizedText{EN: "Artifact required", PT: "Artefacto necessário"}, Description: workflow.CanonicalLocalizedText{EN: "Provide the destination file", PT: "Forneça o ficheiro de destino"}, ResponseSchema: json.RawMessage(`{"type":"object","required":["information"]}`), Presentation: workflow.CanonicalHumanGatePresentation{Outcomes: []workflow.CanonicalLocalizedText{{EN: "Provide information", PT: "Fornecer informação"}}}}},
 			},
 			Edges:            []workflow.CanonicalEdge{{From: "process", Outcome: "needs_information", To: "information"}, {From: "information", Outcome: "information_provided", To: "process"}},
 			TerminalOutcomes: []workflow.CanonicalTerminalOutcome{{Node: "process", Outcome: "completed"}}},

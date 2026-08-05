@@ -77,32 +77,6 @@ function when(value: string | undefined, locale: Locale): string {
     timeStyle: "short",
   }).format(new Date(value));
 }
-function humanizeIdentifier(value: string): string {
-  const words = value.replaceAll("_", " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : value;
-}
-function customerLabel(value: string, locale: Locale): string {
-  if (locale === "en") return humanizeIdentifier(value);
-  const phrases: Record<string, string> = {
-    information: "Informação",
-    decision: "Decisão",
-    approval: "Aprovação",
-    artifact: "Artefacto",
-    note: "Nota",
-    amount: "Montante",
-    quantity: "Quantidade",
-    details: "Detalhes",
-    items: "Itens",
-    option: "Opção",
-    approved: "Aprovado",
-    rejected: "Rejeitado",
-    confirmed: "Confirmado",
-    provided: "Fornecido",
-    information_provided: "Informação fornecida",
-    decision_recorded: "Decisão registada",
-  };
-  return phrases[value.toLowerCase()] || humanizeIdentifier(value);
-}
 function sourceLabel(kind: string, locale: Locale): string {
   const labels: Record<string, [string, string]> = {
     outlook: ["Outlook", "Outlook"],
@@ -114,7 +88,7 @@ function sourceLabel(kind: string, locale: Locale): string {
     artifact: ["Artifact", "Artefacto"],
   };
   const label = labels[kind];
-  return label ? label[locale === "pt" ? 1 : 0] : customerLabel(kind, locale);
+  return label ? label[locale === "pt" ? 1 : 0] : t(locale).otherSource;
 }
 function blockerKindLabel(kind: string, locale: Locale): string {
   const labels: Record<string, [string, string]> = {
@@ -127,14 +101,14 @@ function blockerKindLabel(kind: string, locale: Locale): string {
       "Confirmação de ação consequente",
     ],
   };
-  return labels[kind]?.[locale === "pt" ? 1 : 0] || customerLabel(kind, locale);
+  return labels[kind]?.[locale === "pt" ? 1 : 0] || t(locale).actionRequired;
 }
 function formulaLabel(formula: string | undefined, locale: Locale): string {
-  if (formula === "labor_time_saved")
+  if (!formula || formula === "labor_time_saved")
     return locale === "pt"
       ? "Tempo de trabalho manual poupado"
       : "Manual handling time saved";
-  return customerLabel(formula || "labor_time_saved", locale);
+  return t(locale).customValueFormula;
 }
 function initials(name: string): string {
   return (
@@ -1217,6 +1191,13 @@ function BlockerForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fields = schemaFields(blocker.responseSchema);
+  const presentationFields = new Map(
+    (blocker.responsePresentation?.fields || []).map((field) => [
+      field.key,
+      field,
+    ]),
+  );
+  const outcomeLabels = blocker.responsePresentation?.outcomes || [];
   const required = blocker.responseSchema.required || [];
   const parsed = new Map(
     fields.map(([key, field]) => [key, parseSchemaField(field, drafts[key])]),
@@ -1279,19 +1260,22 @@ function BlockerForm({
               onChange={(event) => setOutcome(event.target.value)}
             >
               <option value="">{c.chooseOutcome}</option>
-              {blocker.allowedOutcomes.map((option) => (
+              {blocker.allowedOutcomes.map((option, index) => (
                 <option value={option} key={option}>
-                  {customerLabel(option, locale)}
+                  {localized(outcomeLabels[index], locale) ||
+                    `${c.choice} ${index + 1}`}
                 </option>
               ))}
             </select>
           </label>
         )}
-        {fields.map(([key, field]) => {
+        {fields.map(([key, field], fieldIndex) => {
           const fieldState = parsed.get(key);
+          const fieldPresentation = presentationFields.get(key);
           return (
             <label key={key}>
-              {customerLabel(field.title || key, locale)}
+              {localized(fieldPresentation?.label, locale) ||
+                `${c.responseField} ${fieldIndex + 1}`}
               {field.enum ? (
                 <select
                   value={String(drafts[key] ?? "")}
@@ -1305,7 +1289,8 @@ function BlockerForm({
                   <option value="" />
                   {field.enum.map((option, index) => (
                     <option value={index} key={JSON.stringify(option)}>
-                      {customerLabel(String(option), locale)}
+                      {localized(fieldPresentation?.options?.[index], locale) ||
+                        `${c.choice} ${index + 1}`}
                     </option>
                   ))}
                 </select>

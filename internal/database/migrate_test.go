@@ -136,7 +136,7 @@ func TestMigrations(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='artifact' AND tablename='artifacts')").Scan(&artifacts))
 	assert.True(t, artifacts)
-	for table, column := range map[string]string{"work_items": "source_presentation", "attempts": "presentation_snapshot"} {
+	for table, column := range map[string]string{"work_items": "source_presentation", "attempts": "presentation_snapshot", "blockers": "response_presentation"} {
 		var exists bool
 		require.NoError(t, pool.QueryRow(ctx, `
 			SELECT EXISTS (SELECT 1 FROM information_schema.columns
