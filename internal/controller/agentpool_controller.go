@@ -217,9 +217,12 @@ func (r *AgentPoolReconciler) validateSpec(ctx context.Context, pool *v1alpha1.A
 		// mounted by exactly one node/pod, so more than one replica would break
 		// at schedule time. Reject both creating a multi-replica RWO pool and
 		// changing a live multi-replica pool to RWO before any workload is
-		// rolled out (HOR-427).
-		if pool.Spec.Replicas != 1 {
-			return fmt.Errorf("spec.sandbox.accessMode ReadWriteOnce requires spec.replicas == 1 (single-worker RWO mode); set replicas to 1 or use ReadWriteMany")
+		// rolled out (HOR-427). A scaled-to-zero (replicas == 0) pool is
+		// permitted so an operator can pause the single RWO worker without
+		// switching the sandbox to RWX (user-approved rescope of the literal
+		// "== 1" wording).
+		if pool.Spec.Replicas > 1 {
+			return fmt.Errorf("spec.sandbox.accessMode ReadWriteOnce supports at most one replica (single-worker RWO mode); set replicas to 0 or 1, or use ReadWriteMany")
 		}
 	default:
 		return fmt.Errorf("spec.sandbox.accessMode must be ReadWriteMany or ReadWriteOnce")

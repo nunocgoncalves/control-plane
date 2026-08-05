@@ -317,6 +317,15 @@ func TestAgentPoolValidation(t *testing.T) {
 	rwoOk.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
 	assert.NoError(t, newReconciler(ca, creds).validateSpec(ctx, rwoOk))
 
+	// Scaled-to-zero ReadWriteOnce is valid: an operator may pause the single
+	// RWO worker (replicas == 0) without switching the sandbox to RWX
+	// (user-approved rescope of the literal "== 1" wording).
+	rwoPaused := validAgentPool("b5z", ns)
+	rwoPaused.Spec.Replicas = 0
+	rwoPaused.Spec.CredentialBindings = nil
+	rwoPaused.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
+	assert.NoError(t, newReconciler(ca, creds).validateSpec(ctx, rwoPaused))
+
 	// Multi-replica ReadWriteOnce -> rejected before any workload rollout
 	// (HOR-427 fail-closed: RWO is single-worker only). Also covers rejecting
 	// changing a live multi-replica pool to RWO.
@@ -326,7 +335,7 @@ func TestAgentPoolValidation(t *testing.T) {
 	badAccess.Spec.Sandbox.AccessMode = corev1.ReadWriteOnce
 	err = newReconciler(ca, creds).validateSpec(ctx, badAccess)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "replicas == 1")
+	assert.Contains(t, err.Error(), "at most one replica")
 
 	// Unknown access mode -> rejected.
 	badMode := validAgentPool("b5c", ns)

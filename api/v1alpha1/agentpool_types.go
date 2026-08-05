@@ -165,8 +165,9 @@ type SandboxSpec struct {
 	// is required for multi-worker pools (the warm pool shares one PVC and
 	// per-turn children of different sessions run concurrently across pods).
 	// ReadWriteOnce is permitted only as a single-worker deployment mode
-	// (spec.replicas == 1) on an ordinary RWO StorageClass, and is not the
-	// production multi-worker storage backend.
+	// (at most one replica, spec.replicas <= 1; replicas == 0 pauses the
+	// pool without the storage-mode change) on an ordinary RWO StorageClass,
+	// and is not the production multi-worker storage backend.
 	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadWriteMany
 	// +kubebuilder:validation:Required
 	AccessMode corev1.PersistentVolumeAccessMode `json:"accessMode"`

@@ -288,7 +288,8 @@ IntegrationBinding CRD exists in v1.
 The operator reconciles, per pool: a shared **sandbox PVC** (per-session
 `0700` subdirs owned by the session UID/GID; `ReadWriteMany` by default and
 required for multi-worker pools — `ReadWriteOnce` is supported as a
-single-worker deployment mode with `spec.replicas == 1`, HOR-427), a
+single-worker deployment mode (at most one replica, `spec.replicas <= 1`;
+`replicas == 0` pauses the pool without the storage-mode change, HOR-427), a
 **deny-by-default NetworkPolicy** (`denied` = kube-dns + the three gateways;
 `internet` = per-pool opt-in for non-cluster egress — customer-system
 credentialed access still routes through the gateway), a **per-pod config
