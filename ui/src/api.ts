@@ -129,8 +129,10 @@ export async function loadDetail(
 export async function respondToBlocker(
   token: string,
   blocker: Blocker,
+  outcome: string,
   response: Record<string, unknown>,
   artifactRefs: Array<{ artifactId: string; metadata?: unknown }> = [],
+  confirmedInvocationIds: string[] = [],
 ): Promise<void> {
   await request(
     token,
@@ -138,12 +140,12 @@ export async function respondToBlocker(
     {
       method: "POST",
       body: JSON.stringify({
-        outcome: blocker.allowedOutcomes[0],
+        outcome,
         response,
         artifactRefs,
         confirmedInvocationIds:
           blocker.kind === "consequence_confirmation"
-            ? (blocker.requiredConsequences || []).map((c) => c.invocationId)
+            ? confirmedInvocationIds
             : undefined,
       }),
     },

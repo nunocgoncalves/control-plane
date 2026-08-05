@@ -77,17 +77,64 @@ function when(value: string | undefined, locale: Locale): string {
     timeStyle: "short",
   }).format(new Date(value));
 }
-function sourceLabel(kind: string): string {
-  const labels: Record<string, string> = {
-    outlook: "Outlook",
-    graph_email: "Outlook",
-    email: "Email",
-    api: "API",
-    schedule: "Scheduled",
-    scheduled: "Scheduled",
-    artifact: "Artifact",
+function humanizeIdentifier(value: string): string {
+  const words = value.replaceAll("_", " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : value;
+}
+function customerLabel(value: string, locale: Locale): string {
+  if (locale === "en") return humanizeIdentifier(value);
+  const phrases: Record<string, string> = {
+    information: "Informação",
+    decision: "Decisão",
+    approval: "Aprovação",
+    artifact: "Artefacto",
+    note: "Nota",
+    amount: "Montante",
+    quantity: "Quantidade",
+    details: "Detalhes",
+    items: "Itens",
+    option: "Opção",
+    approved: "Aprovado",
+    rejected: "Rejeitado",
+    confirmed: "Confirmado",
+    provided: "Fornecido",
+    information_provided: "Informação fornecida",
+    decision_recorded: "Decisão registada",
   };
-  return labels[kind] || kind.replaceAll("_", " ");
+  return phrases[value.toLowerCase()] || humanizeIdentifier(value);
+}
+function sourceLabel(kind: string, locale: Locale): string {
+  const labels: Record<string, [string, string]> = {
+    outlook: ["Outlook", "Outlook"],
+    graph_email: ["Outlook", "Outlook"],
+    email: ["Email", "Email"],
+    api: ["API", "API"],
+    schedule: ["Scheduled", "Agendado"],
+    scheduled: ["Scheduled", "Agendado"],
+    artifact: ["Artifact", "Artefacto"],
+  };
+  const label = labels[kind];
+  return label ? label[locale === "pt" ? 1 : 0] : customerLabel(kind, locale);
+}
+function blockerKindLabel(kind: string, locale: Locale): string {
+  const labels: Record<string, [string, string]> = {
+    information: ["Information required", "Informação necessária"],
+    decision: ["Decision required", "Decisão necessária"],
+    approval: ["Approval required", "Aprovação necessária"],
+    artifact: ["Artifact required", "Artefacto necessário"],
+    consequence_confirmation: [
+      "Consequential action confirmation",
+      "Confirmação de ação consequente",
+    ],
+  };
+  return labels[kind]?.[locale === "pt" ? 1 : 0] || customerLabel(kind, locale);
+}
+function formulaLabel(formula: string | undefined, locale: Locale): string {
+  if (formula === "labor_time_saved")
+    return locale === "pt"
+      ? "Tempo de trabalho manual poupado"
+      : "Manual handling time saved";
+  return customerLabel(formula || "labor_time_saved", locale);
 }
 function initials(name: string): string {
   return (
@@ -361,7 +408,7 @@ function WorkCard({
     <button className={`work-card card edge-${item.state}`} onClick={open}>
       <div className="card-meta">
         <span>{item.presentation.workflowTitle}</span>
-        <span>{sourceLabel(item.source.kind)}</span>
+        <span>{sourceLabel(item.source.kind, locale)}</span>
       </div>
       <strong>{item.title}</strong>
       {item.state === "in_progress" && item.currentStep && (
@@ -374,7 +421,7 @@ function WorkCard({
         <div className="blocker-chip">
           <span>△</span>
           <div>
-            <small>{item.blocker.kind.replaceAll("_", " ")}</small>
+            <small>{blockerKindLabel(item.blocker.kind, locale)}</small>
             {localized(item.blocker.title, locale)}
           </div>
         </div>
@@ -649,7 +696,7 @@ function DetailPanel({
               </span>
               {item.presentation.personaName}
               <span>·</span>
-              {sourceLabel(item.source.kind)}
+              {sourceLabel(item.source.kind, locale)}
             </div>
           </div>
           <button className="icon-button" onClick={close} aria-label={c.close}>
@@ -741,24 +788,41 @@ function DetailPanel({
                   </div>
                 </Section>
               )}
-              {detail.item.estimatedValue && (
-                <Section title={c.value}>
-                  <div
-                    className={`panel-value ${detail.item.valueDisputed ? "disputed" : ""}`}
-                  >
-                    <strong>
-                      {money(
-                        detail.item.estimatedValue,
-                        detail.item.valueCurrency,
-                        locale,
-                      )}
-                    </strong>
-                    <span>
-                      {detail.item.valueDisputed ? c.disputed : c.estimated}
-                    </span>
-                  </div>
-                </Section>
-              )}
+              {detail.item.state === "done" &&
+                (detail.item.estimatedValue ||
+                  !detail.item.valueConfigured) && (
+                  <Section title={c.value}>
+                    {detail.item.estimatedValue ? (
+                      <>
+                        <div
+                          className={`panel-value ${detail.item.valueDisputed ? "disputed" : ""}`}
+                        >
+                          <strong>
+                            {money(
+                              detail.item.estimatedValue,
+                              detail.item.valueCurrency,
+                              locale,
+                            )}
+                          </strong>
+                          <span>
+                            {detail.item.valueDisputed
+                              ? c.disputed
+                              : c.estimated}
+                          </span>
+                        </div>
+                        <ValueModelExplanation
+                          model={detail.item.valueModel}
+                          locale={locale}
+                        />
+                      </>
+                    ) : (
+                      <div className="unconfigured-value">
+                        <strong>{c.notConfigured}</strong>
+                        <p>{c.unconfiguredBody}</p>
+                      </div>
+                    )}
+                  </Section>
+                )}
               <Section title={c.timeline}>
                 <Timeline
                   events={detail.timeline}
@@ -937,6 +1001,46 @@ function PlainValue({ value, empty }: { value: unknown; empty: string }) {
     </dl>
   );
 }
+function ValueModelExplanation({
+  model,
+  locale,
+  expanded = false,
+}: {
+  model: WorkItem["valueModel"];
+  locale: Locale;
+  expanded?: boolean;
+}) {
+  if (!model) return null;
+  const c = t(locale);
+  const explanation =
+    typeof model.explanation === "object"
+      ? localized(model.explanation, locale)
+      : model.explanation;
+  return (
+    <details className="value-explanation" open={expanded}>
+      <summary>{c.valueHelp}</summary>
+      {explanation && <p>{explanation}</p>}
+      <div className="formula">
+        <span>{formulaLabel(model.formula, locale)}</span>
+        {model.baselineSeconds !== undefined &&
+          model.loadedHourlyCost !== undefined && (
+            <strong>
+              {Math.round(model.baselineSeconds / 60)} min ×{" "}
+              {money(model.loadedHourlyCost, model.currency || "EUR", locale)}
+              {c.perHour}
+            </strong>
+          )}
+      </div>
+      {model.assumptions !== undefined && model.assumptions !== null && (
+        <div className="value-assumptions">
+          <strong>{c.assumptions}</strong>
+          <PlainValue value={model.assumptions} empty={c.noDetails} />
+        </div>
+      )}
+    </details>
+  );
+}
+
 function ArtifactList({
   token,
   artifacts,
@@ -1048,6 +1152,50 @@ function schemaFields(
 ): Array<[string, NonNullable<JSONSchema["properties"]>[string]]> {
   return Object.entries(schema.properties || {});
 }
+
+type ParsedField = { present: boolean; valid: boolean; value?: unknown };
+function parseSchemaField(field: JSONSchema, draft: unknown): ParsedField {
+  if (draft === undefined || draft === "")
+    return { present: false, valid: true };
+  if (field.enum) {
+    const index = Number(draft);
+    return Number.isInteger(index) && index >= 0 && index < field.enum.length
+      ? { present: true, valid: true, value: field.enum[index] }
+      : { present: true, valid: false };
+  }
+  if (field.type === "boolean")
+    return { present: true, valid: typeof draft === "boolean", value: draft };
+  if (field.type === "number" || field.type === "integer") {
+    const value = Number(draft);
+    return {
+      present: true,
+      valid:
+        Number.isFinite(value) &&
+        (field.type !== "integer" || Number.isInteger(value)),
+      value,
+    };
+  }
+  if (field.type === "object" || field.type === "array") {
+    try {
+      const value = JSON.parse(String(draft)) as unknown;
+      const valid =
+        field.type === "array"
+          ? Array.isArray(value)
+          : !!value && typeof value === "object" && !Array.isArray(value);
+      return { present: true, valid, value };
+    } catch {
+      return { present: true, valid: false };
+    }
+  }
+  return { present: true, valid: true, value: String(draft) };
+}
+function schemaFieldError(field: JSONSchema, locale: Locale): string {
+  const c = t(locale);
+  if (field.type === "integer") return c.invalidInteger;
+  if (field.type === "number") return c.invalidNumber;
+  if (field.type === "array") return c.invalidArray;
+  return c.invalidObject;
+}
 function BlockerForm({
   token,
   blocker,
@@ -1060,15 +1208,38 @@ function BlockerForm({
   onDone: () => Promise<void>;
 }) {
   const c = t(locale);
-  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [drafts, setDrafts] = useState<Record<string, unknown>>({});
+  const [outcome, setOutcome] = useState(
+    blocker.allowedOutcomes.length === 1 ? blocker.allowedOutcomes[0] : "",
+  );
+  const [confirmed, setConfirmed] = useState<string[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fields = schemaFields(blocker.responseSchema);
   const required = blocker.responseSchema.required || [];
+  const parsed = new Map(
+    fields.map(([key, field]) => [key, parseSchemaField(field, drafts[key])]),
+  );
+  const response = Object.fromEntries(
+    fields.flatMap(([key]) => {
+      const value = parsed.get(key);
+      return value?.present && value.valid ? [[key, value.value]] : [];
+    }),
+  );
+  const consequences = blocker.requiredConsequences || [];
+  const exactConsequencesConfirmed =
+    blocker.kind !== "consequence_confirmation" ||
+    (confirmed.length === consequences.length &&
+      consequences.every((entry) => confirmed.includes(entry.invocationId)));
   const valid =
-    required.every((key) => values[key] !== undefined && values[key] !== "") &&
-    (blocker.kind !== "artifact" || !!file);
+    !!outcome &&
+    required.every(
+      (key) => parsed.get(key)?.present && parsed.get(key)?.valid,
+    ) &&
+    [...parsed.values()].every((value) => !value.present || value.valid) &&
+    (blocker.kind !== "artifact" || !!file) &&
+    exactConsequencesConfirmed;
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!valid) return;
@@ -1079,7 +1250,14 @@ function BlockerForm({
         const artifact = await uploadArtifact(token, file);
         refs.push({ artifactId: artifact.id, metadata: { name: file.name } });
       }
-      await respondToBlocker(token, blocker, values, refs);
+      await respondToBlocker(
+        token,
+        blocker,
+        outcome,
+        response,
+        refs,
+        confirmed,
+      );
       await onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
@@ -1089,52 +1267,83 @@ function BlockerForm({
   }
   return (
     <section className="blocker-box">
-      <span className="eyebrow">{blocker.kind.replaceAll("_", " ")}</span>
+      <span className="eyebrow">{blockerKindLabel(blocker.kind, locale)}</span>
       <h3>{localized(blocker.title, locale)}</h3>
       <p>{localized(blocker.description, locale)}</p>
       <form onSubmit={(event) => void submit(event)}>
-        {fields.map(([key, field]) => (
-          <label key={key}>
-            {field.title || key.replaceAll("_", " ")}
-            {field.enum ? (
-              <select
-                value={String(values[key] || "")}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    [key]: event.target.value,
-                  }))
-                }
-              >
-                <option value="" />
-                {field.enum.map((option) => (
-                  <option key={option}>{option}</option>
-                ))}
-              </select>
-            ) : field.type === "boolean" ? (
-              <input
-                type="checkbox"
-                checked={Boolean(values[key])}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    [key]: event.target.checked,
-                  }))
-                }
-              />
-            ) : (
-              <textarea
-                value={String(values[key] || "")}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    [key]: event.target.value,
-                  }))
-                }
-              />
-            )}
+        {blocker.allowedOutcomes.length > 1 && (
+          <label>
+            {c.blockerOutcome}
+            <select
+              value={outcome}
+              onChange={(event) => setOutcome(event.target.value)}
+            >
+              <option value="">{c.chooseOutcome}</option>
+              {blocker.allowedOutcomes.map((option) => (
+                <option value={option} key={option}>
+                  {customerLabel(option, locale)}
+                </option>
+              ))}
+            </select>
           </label>
-        ))}
+        )}
+        {fields.map(([key, field]) => {
+          const fieldState = parsed.get(key);
+          return (
+            <label key={key}>
+              {customerLabel(field.title || key, locale)}
+              {field.enum ? (
+                <select
+                  value={String(drafts[key] ?? "")}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [key]: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="" />
+                  {field.enum.map((option, index) => (
+                    <option value={index} key={JSON.stringify(option)}>
+                      {customerLabel(String(option), locale)}
+                    </option>
+                  ))}
+                </select>
+              ) : field.type === "boolean" ? (
+                <input
+                  type="checkbox"
+                  checked={drafts[key] === true}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [key]: event.target.checked,
+                    }))
+                  }
+                />
+              ) : (
+                <textarea
+                  inputMode={
+                    field.type === "number" || field.type === "integer"
+                      ? "decimal"
+                      : undefined
+                  }
+                  value={String(drafts[key] ?? "")}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [key]: event.target.value,
+                    }))
+                  }
+                />
+              )}
+              {fieldState?.present && !fieldState.valid && (
+                <span className="field-error" role="alert">
+                  {schemaFieldError(field, locale)}
+                </span>
+              )}
+            </label>
+          );
+        })}
         {blocker.kind === "artifact" && (
           <label>
             {c.uploadArtifact}
@@ -1144,6 +1353,31 @@ function BlockerForm({
             />
           </label>
         )}
+        {blocker.kind === "consequence_confirmation" &&
+          consequences.length > 0 && (
+            <div className="consequence-box">
+              <strong>△ {c.consequences}</strong>
+              <p>{c.blockerConsequenceWarning}</p>
+              {consequences.map((consequence) => (
+                <label key={consequence.invocationId}>
+                  <input
+                    type="checkbox"
+                    checked={confirmed.includes(consequence.invocationId)}
+                    onChange={(event) =>
+                      setConfirmed((current) =>
+                        event.target.checked
+                          ? [...current, consequence.invocationId]
+                          : current.filter(
+                              (id) => id !== consequence.invocationId,
+                            ),
+                      )
+                    }
+                  />
+                  <span>{localized(consequence.summary, locale)}</span>
+                </label>
+              ))}
+            </div>
+          )}
         {error && <div className="form-error">{error}</div>}
         <button className="button primary" disabled={!valid || busy}>
           {c.submitResponse}
@@ -1187,25 +1421,7 @@ function ValueModal({
             : c.notConfigured}
         </h2>
         {model ? (
-          <>
-            <p>
-              {typeof model.explanation === "object"
-                ? localized(model.explanation, locale)
-                : model.explanation || c.valueHelp}
-            </p>
-            <div className="formula">
-              <span>{model.formula || "labor_time_saved"}</span>
-              <strong>
-                {Math.round((model.baselineSeconds || 0) / 60)} min ×{" "}
-                {money(
-                  model.loadedHourlyCost || 0,
-                  model.currency || "EUR",
-                  locale,
-                )}
-                /hour
-              </strong>
-            </div>
-          </>
+          <ValueModelExplanation model={model} locale={locale} expanded />
         ) : (
           <p>{c.unconfiguredBody}</p>
         )}
@@ -1217,8 +1433,8 @@ function ValueModal({
 export default function App() {
   const [locale, setLocale] = useState<Locale>("en");
   const [token, setToken] = useState<string | null>(null);
-  const [candidateToken, setCandidateToken] = useState<string | null>(null);
   const [connectError, setConnectError] = useState("");
+  const [connectLoading, setConnectLoading] = useState(false);
   const [preset, setPreset] = useState("week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -1236,26 +1452,21 @@ export default function App() {
     [preset, customFrom, customTo],
   );
   const { data, error, loading, refresh } = useDashboardData(
-    token || candidateToken,
+    token,
     period,
     search,
   );
-  useEffect(() => {
-    if (candidateToken && data) {
-      setToken(candidateToken);
-      setCandidateToken(null);
-      setConnectError("");
-    }
-  }, [candidateToken, data]);
-  useEffect(() => {
-    if (candidateToken && error) {
-      setConnectError(t(locale).invalidKey);
-      setCandidateToken(null);
-    }
-  }, [candidateToken, error, locale]);
   async function connect(value: string) {
     setConnectError("");
-    setCandidateToken(value);
+    setConnectLoading(true);
+    try {
+      await loadDashboard(value, period, search);
+      setToken(value);
+    } catch {
+      setConnectError(t(locale).invalidKey);
+    } finally {
+      setConnectLoading(false);
+    }
   }
   if (!token)
     return (
@@ -1263,7 +1474,7 @@ export default function App() {
         locale={locale}
         setLocale={setLocale}
         onConnect={connect}
-        loading={!!candidateToken && loading}
+        loading={connectLoading}
         error={connectError}
       />
     );

@@ -113,7 +113,13 @@ func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSum
 		Counts: map[string]int64{StateTodo: 0, StateInProgress: 0, StateBlocked: 0, StateDone: 0, StateFailed: 0},
 		Trend:  make([]ValueTrendPoint, 0),
 	}
-	rows, err := s.pool.Query(ctx, `SELECT customer_state,COUNT(*) FROM work.current_work_items WHERE created_at >= $1 AND created_at < $2 GROUP BY customer_state`, from, to)
+	// Active work remains on the board regardless of age; terminal work is
+	// selected by completion time. Keep these counts identical to ListWorkItems.
+	rows, err := s.pool.Query(ctx, `
+		SELECT customer_state,COUNT(*) FROM work.current_work_items
+		WHERE customer_state NOT IN ('done','failed')
+		   OR (COALESCE(finished_at,created_at) >= $1 AND COALESCE(finished_at,created_at) < $2)
+		GROUP BY customer_state`, from, to)
 	if err != nil {
 		return out, err
 	}
@@ -137,7 +143,8 @@ func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSum
 	if err := s.pool.QueryRow(ctx, `
 		WITH relevant_attempts AS (
 			SELECT current_attempt_id AS id FROM work.current_work_items
-			WHERE created_at >= $1 AND created_at < $2
+			WHERE customer_state NOT IN ('done','failed')
+			   OR (COALESCE(finished_at,created_at) >= $1 AND COALESCE(finished_at,created_at) < $2)
 			UNION
 			SELECT attempt_id AS id FROM work.value_ledger
 			WHERE created_at >= $1 AND created_at < $2
@@ -153,7 +160,8 @@ func (s *Store) Dashboard(ctx context.Context, from, to time.Time) (DashboardSum
 	modelRows, err := s.pool.Query(ctx, `
 		WITH relevant_attempts AS (
 			SELECT current_attempt_id AS id FROM work.current_work_items
-			WHERE created_at >= $1 AND created_at < $2
+			WHERE customer_state NOT IN ('done','failed')
+			   OR (COALESCE(finished_at,created_at) >= $1 AND COALESCE(finished_at,created_at) < $2)
 			UNION
 			SELECT attempt_id AS id FROM work.value_ledger
 			WHERE created_at >= $1 AND created_at < $2

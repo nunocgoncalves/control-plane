@@ -138,10 +138,10 @@ export interface JSONSchema {
   type?: string;
   title?: string;
   required?: string[];
-  properties?: Record<
-    string,
-    { type?: string; title?: string; enum?: string[]; minLength?: number }
-  >;
+  properties?: Record<string, JSONSchema>;
+  enum?: unknown[];
+  items?: JSONSchema;
+  minLength?: number;
 }
 export interface Consequence {
   invocationId: string;

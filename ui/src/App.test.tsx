@@ -25,6 +25,17 @@ const item = {
   updatedAt: "2026-08-05T09:05:00Z",
   finishedAt: "2026-08-05T09:05:00Z",
   valueConfigured: true,
+  valueModel: {
+    formula: "labor_time_saved",
+    currency: "EUR",
+    baselineSeconds: 1200,
+    loadedHourlyCost: "30",
+    assumptions: { source: "Customer baseline" },
+    explanation: {
+      en: "Customer assumptions",
+      pt: "Pressupostos do cliente",
+    },
+  },
   estimatedValue: "10.00",
   valueCurrency: "EUR",
   valueDisputed: false,
@@ -171,6 +182,33 @@ describe("Platform v1 Dashboard", () => {
     ).toBe(true);
   });
 
+  it("recovers from an invalid key when the operator retries with a valid key", async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const authorization = (init?.headers as Record<string, string>)
+        ?.Authorization;
+      if (
+        String(input).startsWith("/v1/work-dashboard") &&
+        authorization === "Bearer invalid"
+      )
+        return json({ error: "unauthorized" }, 401);
+      return fetchMock(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const key = screen.getByLabelText("Work API key");
+    await user.type(key, "invalid");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The key could not open the Dashboard.",
+    );
+    await user.clear(key);
+    await user.type(key, "work_secret");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(
+      await screen.findByText("Quotation request — ACME"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps active business steps visible and failed work outside the four columns when value is unconfigured", async () => {
     const active = {
       ...item,
@@ -246,6 +284,21 @@ describe("Platform v1 Dashboard", () => {
     await user.click(screen.getByText("Quotation request — ACME"));
     expect(await screen.findByText("Quotation processed")).toBeInTheDocument();
     expect(screen.getByText("pricing")).toBeInTheDocument();
+    const itemValueExplanation = screen
+      .getAllByText("How this is estimated")
+      .at(-1);
+    expect(itemValueExplanation).toBeDefined();
+    await user.click(itemValueExplanation!);
+    expect(screen.getByText("Customer assumptions")).toBeInTheDocument();
+    expect(screen.getByText("Manual handling time saved")).toBeInTheDocument();
+    expect(screen.getByText(/€30\.00\/hour/)).toBeInTheDocument();
+    expect(screen.getByText("Customer baseline")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "PT" }));
+    expect(
+      screen.getByText("Tempo de trabalho manual poupado"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\/hora/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "EN" }));
     expect(
       screen.queryByText(/successful|correct|approved/i),
     ).not.toBeInTheDocument();
@@ -396,6 +449,166 @@ describe("Platform v1 Dashboard", () => {
         String(url).includes("/work-blockers/blocker-1/responses"),
       );
     expect(response?.[1]?.body).toContain("artifact-1");
+  });
+
+  it("submits the selected outcome and correctly typed JSON-Schema fields", async () => {
+    const blocked = {
+      ...item,
+      id: "item-decision",
+      currentAttemptId: "attempt-decision",
+      state: "blocked",
+      blocker: {
+        id: "blocker-decision",
+        kind: "decision",
+        title: { en: "Choose the delivery path", pt: "Escolha a entrega" },
+      },
+    };
+    const blocker = {
+      id: "blocker-decision",
+      workItemId: blocked.id,
+      attemptId: blocked.currentAttemptId,
+      kind: "decision",
+      title: blocked.blocker.title,
+      description: {
+        en: "Choose and supply the decision details.",
+        pt: "Escolha e forneça os detalhes da decisão.",
+      },
+      responseSchema: {
+        type: "object",
+        required: ["amount", "quantity", "details", "items"],
+        properties: {
+          amount: { type: "number", title: "Amount" },
+          quantity: { type: "integer", title: "Quantity" },
+          details: { type: "object", title: "Details" },
+          items: { type: "array", title: "Items" },
+        },
+      },
+      allowedOutcomes: ["approved", "rejected"],
+      state: "open",
+    };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith("/v1/work-items?")) return json([blocked]);
+      if (url === "/v1/work-items/item-decision") return json(blocked);
+      if (url.endsWith("/attempts")) return json([]);
+      if (url.endsWith("/blocker")) return json(blocker);
+      if (url.includes("/work-blockers/blocker-decision/responses"))
+        return json({ ...blocker, state: "resolved" });
+      return fetchMock(input, init);
+    });
+    const user = await connect();
+    await user.click(screen.getByRole("button", { name: "PT" }));
+    await user.click(screen.getByText("Quotation request — ACME"));
+    await screen.findByRole("heading", { name: "Escolha a entrega" });
+    const outcome = screen.getByLabelText("Decisão solicitada");
+    expect(
+      screen.getByRole("option", { name: "Aprovado" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Rejeitado" }),
+    ).toBeInTheDocument();
+    await user.selectOptions(outcome, "rejected");
+    await user.type(screen.getByLabelText("Montante"), "12.5");
+    await user.type(screen.getByLabelText("Quantidade"), "3");
+    await user.click(screen.getByLabelText("Detalhes"));
+    await user.paste('{"priority":"high"}');
+    await user.click(screen.getByLabelText("Itens"));
+    await user.paste('["quote"]');
+    await user.click(screen.getByRole("button", { name: "Enviar resposta" }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.some(([url]) =>
+            String(url).includes("/work-blockers/blocker-decision/responses"),
+          ),
+      ).toBe(true),
+    );
+    const response = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) =>
+        String(url).includes("/work-blockers/blocker-decision/responses"),
+      );
+    const body = JSON.parse(String(response?.[1]?.body));
+    expect(body.outcome).toBe("rejected");
+    expect(body.response).toEqual({
+      amount: 12.5,
+      quantity: 3,
+      details: { priority: "high" },
+      items: ["quote"],
+    });
+  });
+
+  it("requires exact confirmation before resolving a consequence blocker and localizes it in Portuguese", async () => {
+    const blocked = {
+      ...item,
+      id: "item-confirmation",
+      currentAttemptId: "attempt-confirmation",
+      state: "blocked",
+      source: { ...item.source, kind: "schedule" },
+      blocker: {
+        id: "blocker-confirmation",
+        kind: "consequence_confirmation",
+        title: { en: "Confirm repeated action", pt: "Confirmar ação repetida" },
+      },
+    };
+    const blocker = {
+      id: "blocker-confirmation",
+      workItemId: blocked.id,
+      attemptId: blocked.currentAttemptId,
+      kind: "consequence_confirmation",
+      title: blocked.blocker.title,
+      description: {
+        en: "Review the possible action.",
+        pt: "Reveja a ação possível.",
+      },
+      responseSchema: { type: "object" },
+      allowedOutcomes: ["confirmed"],
+      requiredConsequences: [
+        {
+          invocationId: "invocation-1",
+          summary: {
+            en: "Send the quotation email again",
+            pt: "Enviar novamente o email da cotação",
+          },
+          state: "succeeded",
+        },
+      ],
+      state: "open",
+    };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith("/v1/work-items?")) return json([blocked]);
+      if (url === "/v1/work-items/item-confirmation") return json(blocked);
+      if (url.endsWith("/attempts")) return json([]);
+      if (url.endsWith("/blocker")) return json(blocker);
+      if (url.includes("/work-blockers/blocker-confirmation/responses"))
+        return json({ ...blocker, state: "resolved" });
+      return fetchMock(input, init);
+    });
+    const user = await connect();
+    await user.click(screen.getByRole("button", { name: "PT" }));
+    await user.click(screen.getByText("Quotation request — ACME"));
+    expect(
+      await screen.findAllByText("Confirmação de ação consequente"),
+    ).toHaveLength(2);
+    expect(screen.getAllByText("Agendado").length).toBeGreaterThan(0);
+    const send = screen.getByRole("button", { name: "Enviar resposta" });
+    expect(send).toBeDisabled();
+    await user.click(screen.getByText("Enviar novamente o email da cotação"));
+    expect(send).toBeEnabled();
+    await user.click(send);
+    const response = await waitFor(() => {
+      const call = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) =>
+          String(url).includes("/work-blockers/blocker-confirmation/responses"),
+        );
+      expect(call).toBeTruthy();
+      return call;
+    });
+    const body = JSON.parse(String(response?.[1]?.body));
+    expect(body.confirmedInvocationIds).toEqual(["invocation-1"]);
   });
 
   it("has no automatically detectable accessibility violations on the Dashboard", async () => {

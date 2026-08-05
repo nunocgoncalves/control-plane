@@ -49,6 +49,8 @@ const copy = {
     disputed: "Disputed and deducted",
     close: "Close",
     blockerResponse: "Your response",
+    blockerOutcome: "Requested decision",
+    chooseOutcome: "Choose an outcome",
     submitResponse: "Send response",
     uploadArtifact: "Choose the required artifact",
     responseSent: "Response sent. Work is returning to In progress.",
@@ -62,6 +64,8 @@ const copy = {
     consequences: "Review possible repeated actions",
     consequenceWarning:
       "A revised attempt may repeat these external actions. Confirm each action to continue.",
+    blockerConsequenceWarning:
+      "Continuing may repeat these external actions. Confirm each exact action to continue.",
     startRevision: "Start revised attempt",
     feedbackSaved: "Feedback captured without starting new work.",
     revisionStarted: "Revised attempt started; original history is preserved.",
@@ -81,6 +85,12 @@ const copy = {
     revised: "Revised",
     unconfiguredBody:
       "Customer assumptions have not yet been configured, so no financial estimate is shown.",
+    assumptions: "Assumptions",
+    perHour: "/hour",
+    invalidNumber: "Enter a valid number.",
+    invalidInteger: "Enter a whole number.",
+    invalidObject: "Enter a valid JSON object.",
+    invalidArray: "Enter a valid JSON array.",
   },
   pt: {
     dashboard: "Painel",
@@ -130,6 +140,8 @@ const copy = {
     disputed: "Contestado e deduzido",
     close: "Fechar",
     blockerResponse: "A sua resposta",
+    blockerOutcome: "Decisão solicitada",
+    chooseOutcome: "Escolha um resultado",
     submitResponse: "Enviar resposta",
     uploadArtifact: "Escolha o artefacto necessário",
     responseSent: "Resposta enviada. O trabalho vai voltar para Em curso.",
@@ -143,6 +155,8 @@ const copy = {
     consequences: "Rever possíveis ações repetidas",
     consequenceWarning:
       "Uma nova tentativa pode repetir estas ações externas. Confirme cada ação para continuar.",
+    blockerConsequenceWarning:
+      "Continuar pode repetir estas ações externas. Confirme cada ação exata para continuar.",
     startRevision: "Iniciar nova tentativa",
     feedbackSaved: "Feedback registado sem iniciar novo trabalho.",
     revisionStarted:
@@ -163,6 +177,12 @@ const copy = {
     revised: "Nova",
     unconfiguredBody:
       "Os pressupostos do cliente ainda não foram configurados, por isso não é apresentada uma estimativa financeira.",
+    assumptions: "Pressupostos",
+    perHour: "/hora",
+    invalidNumber: "Introduza um número válido.",
+    invalidInteger: "Introduza um número inteiro.",
+    invalidObject: "Introduza um objeto JSON válido.",
+    invalidArray: "Introduza uma lista JSON válida.",
   },
 } as const;
 

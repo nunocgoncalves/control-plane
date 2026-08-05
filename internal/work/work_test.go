@@ -91,6 +91,20 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, "30.000000", dashboard.Value.Models[0].LoadedHourlyCost)
 	assert.JSONEq(t, `{"source":"customer"}`, string(dashboard.Value.Models[0].Assumptions))
 	assert.JSONEq(t, `{"en":"20 minutes at EUR 30/hour"}`, string(dashboard.Value.Models[0].Explanation))
+
+	// The selected-period board keeps all active work and selects terminal work
+	// by finished_at. Dashboard counts must use the same reassurance projection.
+	_, err = pool.Exec(ctx, `UPDATE work.work_items SET created_at=now()-interval '30 days' WHERE id=$1`, item.ID)
+	require.NoError(t, err)
+	periodFrom, periodTo := time.Now().Add(-7*24*time.Hour), time.Now().Add(time.Hour)
+	listed, err = store.ListWorkItems(ctx, workstore.WorkItemFilter{From: &periodFrom, To: &periodTo})
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "older active work remains visible")
+	dashboard, err = store.Dashboard(ctx, periodFrom, periodTo)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), dashboard.Counts[workstore.StateTodo])
+	assert.True(t, dashboard.Value.Configured, "visible active work contributes its snapshotted value configuration")
+
 	var valueModel map[string]any
 	require.NoError(t, json.Unmarshal(item.ValueModel, &valueModel))
 	assert.Equal(t, "labor_time_saved", valueModel["formula"])
@@ -220,6 +234,12 @@ func TestWorkGraphLifecycle_CycleBlockerFeedbackRevisionAndValue(t *testing.T) {
 	assert.Equal(t, workstore.StateDone, done.State)
 	require.NotNil(t, done.EstimatedValue)
 	assert.Equal(t, "10.000000", *done.EstimatedValue)
+	listed, err = restarted.ListWorkItems(ctx, workstore.WorkItemFilter{From: &periodFrom, To: &periodTo})
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "recently completed work is selected by finished_at")
+	dashboard, err = restarted.Dashboard(ctx, periodFrom, periodTo)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), dashboard.Counts[workstore.StateDone])
 	artifacts, err := restarted.ListArtifacts(ctx, item.ID)
 	require.NoError(t, err)
 	artifactIDs := make([]string, 0, len(artifacts))

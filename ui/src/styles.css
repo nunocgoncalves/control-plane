@@ -635,6 +635,11 @@ a:hover {
 .page-error {
   margin-bottom: 14px;
 }
+.field-error {
+  color: #9d2e1e;
+  font-size: 11px;
+  font-weight: 400;
+}
 .loading {
   padding: 30px;
   color: var(--g400);
@@ -1140,6 +1145,33 @@ a:hover {
 .value-modal h2 {
   margin: 9px 0 8px;
   font: 500 30px var(--mono);
+}
+.value-explanation {
+  margin-top: 10px;
+}
+.value-explanation summary {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.value-explanation > p {
+  margin: 9px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.value-assumptions {
+  margin-top: 10px;
+}
+.value-assumptions > strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.unconfigured-value p {
+  margin-top: 5px;
+  color: var(--g500);
+  font-size: 12px;
 }
 .formula {
   display: flex;
