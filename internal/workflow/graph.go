@@ -240,65 +240,90 @@ func validateHumanGatePresentation(node CanonicalNode) error {
 	if len(presentation.Outcomes) != len(node.Outcomes) {
 		return fmt.Errorf("outcomes must provide one localized label for each declared outcome")
 	}
-	for i, label := range presentation.Outcomes {
-		if label.EN == "" || label.PT == "" {
-			return fmt.Errorf("outcomes[%d] requires en and pt text", i)
-		}
+	if err := validateLocalizedLabels(presentation.Outcomes, "outcomes"); err != nil {
+		return err
 	}
-
-	var schema struct {
-		Properties map[string]json.RawMessage `json:"properties"`
+	properties, err := responseSchemaProperties(node.HumanGate.ResponseSchema)
+	if err != nil {
+		return err
 	}
-	trimmed := bytes.TrimSpace(node.HumanGate.ResponseSchema)
-	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) {
-		if err := json.Unmarshal(trimmed, &schema); err != nil {
-			return fmt.Errorf("read response-schema properties: %w", err)
-		}
-	}
-	fields := make(map[string]CanonicalHumanGateFieldPresentation, len(presentation.Fields))
-	for i, field := range presentation.Fields {
-		if field.Key == "" {
-			return fmt.Errorf("fields[%d].key is required", i)
-		}
-		if _, exists := fields[field.Key]; exists {
-			return fmt.Errorf("field %q is duplicated", field.Key)
-		}
-		if field.Label.EN == "" || field.Label.PT == "" {
-			return fmt.Errorf("field %q label requires en and pt text", field.Key)
-		}
-		fields[field.Key] = field
+	fields, err := indexHumanGateFields(presentation.Fields)
+	if err != nil {
+		return err
 	}
 	for key := range fields {
-		if _, exists := schema.Properties[key]; !exists {
+		if _, exists := properties[key]; !exists {
 			return fmt.Errorf("field %q does not exist in responseSchema.properties", key)
 		}
 	}
-	keys := make([]string, 0, len(schema.Properties))
-	for key := range schema.Properties {
+	keys := make([]string, 0, len(properties))
+	for key := range properties {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		presentationField, exists := fields[key]
+		field, exists := fields[key]
 		if !exists {
 			return fmt.Errorf("responseSchema property %q requires localized presentation", key)
 		}
-		var property struct {
-			Enum []json.RawMessage `json:"enum"`
-		}
-		if err := json.Unmarshal(schema.Properties[key], &property); err != nil {
-			return fmt.Errorf("responseSchema property %q must be an object", key)
-		}
-		if len(presentationField.Options) != len(property.Enum) {
-			return fmt.Errorf("field %q options must provide one localized label for each enum value", key)
-		}
-		for i, label := range presentationField.Options {
-			if label.EN == "" || label.PT == "" {
-				return fmt.Errorf("field %q options[%d] requires en and pt text", key, i)
-			}
+		if err := validateHumanGateFieldOptions(key, properties[key], field.Options); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateLocalizedLabels(labels []CanonicalLocalizedText, path string) error {
+	for i, label := range labels {
+		if label.EN == "" || label.PT == "" {
+			return fmt.Errorf("%s[%d] requires en and pt text", path, i)
+		}
+	}
+	return nil
+}
+
+func responseSchemaProperties(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
+		return nil, nil
+	}
+	if err := json.Unmarshal(trimmed, &schema); err != nil {
+		return nil, fmt.Errorf("read response-schema properties: %w", err)
+	}
+	return schema.Properties, nil
+}
+
+func indexHumanGateFields(fields []CanonicalHumanGateFieldPresentation) (map[string]CanonicalHumanGateFieldPresentation, error) {
+	indexed := make(map[string]CanonicalHumanGateFieldPresentation, len(fields))
+	for i, field := range fields {
+		if field.Key == "" {
+			return nil, fmt.Errorf("fields[%d].key is required", i)
+		}
+		if _, exists := indexed[field.Key]; exists {
+			return nil, fmt.Errorf("field %q is duplicated", field.Key)
+		}
+		if field.Label.EN == "" || field.Label.PT == "" {
+			return nil, fmt.Errorf("field %q label requires en and pt text", field.Key)
+		}
+		indexed[field.Key] = field
+	}
+	return indexed, nil
+}
+
+func validateHumanGateFieldOptions(key string, raw json.RawMessage, labels []CanonicalLocalizedText) error {
+	var property struct {
+		Enum []json.RawMessage `json:"enum"`
+	}
+	if err := json.Unmarshal(raw, &property); err != nil {
+		return fmt.Errorf("responseSchema property %q must be an object", key)
+	}
+	if len(labels) != len(property.Enum) {
+		return fmt.Errorf("field %q options must provide one localized label for each enum value", key)
+	}
+	return validateLocalizedLabels(labels, fmt.Sprintf("field %q options", key))
 }
 
 func compileSchema(raw []byte) error {
