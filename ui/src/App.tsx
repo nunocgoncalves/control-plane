@@ -1003,6 +1003,8 @@ function PresentedResult({
   empty: string;
   locale: Locale;
 }) {
+  if (fields.length === 0)
+    return <PresentedRootResult value={value} empty={empty} locale={locale} />;
   if (!value || typeof value !== "object" || Array.isArray(value))
     return <p className="muted">{empty}</p>;
   const visible = directResultFields(fields, []).some((field) =>
@@ -1017,6 +1019,35 @@ function PresentedResult({
       locale={locale}
     />
   );
+}
+function PresentedRootResult({
+  value,
+  empty,
+  locale,
+}: {
+  value: unknown;
+  empty: string;
+  locale: Locale;
+}) {
+  const values = customerValues(value);
+  if (values.length === 0) return <p className="muted">{empty}</p>;
+  return (
+    <dl className="result-grid">
+      {values.map((item, index) => (
+        <div key={index}>
+          <dt>
+            {t(locale).resultDetail} {index + 1}
+          </dt>
+          <dd>{presentedScalar(item, locale)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+function presentedScalar(value: unknown, locale: Locale): string {
+  if (value === null || value === "") return "—";
+  if (typeof value === "boolean") return value ? t(locale).yes : t(locale).no;
+  return String(value);
 }
 function pathStartsWith(path: string[], prefix: string[]): boolean {
   return prefix.every((segment, index) => path[index] === segment);
