@@ -682,14 +682,20 @@ export async function createSession(
 
   const providerFactory: ExtensionFactory = (pi) => {
     const provider: ProviderConfig = {
-      // No baseUrl/apiKey/models — the child has no endpoint or credential.
+      // No baseUrl/apiKey/models — the child has no endpoint or real credential.
       // Model traffic crosses the streamSimple bridge → supervisor → inference
-      // gateway (mTLS). ARCH-010/011. pi's validateProviderConfig requires
-      // baseUrl+apiKey whenever `models` is supplied, so the model metadata is
-      // supplied directly to createAgentSessionFromServices instead (a
-      // credentialless registration: streamSimple intercepts every call for
-      // this `api`, so no endpoint/auth is ever consulted).
+      // gateway (mTLS). ARCH-010/011.
+      //
+      // A placeholder apiKey is REQUIRED: pi gates every real send on
+      // hasConfiguredAuth(provider) (authStorage OR the provider apiKey) — see
+      // pi model-registry hasConfiguredAuth + agent-session send path. A
+      // streamSimple-only registration populates neither, so a real turn throws
+      // "No API key found for <provider>" before streaming (HOR-431). streamSimple
+      // is the ONLY stream handler registered, so this placeholder is never
+      // sent — the model call still crosses the mTLS bridge. Mirrors pi's
+      // documented keyless-provider pattern (e.g. apiKey: "ollama").
       api: a.model.api as unknown as ProviderConfig["api"],
+      apiKey: "iterabase-placeholder",
       streamSimple: (model, context: Context, options?: SimpleStreamOptions) => {
         const body = buildOpenAIRequestBody(
           model.id,

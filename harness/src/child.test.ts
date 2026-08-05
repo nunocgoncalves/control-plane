@@ -326,6 +326,29 @@ describe("createSession credentialless custom provider (HOR-395)", { timeout: 30
     }
   });
 
+  // HOR-431: pi gates every real send on hasConfiguredAuth(model). A
+  // streamSimple-only provider (no apiKey) left the model unauthenticated, so a
+  // real turn threw "No API key found for iterabase-inference" before streaming.
+  // A placeholder apiKey (never sent — streamSimple is the sole stream handler)
+  // marks the provider configured. This asserts the exact gate that failed.
+  it("marks the assigned model auth-configured so a real turn can stream (HOR-431)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "harness-session-"));
+    try {
+      const rpc = new ChildRpc({ write: () => {} });
+      const a = parseAssignment(assignmentJson())!;
+      const sessionDir = join(tmp, "session");
+      const runtime = await createSession(a, sessionDir, tmp, [], 1, rpc, []);
+      const model = runtime.session.model;
+      expect(model).toBeDefined();
+      // Regression gate: before the placeholder apiKey this was false, so every
+      // model call threw "No API key found" and the turn aborted on OPO1.
+      expect(runtime.session.modelRegistry.hasConfiguredAuth(model!)).toBe(true);
+      await runtime.dispose();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("registers gateway tool stubs in the agent allow-set even with workspaceTools=false (HOR-395/ARCH-006)", async () => {
     // Regression: passing `noTools:"all"` (or only the four built-ins) made
     // pi filter every gateway stub out of the registry, so gateway tools never
