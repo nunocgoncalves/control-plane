@@ -271,14 +271,13 @@ func validateResultPresentations(nodes map[string]CanonicalNode, terminals []Can
 		if err := validateResultOutcomePresentations(key, terminalOutcomes, node.ResultPresentation.Outcomes); err != nil {
 			return err
 		}
+		// REQ-040: agent-task outputSchema is optional. A terminal agent task may
+		// omit it (or declare an empty {}) to produce an artifact-only outcome with
+		// no structured result. Any schema that IS declared must be a closed direct
+		// object aligned with resultPresentation.fields (validated below), so a
+		// declared-but-unpresentable root shape is still rejected.
 		schema := node.OutputSchema
-		switch node.Kind {
-		case NodeAgentTask:
-			trimmed := bytes.TrimSpace(schema)
-			if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
-				return fmt.Errorf("graph node %q terminal agent_task outputSchema must declare a closed direct object schema", key)
-			}
-		case NodeHumanGate:
+		if node.Kind == NodeHumanGate {
 			schema = node.HumanGate.ResponseSchema
 		}
 		if err := validateResultFields(schema, node.ResultPresentation.Fields, fmt.Sprintf("graph node %q resultPresentation.fields", key)); err != nil {

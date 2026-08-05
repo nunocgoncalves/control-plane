@@ -388,10 +388,12 @@ value-model reference, and a single-active-node directed graph.
   Every terminal node defines `resultPresentation`: localized EN/PT receipt
   summaries per terminal outcome plus localized property-path and controlled-
   value labels aligned exactly with its closed structured-result schema.
-  Terminal agent tasks must declare that closed direct-object `outputSchema`;
-  the unconstrained omitted/`{}` default is valid only for non-terminal tasks.
-  The presentation is snapshotted on each node visit so historical results
-  retain customer-readable identity and hierarchy without exposing machine keys.
+  Terminal agent tasks may declare that closed direct-object `outputSchema`
+  when they produce a structured result; omitted/`{}` terminal tasks are
+  artifact-only. Any declared schema must be presentable, so an
+  unrepresentable root shape is still rejected. The presentation is snapshotted
+  on each node visit so historical results retain customer-readable identity
+  and hierarchy without exposing machine keys.
 - A workflow **cannot request capabilities beyond its `poolRef` AgentPool**:
   each requested tool must be granted and its effect/action narrowing must not
   exceed the pool grant; every node exposes an explicit subset, enforced from

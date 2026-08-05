@@ -235,9 +235,9 @@ spec:
                         outputSchema:
                           description: |-
                             outputSchema validates complete_step.output for agent_task nodes. It is a
-                            JSON Schema document and defaults to an unconstrained object when absent
-                            on non-terminal nodes. Terminal agent tasks must declare a closed direct
-                            object schema aligned with resultPresentation.
+                            JSON Schema document and defaults to an unconstrained object when absent.
+                            Terminal agent tasks may omit it for an artifact-only outcome, or declare
+                            a closed direct object schema aligned with resultPresentation.
                           x-kubernetes-preserve-unknown-fields: true
                         prompt:
                           description: prompt is required for agent_task and forbidden

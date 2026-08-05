@@ -175,8 +175,6 @@ func TestWorkflowValidation(t *testing.T) {
 		schema string
 		error  string
 	}{
-		{name: "missing schema", schema: "", error: "terminal agent_task outputSchema must declare a closed direct object schema"},
-		{name: "empty schema", schema: `{}`, error: "terminal agent_task outputSchema must declare a closed direct object schema"},
 		{name: "root scalar", schema: `{"type":"string"}`, error: "requires a direct object schema"},
 		{name: "root array", schema: `{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"string"},"amount":{"type":"number"}}}}`, error: "requires a direct object schema"},
 		{name: "root enum", schema: `{"enum":["ready","failed"]}`, error: "requires a direct object schema"},
@@ -195,6 +193,15 @@ func TestWorkflowValidation(t *testing.T) {
 	closedEmptyResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false}`)
 	closedEmptyResult.Spec.Graph.Nodes[0].ResultPresentation.Fields = nil
 	assert.NoError(t, newReconciler(pool).validateSpec(ctx, closedEmptyResult))
+
+	for _, schema := range []string{"", `{}`} {
+		t.Run("accepts artifact-only terminal agent task with schema="+schema, func(t *testing.T) {
+			artifactOnly := validWalterWorkflow("w", ns, "walter-pool")
+			artifactOnly.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(schema)
+			artifactOnly.Spec.Graph.Nodes[0].ResultPresentation.Fields = nil
+			assert.NoError(t, newReconciler(pool).validateSpec(ctx, artifactOnly))
+		})
+	}
 
 	nestedResult := validWalterWorkflow("w", ns, "walter-pool")
 	nestedResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"country":{"type":"string"}}}}}`)
