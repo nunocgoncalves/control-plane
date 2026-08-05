@@ -170,6 +170,30 @@ func TestWorkflowValidation(t *testing.T) {
 	err = newReconciler(pool).validateSpec(ctx, missingResultOption)
 	assert.ErrorContains(t, err, "must localize every enum value")
 
+	for _, test := range []struct {
+		name   string
+		schema string
+		error  string
+	}{
+		{name: "root scalar", schema: `{"type":"string"}`, error: "requires a direct object schema"},
+		{name: "root array", schema: `{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"string"},"amount":{"type":"number"}}}}`, error: "requires a direct object schema"},
+		{name: "root enum", schema: `{"enum":["ready","failed"]}`, error: "requires a direct object schema"},
+		{name: "open property-less object", schema: `{"type":"object"}`, error: "root schema must set additionalProperties to false"},
+	} {
+		t.Run("rejects unpresentable "+test.name+" result", func(t *testing.T) {
+			unpresentable := validWalterWorkflow("w", ns, "walter-pool")
+			unpresentable.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(test.schema)
+			unpresentable.Spec.Graph.Nodes[0].ResultPresentation.Fields = nil
+			err := newReconciler(pool).validateSpec(ctx, unpresentable)
+			assert.ErrorContains(t, err, test.error)
+		})
+	}
+
+	closedEmptyResult := validWalterWorkflow("w", ns, "walter-pool")
+	closedEmptyResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false}`)
+	closedEmptyResult.Spec.Graph.Nodes[0].ResultPresentation.Fields = nil
+	assert.NoError(t, newReconciler(pool).validateSpec(ctx, closedEmptyResult))
+
 	nestedResult := validWalterWorkflow("w", ns, "walter-pool")
 	nestedResult.Spec.Graph.Nodes[0].OutputSchema = jsonConfig(`{"type":"object","additionalProperties":false,"properties":{"customer":{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"},"country":{"type":"string"}}}}}`)
 	nestedResult.Spec.Graph.Nodes[0].ResultPresentation.Fields = []v1alpha1.ResultFieldPresentation{

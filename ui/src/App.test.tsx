@@ -61,28 +61,6 @@ const summary = {
   },
   trend: [{ date: "2026-08-05", amount: "10", currency: "EUR" }],
 };
-const rootResultCases: Array<{
-  shape: string;
-  output: unknown;
-  expected: string[];
-}> = [
-  {
-    shape: "scalar",
-    output: "Customer receipt ready",
-    expected: ["Customer receipt ready"],
-  },
-  {
-    shape: "array",
-    output: ["CSV produced", 3],
-    expected: ["CSV produced", "3"],
-  },
-  {
-    shape: "property-less object",
-    output: { receipt: "Structured result recorded", requiresReview: false },
-    expected: ["Structured result recorded", "No"],
-  },
-];
-
 function json(data: unknown, status = 200) {
   return Promise.resolve(
     new Response(JSON.stringify(data), {
@@ -417,72 +395,63 @@ describe("Platform v1 Dashboard", () => {
     ).toBe(false);
   });
 
-  it.each(rootResultCases)(
-    "presents an accepted root $shape result under localized customer labels",
-    async ({ shape, output, expected }) => {
-      vi.mocked(fetch).mockImplementation((input, init) => {
-        const url = String(input);
-        if (url.includes("/work-attempts/") && url.endsWith("/nodes"))
-          return json([
-            {
-              id: "node-root",
-              attemptId: "attempt-1",
-              nodeKey: "process",
-              businessLabel: {
-                en: "Processing quotation",
-                pt: "A processar cotação",
-              },
-              resultPresentation: {
-                outcomes: [
-                  {
-                    outcome: "completed",
-                    summary: {
-                      en: "Quotation processed",
-                      pt: "Pedido de cotação processado",
-                    },
-                  },
-                ],
-              },
-              visit: 1,
-              executionSeq: 1,
-              kind: "agent_task",
-              state: "succeeded",
-              outcome: "completed",
-              output,
-              createdAt: item.createdAt,
+  it("does not expose output without immutable field presentation", async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/work-attempts/") && url.endsWith("/nodes"))
+        return json([
+          {
+            id: "node-unpresented",
+            attemptId: "attempt-1",
+            nodeKey: "process",
+            businessLabel: {
+              en: "Processing quotation",
+              pt: "A processar cotação",
             },
-          ]);
-        return fetchMock(input, init);
-      });
-      const user = await connect();
-      await user.click(screen.getByText("Quotation request — ACME"));
-      const summaryHeading = await screen.findByRole("heading", {
-        name: "Quotation processed",
-      });
-      const outcome = summaryHeading.closest("section");
-      expect(outcome).not.toBeNull();
-      const result = within(outcome!);
-      for (const value of expected)
-        expect(result.getByText(value)).toBeInTheDocument();
-      expect(
-        result.queryByText("No business details recorded."),
-      ).not.toBeInTheDocument();
-      expect(result.getAllByText(/^Result detail \d+$/)).toHaveLength(
-        expected.length,
-      );
-      if (shape === "property-less object") {
-        expect(result.queryByText("receipt")).not.toBeInTheDocument();
-        expect(result.queryByText("requiresReview")).not.toBeInTheDocument();
-      }
-
-      await user.click(screen.getByRole("button", { name: "PT" }));
-      expect(result.getAllByText(/^Detalhe do resultado \d+$/)).toHaveLength(
-        expected.length,
-      );
-      if (shape === "property-less object")
-        expect(result.getByText("Não")).toBeInTheDocument();
-    },
-  );
+            resultPresentation: {
+              outcomes: [
+                {
+                  outcome: "completed",
+                  summary: {
+                    en: "Quotation processed",
+                    pt: "Pedido de cotação processado",
+                  },
+                },
+              ],
+            },
+            visit: 1,
+            executionSeq: 1,
+            kind: "agent_task",
+            state: "succeeded",
+            outcome: "completed",
+            output: {
+              customer: "ACME",
+              amount: 100,
+              records: [{ customer: "Northstar", amount: 50 }],
+              prompt: "private model instruction",
+            },
+            createdAt: item.createdAt,
+          },
+        ]);
+      return fetchMock(input, init);
+    });
+    const user = await connect();
+    await user.click(screen.getByText("Quotation request — ACME"));
+    const summaryHeading = await screen.findByRole("heading", {
+      name: "Quotation processed",
+    });
+    const outcome = summaryHeading.closest("section");
+    expect(outcome).not.toBeNull();
+    const result = within(outcome!);
+    expect(
+      result.getByText("No business details recorded."),
+    ).toBeInTheDocument();
+    expect(result.queryByText("ACME")).not.toBeInTheDocument();
+    expect(result.queryByText("Northstar")).not.toBeInTheDocument();
+    expect(
+      result.queryByText("private model instruction"),
+    ).not.toBeInTheDocument();
+  });
 
   it("requires exact consequence confirmation before starting a revised attempt", async () => {
     const consequence = {

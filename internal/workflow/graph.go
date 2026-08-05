@@ -372,7 +372,7 @@ func collectResultSchemaFields(raw json.RawMessage, prefix []string, out map[str
 		if len(prefix) > 0 {
 			return fmt.Errorf("%s object path %q must declare direct properties", path, resultPathLabel(prefix))
 		}
-		return nil
+		return validatePropertylessResultRoot(schema.Type, schema.AdditionalProperties, path)
 	}
 	if schema.Type != "object" {
 		return fmt.Errorf("%s requires a direct object schema", path)
@@ -398,6 +398,16 @@ func collectResultSchemaFields(raw json.RawMessage, prefix []string, out map[str
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validatePropertylessResultRoot(schemaType string, additionalProperties *bool, path string) error {
+	if schemaType != "object" {
+		return fmt.Errorf("%s requires a direct object schema", path)
+	}
+	if additionalProperties == nil || *additionalProperties {
+		return fmt.Errorf("%s root schema must set additionalProperties to false", path)
 	}
 	return nil
 }
