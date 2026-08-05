@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && printf 'HOR-396 UI is built into this directory.\\n' > dist/placeholder.txt",
-    "lint": "tsc --noEmit",
+    "lint": "prettier --check 'src/**/*.{ts,tsx,css}' '*.{json,ts,html}' && tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "axe-core": "^4.12.1",
     "jsdom": "^30.0.1",
+    "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"
