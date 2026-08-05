@@ -223,10 +223,6 @@ TOOL_RUNNER_IMG ?= control-plane-tool-runner:latest
 tool-runner-image: ## Build the generic Node 24 tool-runner image.
 	$(CONTAINER_TOOL) build -t $(TOOL_RUNNER_IMG) -f tool-runner/Dockerfile tool-runner/
 
-.PHONY: tool-runner-cluster-test
-tool-runner-cluster-test: ## Real kind+Flux generation/registration/pin/drain contract (destructive to its kind cluster).
-	./tool-runner/e2e/flux-generation.sh
-
 ##@ Tooling
 
 .PHONY: install-hooks

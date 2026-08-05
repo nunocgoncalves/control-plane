@@ -20,7 +20,7 @@ export interface MaterializerConfig {
   maxGenerations: number;
 }
 
-interface FluxArtifact { revision: string; digest: string; url: string }
+export interface FluxArtifact { revision: string; digest: string; url: string }
 
 export class FluxMaterializer {
   private custom: k8s.CustomObjectsApi;
@@ -138,6 +138,13 @@ export class FluxMaterializer {
       const state = JSON.parse(await readFile(join(this.cfg.controlRoot, "runner-state.json"), "utf8")) as { retained?: string[] };
       retained = new Set((state.retained ?? []).map((digest) => digest.replace(/^sha256:/, "")));
     } catch { /* runner has not published state */ }
+    // Never reap the currently published generation before its replacement has
+    // downloaded and verified. The runner state can be absent or briefly stale
+    // during startup; current.json is the materializer's own last-valid commit.
+    try {
+      const current = JSON.parse(await readFile(join(this.cfg.controlRoot, "current.json"), "utf8")) as { artifactDigest?: string };
+      if (current.artifactDigest) retained.add(current.artifactDigest.replace(/^sha256:/, ""));
+    } catch { /* no valid generation has been published yet */ }
     for (const dir of await generationDirs(this.cfg.artifactsRoot)) {
       const name = basename(dir);
       if (name !== incoming && !retained.has(name)) await rm(dir, { recursive: true, force: true });

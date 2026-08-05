@@ -689,7 +689,12 @@ func (s *Service) RegisterRunner(ctx context.Context, st *connect.BidiStream[v1.
 		rc.mu.Unlock()
 		rc.sendWG.Wait()
 		s.pool.remove(rc)
-		_ = s.store.DeactivateRunnerStream(ctx, rc.runnerID, int64(gen)) //nolint:gosec // G115
+		// Stream teardown normally follows request-context cancellation. Persist
+		// unavailability with a bounded detached context so canceled clients do
+		// not leave stale active registrations eligible in durable state.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_ = s.store.DeactivateRunnerStream(cleanupCtx, rc.runnerID, int64(gen)) //nolint:gosec // G115
+		cleanupCancel()
 		// Any pending dispatchers on this conn observe streamLost.
 		rc.mu.Lock()
 		for _, ch := range rc.pending {

@@ -37,6 +37,7 @@ type testEnv struct {
 	srvURL     string
 	supervisor tls.Certificate // spiffe://td/pools/pool-1/workers/worker-1
 	runner     tls.Certificate // spiffe://td/tool-runners/ns-1/runner-1
+	runner2    tls.Certificate // spiffe://td/tool-runners/ns-1/runner-2
 	wfStep     tls.Certificate // spiffe://td/control-plane/workflow-runtime
 	caPool     *x509.CertPool
 	poolID     string // the seeded pool's uuid
@@ -45,12 +46,13 @@ type testEnv struct {
 }
 
 const (
-	poolKey      = "ns/pool-1"
-	poolPrefix   = "spiffe://iterabase.local/pools/pool-1"
-	runnerSpiffe = "spiffe://iterabase.local/tool-runners/ns-1/runner-1"
-	supvSpiffe   = "spiffe://iterabase.local/pools/pool-1/workers/worker-1"
-	wfSpiffe     = "spiffe://iterabase.local/control-plane/workflow-runtime"
-	wfKey        = "wf-quote"
+	poolKey       = "ns/pool-1"
+	poolPrefix    = "spiffe://iterabase.local/pools/pool-1"
+	runnerSpiffe  = "spiffe://iterabase.local/tool-runners/ns-1/runner-1"
+	runner2Spiffe = "spiffe://iterabase.local/tool-runners/ns-1/runner-2"
+	supvSpiffe    = "spiffe://iterabase.local/pools/pool-1/workers/worker-1"
+	wfSpiffe      = "spiffe://iterabase.local/control-plane/workflow-runtime"
+	wfKey         = "wf-quote"
 )
 
 var idCounter atomic.Uint64
@@ -84,7 +86,9 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	// registrations, so the shared env declares the permitted set explicitly;
 	// TestGateway_ToolNamespaceEnforced / TestGateway_NamespaceDenyOnEmptyApproval
 	// cover restriction and denial.
-	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, []string{"echo", "send_email", "upsert_row", "graph", "danger"}))
+	allowedRunnerNamespaces := []string{"echo", "send_email", "upsert_row", "graph", "danger"}
+	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-1", runnerSpiffe, allowedRunnerNamespaces))
+	require.NoError(t, store.UpsertApprovedRunner(ctx, "ns-1", "runner-2", runner2Spiffe, allowedRunnerNamespaces))
 	// Workflow-step binding (workflow "wf-quote" -> pool-1, permits echo+send_email).
 	require.NoError(t, store.UpsertWorkflowPoolBinding(ctx, wfKey, p.ID, []gateway.Capability{
 		{Tool: "echo", MaxEffectClass: string(gateway.EffectNonIdempotentWrite)},
@@ -99,6 +103,8 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 	supervisor, err := ca.Leaf(testca.LeafOpts{SPIFFEID: supvSpiffe})
 	require.NoError(t, err)
 	runner, err := ca.Leaf(testca.LeafOpts{SPIFFEID: runnerSpiffe})
+	require.NoError(t, err)
+	runner2, err := ca.Leaf(testca.LeafOpts{SPIFFEID: runner2Spiffe})
 	require.NoError(t, err)
 	wfStep, err := ca.Leaf(testca.LeafOpts{SPIFFEID: wfSpiffe})
 	require.NoError(t, err)
@@ -133,7 +139,7 @@ func newTestEnv(t *testing.T, secrets *gateway.FakeSecretResolver) *testEnv {
 
 	return &testEnv{
 		store: store, pgpool: pgpool, srvURL: fmt.Sprintf("https://localhost:%d", port),
-		supervisor: supervisor, runner: runner, wfStep: wfStep, caPool: ca.Pool, poolID: p.ID, artifacts: artifacts, stop: stop,
+		supervisor: supervisor, runner: runner, runner2: runner2, wfStep: wfStep, caPool: ca.Pool, poolID: p.ID, artifacts: artifacts, stop: stop,
 	}
 }
 
@@ -225,8 +231,14 @@ type refRunner struct {
 func startRefRunner(t *testing.T, env *testEnv, desc *v1.ToolDescriptor,
 	handler func(inv *v1.Invoke) (result *v1.InvokeResult, drop bool)) *refRunner {
 	t.Helper()
+	return startRefRunnerWithCert(t, env, env.runner, desc, handler)
+}
+
+func startRefRunnerWithCert(t *testing.T, env *testEnv, cert tls.Certificate, desc *v1.ToolDescriptor,
+	handler func(inv *v1.Invoke) (result *v1.InvokeResult, drop bool)) *refRunner {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(env.runner, env.caPool), env.srvURL, connect.WithGRPC())
+	client := gatewayv1connect.NewRunnerServiceClient(mTLSClient(cert, env.caPool), env.srvURL, connect.WithGRPC())
 	stream := client.RegisterRunner(ctx)
 	rr := &refRunner{cancel: cancel, done: make(chan struct{}), stream: stream}
 	go func() {
@@ -401,6 +413,85 @@ func TestGateway_GenerationDrainPreservesPinsAndStopsNewSnapshots(t *testing.T) 
 	require.Empty(t, pinned)
 	require.Equal(t, []gateway.ToolRef{ref}, releasable)
 	require.NoError(t, env.store.RetireVersions(context.Background(), "runner-1", gen, releasable))
+}
+
+func TestGateway_GenerationRolloverRoutesPinsAndFailsUnavailableOldVersion(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+	v1Desc := echoDescriptor()
+	var v1Calls, v2Calls atomic.Int32
+	v1Runner := startRefRunnerWithCert(t, env, env.runner, v1Desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		v1Calls.Add(1)
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"version":"v1"}`)}, false
+	})
+	t.Cleanup(v1Runner.close)
+
+	oldAttempt, oldTurn := seedTurnAttempt(t, env)
+
+	v2Desc := echoDescriptor()
+	v2Desc.Version = "2.0.0"
+	v2Desc.Digest = "sha256:echo-2"
+	v2Runner := startRefRunnerWithCert(t, env, env.runner2, v2Desc, func(inv *v1.Invoke) (*v1.InvokeResult, bool) {
+		v2Calls.Add(1)
+		return &v1.InvokeResult{State: v1.InvokeState_INVOKE_STATE_SUCCEEDED, ResultJson: []byte(`{"version":"v2"}`)}, false
+	})
+	t.Cleanup(v2Runner.close)
+
+	require.NoError(t, v1Runner.stream.Send(&v1.RunnerMessage{Kind: &v1.RunnerMessage_BeginDrain{BeginDrain: &v1.BeginDrain{
+		Versions: []*v1.ToolVersionRef{{Name: v1Desc.Name, Digest: v1Desc.Digest}},
+	}}}))
+	require.Eventually(t, func() bool {
+		var accepting bool
+		err := env.pgpool.QueryRow(ctx, `SELECT accepting_new FROM toolgateway.runner_registrations WHERE runner_id='runner-1' AND tool_digest=$1 AND active`, v1Desc.Digest).Scan(&accepting)
+		return err == nil && !accepting
+	}, 2*time.Second, 10*time.Millisecond, "v1 did not enter drain")
+
+	newAttempt, newTurn := seedTurnAttempt(t, env)
+	pinDigest := func(attemptID string) string {
+		t.Helper()
+		var digest string
+		require.NoError(t, env.pgpool.QueryRow(ctx, `SELECT tool_version_digest FROM toolgateway.attempt_tool_pins WHERE attempt_id=$1 AND tool_name='echo'`, attemptID).Scan(&digest))
+		return digest
+	}
+	require.Equal(t, v1Desc.Digest, pinDigest(oldAttempt), "the existing attempt must retain its exact old pin")
+	require.Equal(t, v2Desc.Digest, pinDigest(newAttempt), "a new attempt must resolve the new healthy version")
+
+	invoke := func(attemptID, turnID, callID, digest string) *v1.InvokeResponse {
+		t.Helper()
+		resp, err := gatewayClient(env, env.supervisor).InvokeTool(ctx, connect.NewRequest(&v1.InvokeRequest{
+			AttemptId: attemptID, CallerScope: v1.CallerScope_CALLER_SCOPE_TURN, CallerScopeId: turnID, FencingGeneration: 1,
+			ToolCallId: callID, ToolName: "echo", ToolVersionDigest: digest,
+			ArgumentsJson: []byte(`{}`), IdempotencyKey: callID,
+		}))
+		require.NoError(t, err)
+		return resp.Msg
+	}
+
+	oldResult := invoke(oldAttempt, oldTurn, "old-before-disconnect", v1Desc.Digest)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, oldResult.State)
+	require.JSONEq(t, `{"version":"v1"}`, string(oldResult.ResultJson))
+	newResult := invoke(newAttempt, newTurn, "new-after-rollover", v2Desc.Digest)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_SUCCEEDED, newResult.State)
+	require.JSONEq(t, `{"version":"v2"}`, string(newResult.ResultJson))
+	require.Equal(t, int32(1), v1Calls.Load())
+	require.Equal(t, int32(1), v2Calls.Load())
+
+	// Disconnect only the runner serving the old pin. The newer v2 runner stays
+	// healthy, but invoking the old attempt must fail explicitly rather than
+	// dispatching to or substituting v2 (ARCH-007).
+	v1Runner.close()
+	require.Eventually(t, func() bool {
+		var active int
+		err := env.pgpool.QueryRow(ctx, `SELECT count(*) FROM toolgateway.runner_registrations WHERE runner_id='runner-1' AND active`).Scan(&active)
+		return err == nil && active == 0
+	}, 2*time.Second, 10*time.Millisecond, "disconnected v1 registration remained active")
+
+	unavailable := invoke(oldAttempt, oldTurn, "old-after-disconnect", v1Desc.Digest)
+	require.Equal(t, v1.InvokeState_INVOKE_STATE_FAILED, unavailable.State)
+	require.Equal(t, "tool_unavailable", unavailable.Error.Code)
+	require.Contains(t, unavailable.Error.Message, "pinned tool version")
+	require.Equal(t, int32(1), v1Calls.Load(), "disconnected v1 must not receive another invocation")
+	require.Equal(t, int32(1), v2Calls.Load(), "v2 must not be substituted for the unavailable v1 pin")
 }
 
 func TestGateway_ReconnectPreservesDrainingRegistrationState(t *testing.T) {
