@@ -229,51 +229,15 @@ function emitResult(outcome: Outcome, message?: string): void {
 /** Per-turn fd-5 RPC read stream (see `releasePerTurnIpc`). Never set when imported by tests. */
 let rpcReadStream: Socket | null = null;
 
-/** HOR-434: grace for the supervisor to release our fd-5 pipe before we force-exit. */
-const IPC_RELEASE_GRACE_MS = 4000;
-
 /**
- * HOR-434: wait for the supervisor to release the per-turn IPC channels, then
- * release them, so the entrypoint can clean-exit (code 0).
- *
- * The supervisor's child-process closes its write ends of fd 5 (and fd 0) as
- * soon as it receives our terminal `result` frame (see `releaseChildChannels`
- * in child-process.ts), delivering EOF on our fd-5 uv_pipe read. The read is
- * non-blocking (net.Socket), so it would not block a `process.exit`; we await
- * the EOF purely so the exit is graceful and prompt rather than racing the
- * supervisor's close. A bounded fallback force-exits if the supervisor never
- * closes the pipe (e.g. an older supervisor that predates this fix).
- */
-async function waitForIpcRelease(): Promise<void> {
-  const stream = rpcReadStream;
-  const eof = new Promise<void>((resolve) => {
-    if (!stream) {
-      resolve();
-      return;
-    }
-    let done = false;
-    const fin = (): void => {
-      if (done) return;
-      done = true;
-      resolve();
-    };
-    stream.once("end", fin);
-    stream.once("close", fin);
-    stream.once("error", fin);
-  });
-  const fallback = new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, IPC_RELEASE_GRACE_MS);
-    t.unref?.();
-  });
-  await Promise.race([eof, fallback]);
-  releasePerTurnIpc();
-}
-
-/**
- * HOR-434: release the per-turn IPC channels once `waitForIpcRelease` has
- * observed the fd-5 EOF. Best-effort cleanup: detach fd-5 handlers, close fd
- * 5, and detach/destroy stdin so nothing remains ref'd. The async read/write
- * channels (fd 4/5) are unused after the terminal result, so closing is safe.
+ * HOR-434: release the per-turn IPC channels once the terminal `result` has
+ * been emitted, then let the entrypoint exit cleanly (code 0) so the
+ * supervisor's child-process resolves the provisional COMPLETED instead of the
+ * liveness watchdog SIGKILLing an already-completed turn as ABORTED. This is
+ * the approved child-only delivery slice: the supervisor keeps its fd-5 write
+ * end open; the child synchronously closes its own fd 5 (completing the
+ * in-flight read, verified on the production Node 24 image) and detaches stdin
+ * so nothing remains ref'd and the subsequent `process.exit` is immediate.
  */
 function releasePerTurnIpc(): void {
   if (rpcReadStream) {
@@ -361,12 +325,11 @@ async function main(): Promise<void> {
     // `process.exit` (the supervisor's liveness watchdog then SIGKILLs the
     // completed child as ABORTED). A uv_pipe read is event-driven and idle-safe:
     // it doesn't keep `process.exit` alive, so the child can always clean-exit
-    // (code 0), and on EOF (the supervisor closing its fd-5 write end) it ends
-    // promptly. Keep the stream at module scope so the terminal path can
-    // release it. Follows the approved Option B (contract-preserving) fix:
-    // COMPLETED still requires the documented clean child exit (HOR-381); the
-    // supervisor additionally closes its fd-5/stdin write ends on the terminal
-    // result (child-process.ts `releaseChildChannels`) so the read ends.
+    // (code 0). The supervisor keeps its fd-5 write end open; the child closes
+    // its own fd 5 and exits (see `releasePerTurnIpc`). Keep the stream at
+    // module scope so the terminal path can release it. Follows the approved
+    // HOR-434 child-only slice: COMPLETED still requires the documented clean
+    // child exit (HOR-381); the entrypoint releases the per-turn IPC and exits.
     const rpcStream = new Socket({ fd: 5, readable: true, writable: false });
     rpcReadStream = rpcStream;
     rpcStream.on("data", (chunk: Buffer | string) => rpc.feed(chunk));
@@ -1006,27 +969,30 @@ function mapEvent(ev: AgentSessionEvent, s: AgentSession): TurnEvent["kind"] | u
 // Run only when this module is the entry point (not when imported by tests).
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // HOR-434: `main()` emits its terminal `result` frame (e.g. COMPLETED after a
-  // finished step), but the process must ALSO exit for the supervisor's
-  // child-process to resolve that provisional result via a clean exit (code 0),
-  // and it must exit promptly: the supervisor keeps our fd-5 pipe open after
-  // the result, so the pending fd-5 read otherwise holds the event loop (and
-  // any `process.exit`) forever, and the liveness watchdog SIGKILLs the child
-  // ~5-15s later — reaping an already-completed turn as ABORTED
+  // finished step) AFTER it resolves. The process must ALSO exit for the
+  // supervisor's child-process to resolve that provisional result via a clean
+  // exit (code 0), and it must exit promptly: the supervisor keeps our fd-5
+  // pipe open, so the pending fd-5 read would otherwise hold the event loop
+  // (and any `process.exit`) forever, and the liveness watchdog SIGKILLs the
+  // child ~5-15s later — reaping an already-completed turn as ABORTED
   // (`child killed by SIGKILL`) and discarding its result.
   main().then(
     () => {
       // HOR-434: the terminal `result` frame was already emitted inside `main`;
-      // wait for the supervisor to release our fd-5 pipe (EOF on the non-blocking
-      // read) then clean-exit (code 0) so the supervisor's child-process
-      // resolves the provisional result (see `waitForIpcRelease`).
-      void waitForIpcRelease().then(() => process.exit(0));
+      // release the per-turn IPC (close fd 5, detach stdin) and clean-exit
+      // (code 0) so the supervisor's child-process resolves the provisional
+      // result. Approved child-only slice: the supervisor keeps its fd-5 write
+      // end open.
+      releasePerTurnIpc();
+      process.exit(0);
     },
     (err) => {
       console.error(`child fatal: ${err instanceof Error ? err.message : err}`);
       emitResult(Outcome.FAILED);
-      // Same HOR-434 guard on the fatal path: wait for fd-5 EOF (with the
-      // bounded fallback) before exiting.
-      void waitForIpcRelease().then(() => process.exit(1));
+      // Same HOR-434 guard on the fatal path: release the per-turn IPC before
+      // exiting non-zero.
+      releasePerTurnIpc();
+      process.exit(1);
     },
   );
 }

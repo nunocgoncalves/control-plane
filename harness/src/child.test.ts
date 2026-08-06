@@ -248,26 +248,25 @@ describe("HOR-381 child entrypoint assignment handoff", { timeout: 30_000 }, () 
     expect(result!.type === "result" && result!.outcome).toBe(3 /* FAILED */);
     expect(result!.type === "result" && (result!.message ?? "")).not.toContain("no valid assignment");
 
-    // The child must exit on its own (code 0, no signal), not hang until the
-    // watchdog sends a signal. A 20s grace covers the read window; a pre-fix
-    // child would not exit and this would time out with signal/code null.
+    // The child must exit on its own (code 0, no signal) 0 — it must not hang
+    // until the watchdog sends a signal — and it must do so with our fd-5 write
+    // end STILL open, because the approved HOR-434 slice leaves the supervisor
+    // keeping fd-5 open (the child closes its own fd 5 via `releasePerTurnIpc`
+    // and then `process.exit(0)`). A bounded grace well under the liveness
+    // window (HARNESS_LIVENESS_INTERVAL_MS=60000 above) guards the read; a
+    // pre-fix child would not exit and this would time out with signal/code
+    // null — we do NOT close fd-5 here to force an EOF.
     const [code, signal] = await Promise.race([
       exit,
       new Promise<[number | null, NodeJS.Signals | null]>((resolve) =>
-        setTimeout(() => resolve([null, null]), 20_000),
+        setTimeout(() => resolve([null, null]), 5_000),
       ),
     ]);
-    // Mirror the real supervisor (child-process.ts `releaseChildChannels`):
-    // close our fd-5 write end so the child's pending fd-5 read completes (EOF)
-    // and it can clean-exit via the EOF path instead of relying on the bounded
-    // fallback grace. `.destroy()` (not `.end()`) is used deliberately — it
-    // closes the pipe immediately, delivering EOF even if the pipe is
-    // backpressured, matching the production supervisor. The child must exit 0
-    // on its own, then — no watchdog signal.
-    proc.stdio[5]!.on("error", () => {});
-    proc.stdio[5]!.destroy();
-    proc.stdin.on("error", () => {});
-    proc.stdin.destroy();
+    // fd-5 is deliberately never closed by the test (the approved HOR-434 slice
+    // leaves the supervisor keeping its write end open). The parent's stdio[5]
+    // handle reports `destroyed` once the child exits and its end closes, so we
+    // assert the outcome (clean self-exit, no signal, within a bounded grace)
+    // rather than the pipe's post-exit state.
     expect(signal).toBeNull();
     expect(code).toBe(0);
     rmSync(tmp, { recursive: true, force: true });
