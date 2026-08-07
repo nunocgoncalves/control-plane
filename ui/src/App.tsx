@@ -1,4 +1,5 @@
 import {
+  Component,
   FormEvent,
   ReactNode,
   useCallback,
@@ -588,12 +589,12 @@ function DetailPanel({
     .filter(
       (node) =>
         node.outcome &&
-        node.resultPresentation?.outcomes.some(
+        node.resultPresentation?.outcomes?.some(
           (outcome) => outcome.outcome === node.outcome,
         ),
     )
     .at(-1);
-  const outcomePresentation = outcomeNode?.resultPresentation?.outcomes.find(
+  const outcomePresentation = outcomeNode?.resultPresentation?.outcomes?.find(
     (outcome) => outcome.outcome === outcomeNode.outcome,
   );
   const output = outcomeNode?.output;
@@ -967,6 +968,23 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </section>
   );
+}
+
+// ErrorBoundary contains render/build failures to a bounded subtree so one bad
+// item can never unmount (white-screen) the whole dashboard. React error
+// boundaries must be class components.
+class ErrorBoundary extends Component<
+  { children: ReactNode; fallback: (error: Error) => ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) return this.props.fallback(this.state.error);
+    return this.props.children;
+  }
 }
 function equalJSON(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
@@ -1743,13 +1761,44 @@ export default function App() {
         )}
       </main>
       {selected && (
-        <DetailPanel
-          token={token}
-          item={selected}
-          locale={locale}
-          close={() => setSelected(null)}
-          changed={() => void refresh(true)}
-        />
+        <ErrorBoundary
+          fallback={(boundError) => (
+            <div className="overlay">
+              <aside className="detail-panel" role="alert">
+                <header>
+                  <div>
+                    <h2>{selected.title}</h2>
+                  </div>
+                  <button
+                    className="icon-button"
+                    onClick={() => setSelected(null)}
+                    aria-label={c.close}
+                  >
+                    <CloseIcon />
+                  </button>
+                </header>
+                <div className="panel-body">
+                  <div className="form-error" role="alert">
+                    {t(locale).detailCrash}
+                  </div>
+                  {boundError && (
+                    <p className="muted">
+                      {String(boundError.message || boundError)}
+                    </p>
+                  )}
+                </div>
+              </aside>
+            </div>
+          )}
+        >
+          <DetailPanel
+            token={token}
+            item={selected}
+            locale={locale}
+            close={() => setSelected(null)}
+            changed={() => void refresh(true)}
+          />
+        </ErrorBoundary>
       )}{" "}
       {valueOpen && data && (
         <ValueModal

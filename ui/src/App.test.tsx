@@ -580,6 +580,77 @@ describe("Platform v1 Dashboard", () => {
     expect(response?.[1]?.body).toContain("artifact-1");
   });
 
+  it("renders a done item whose result node exposes fields/artifacts but no outcomes", async () => {
+    // A result node may carry a resultPresentation with fields + artifactRefs
+    // but no `outcomes` array (the workflow contract makes outcomes optional).
+    // The detail render must not crash and white-screen the app.
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/work-attempts/"))
+        return json([
+          {
+            id: "node-1",
+            attemptId: "attempt-1",
+            nodeKey: "process",
+            businessLabel: { en: "Processing quotation", pt: "A processar" },
+            resultPresentation: {
+              fields: [{ path: ["classification"], label: { en: "Class" } }],
+            },
+            artifactRefs: [{ artifactId: "art-1", role: "output" }],
+            visit: 1,
+            executionSeq: 1,
+            kind: "agent_task",
+            state: "succeeded",
+            outcome: "completed",
+            output: { classification: "pricing" },
+            createdAt: item.createdAt,
+          },
+        ]);
+      if (url.endsWith("/artifacts"))
+        return json([
+          {
+            artifactId: "art-1",
+            attemptId: "attempt-1",
+            role: "output",
+            metadata: { name: "quote.pdf" },
+            mimeType: "application/pdf",
+            sizeBytes: 1234,
+            createdAt: item.finishedAt,
+          },
+        ]);
+      return fetchMock(input, init);
+    });
+    const user = await connect();
+    await user.click(screen.getByText("Quotation request — ACME"));
+    // Would white-screen (root unmounted) before the fix; the artifact row must appear.
+    expect(await screen.findByText("quote.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/Download/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("contains a detail render error in the panel instead of white-screening the app", async () => {
+    // The backend always returns an array here, but if any render error slips
+    // through (e.g. malformed detail payload), the ErrorBoundary must keep the
+    // dashboard usable instead of unmounting the whole React root.
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/artifacts")) return json(null);
+      return fetchMock(input, init);
+    });
+    const user = await connect();
+    await user.click(screen.getByText("Quotation request — ACME"));
+    expect(
+      await screen.findByText("Something went wrong opening this item."),
+    ).toBeInTheDocument();
+    // Dashboard is still alive (not a white-screen / unmounted root).
+    expect(screen.getByRole("heading", { name: "Done" })).toBeInTheDocument();
+    // The panel can be closed to return to the board.
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(
+      screen.queryByText("Something went wrong opening this item."),
+    ).not.toBeInTheDocument();
+  });
+
   it("submits the selected outcome and correctly typed JSON-Schema fields", async () => {
     const blocked = {
       ...item,
