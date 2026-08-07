@@ -1,5 +1,6 @@
 import {
   Component,
+  ErrorInfo,
   FormEvent,
   ReactNode,
   useCallback,
@@ -974,15 +975,21 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 // item can never unmount (white-screen) the whole dashboard. React error
 // boundaries must be class components.
 class ErrorBoundary extends Component<
-  { children: ReactNode; fallback: (error: Error) => ReactNode },
+  { children: ReactNode; fallback: () => ReactNode },
   { error: Error | null }
 > {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Operator-only channel: the exception reaches the browser console /
+    // error-reporting tooling, never the customer-facing UI (PRD §3 —
+    // "Business language only").
+    console.error("DetailPanel render failed:", error, info.componentStack);
+  }
   render() {
-    if (this.state.error) return this.props.fallback(this.state.error);
+    if (this.state.error) return this.props.fallback();
     return this.props.children;
   }
 }
@@ -1762,7 +1769,7 @@ export default function App() {
       </main>
       {selected && (
         <ErrorBoundary
-          fallback={(boundError) => (
+          fallback={() => (
             <div className="overlay">
               <aside className="detail-panel" role="alert">
                 <header>
@@ -1778,14 +1785,12 @@ export default function App() {
                   </button>
                 </header>
                 <div className="panel-body">
+                  {/* PRD §3 "Business language only": the customer sees only
+                      localized copy; the raw exception is logged to the
+                      operator-only console channel, not rendered here. */}
                   <div className="form-error" role="alert">
                     {t(locale).detailCrash}
                   </div>
-                  {boundError && (
-                    <p className="muted">
-                      {String(boundError.message || boundError)}
-                    </p>
-                  )}
                 </div>
               </aside>
             </div>

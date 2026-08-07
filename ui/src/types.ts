@@ -90,7 +90,10 @@ export interface Attempt {
   finishedAt?: string;
 }
 export interface ResultPresentation {
-  outcomes: Array<{ outcome: string; summary: LocalizedText }>;
+  // Optional: a result node's presentation may omit `outcomes` (it can carry
+  // only fields/artifacts). Consumers must treat it as optional, which the
+  // strict `request<T>` cast cannot enforce at runtime.
+  outcomes?: Array<{ outcome: string; summary: LocalizedText }>;
   fields?: ResultFieldPresentation[];
 }
 export interface ResultFieldPresentation {

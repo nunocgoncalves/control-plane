@@ -642,6 +642,11 @@ describe("Platform v1 Dashboard", () => {
     expect(
       await screen.findByText("Something went wrong opening this item."),
     ).toBeInTheDocument();
+    // PRD §3 "Business language only": the raw exception text must NOT leak
+    // into the customer-facing panel (it goes to the operator-only channel).
+    expect(
+      screen.queryByText(/Cannot read|TypeError|undefined|is not a function/i),
+    ).not.toBeInTheDocument();
     // Dashboard is still alive (not a white-screen / unmounted root).
     expect(screen.getByRole("heading", { name: "Done" })).toBeInTheDocument();
     // The panel can be closed to return to the board.
